@@ -1,0 +1,60 @@
+#!/bin/sh
+# Runs AFTER dpkg has removed the package's files. By this point
+# /opt/horizon-grid/app (and its docker-compose*.yml) is already gone, so
+# the destructive "purge" path below identifies containers/volumes by the
+# Compose project LABEL Docker itself attached when they were created
+# (com.docker.compose.project=app -- "app" because the compose project
+# directory's basename is "app" on both this Linux layout and the Windows
+# one, {app}\app, confirmed live there via `docker compose ls`; deliberately
+# NOT hardcoding a container-name guess) rather than needing the compose
+# files to still exist. This mirrors the Windows uninstaller's
+# "Remove Everything" branch (docker compose down -v + DelTree the data
+# directory), translated to dpkg's own remove/purge vocabulary -- which is
+# actually a cleaner fit than Windows's custom "type DELETE to confirm"
+# dialog, since apt already requires the administrator to type the
+# explicitly destructive verb ("purge") themselves.
+set -e
+
+CONFIG_DIR=/etc/horizon-grid
+DATA_DIR=/var/lib/horizon-grid
+LOG_DIR=/var/log/horizon-grid
+APP_DIR=/opt/horizon-grid/app
+
+# /opt/horizon-grid/app/.env is a runtime-written copy (hg_sync_compose_env_file
+# / setup_wizard.py's own sync step) that dpkg's manifest has never heard of,
+# so dpkg's own file removal leaves it -- and therefore the whole now-mostly-
+# empty $APP_DIR -- behind on EITHER remove or purge. Confirmed live: without
+# this, `apt remove`/`apt purge` both printed "directory ... not empty so not
+# removed". This is the direct Linux analog of the Windows uninstaller's own
+# documented fix for the exact same file (see windows/installer.iss's
+# InitializeUninstall comment) -- there it's an ACL blocking Inno's cleanup;
+# here it's simply a file dpkg was never told about, but the fix is the same
+# shape: delete the untracked copy ourselves so the real cleanup can finish.
+rm -f "$APP_DIR/.env"
+rmdir "$APP_DIR" 2>/dev/null || true
+rmdir /opt/horizon-grid 2>/dev/null || true
+
+case "$1" in
+    purge)
+        if command -v docker >/dev/null 2>&1; then
+            echo "Removing HORIZON GRID containers and data volumes (this permanently deletes all cases, investigations, watchlists, and notes)..."
+            CIDS=$(docker ps -aq --filter "label=com.docker.compose.project=app" 2>/dev/null || true)
+            [ -n "$CIDS" ] && docker rm -f $CIDS >/dev/null 2>&1 || true
+            VIDS=$(docker volume ls -q --filter "label=com.docker.compose.project=app" 2>/dev/null || true)
+            [ -n "$VIDS" ] && docker volume rm $VIDS >/dev/null 2>&1 || true
+        fi
+        rm -rf "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
+        ;;
+    remove)
+        # Keep-data path -- $CONFIG_DIR/$DATA_DIR/$LOG_DIR and the Docker
+        # volumes are intentionally left alone so a reinstall picks up
+        # right where the administrator left off, matching the Windows
+        # uninstaller's default.
+        ;;
+esac
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
+
+exit 0

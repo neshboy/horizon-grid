@@ -1,0 +1,50 @@
+# Production override for the Windows installer. The base docker-compose.yml
+# bind-mounts backend/ and frontend/ into their containers for hot-reload dev
+# workflows -- fine for a git checkout, but broken for an installed copy under
+# Program Files: Windows/WSL2 bind-mount permissions make celery_beat's
+# schedule-file writes fail (PermissionError on celerybeat-schedule) and block
+# the frontend's anonymous node_modules/.next volumes from mounting at all
+# (confirmed live: frontend container stuck at "Created", never started).
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# This removes every source bind-mount so each service runs entirely from
+# what was baked into its image at build time, and swaps dev commands
+# (--reload, npm run dev) for production ones.
+services:
+  backend:
+    volumes: !reset []
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  celery_worker:
+    volumes: !reset []
+
+  celery_beat:
+    volumes: !reset []
+
+  frontend:
+    volumes: !reset []
+    # next.config.js sets output: "standalone", which `next start` does NOT
+    # use -- confirmed live via a real container log line: '"next start"
+    # does not work with "output: standalone" configuration. Use "node
+    # .next/standalone/server.js" instead.' It still happened to serve
+    # requests correctly (Next silently falls back to the normal server),
+    # but that defeats the actual point of a standalone build (a minimal
+    # runtime that doesn't need node_modules or the full .next/ tree at
+    # start time) and prints a warning on every start. Next's own docs
+    # require public/ and .next/static/ to be copied into the standalone
+    # output by hand -- they're intentionally excluded from the traced
+    # standalone build -- so do that copy here, right after building, then
+    # run the real standalone entrypoint. `[ -d public ] &&` guards the
+    # public/ copy: confirmed live this project has no public/ directory
+    # at all (no committed favicon/static assets), and an unconditional
+    # `cp -r public ...` failing there took the whole && chain down with
+    # it, so the container exited instead of ever reaching `node server.js`.
+    command: >
+      sh -c "npm run build &&
+             ([ -d public ] && cp -r public .next/standalone/public || true) &&
+             mkdir -p .next/standalone/.next/static &&
+             cp -r .next/static/. .next/standalone/.next/static/ &&
+             node .next/standalone/server.js"

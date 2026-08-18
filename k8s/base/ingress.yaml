@@ -1,0 +1,48 @@
+# Single Ingress fronting the platform: /api -> backend, / -> frontend.
+# Requires an nginx ingress controller installed in the cluster
+# (kubernetes.io/ingress.class is the older, widely-compatible annotation;
+# swap for spec.ingressClassName: nginx if your controller expects that
+# instead).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ioc-intel-ingress
+  namespace: ioc-intel-platform
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    # Backend responses (e.g. SSE lookup stream, large provider payloads) can
+    # be slow/long-lived -- raise nginx's default proxy timeouts.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  # ---------------------------------------------------------------------
+  # TLS is intentionally left commented out. Fill this in with a real
+  # cert-manager Issuer/ClusterIssuer (or your own pre-provisioned secret)
+  # before exposing this Ingress outside a trusted network, e.g.:
+  #
+  # tls:
+  #   - hosts:
+  #       - ioc-intel.example.com
+  #     secretName: ioc-intel-tls
+  #
+  # and add the matching cert-manager annotation, e.g.:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  # ---------------------------------------------------------------------
+  rules:
+    - host: ioc-intel.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 3000

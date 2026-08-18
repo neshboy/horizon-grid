@@ -1,0 +1,92 @@
+[
+  {
+    "file": "backend-01-overview-and-lifecycle.md",
+    "heading": "1. Docker Service Inventory",
+    "diagramFile": "backend-01-overview-and-lifecycle-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "backend-01-overview-and-lifecycle.md",
+    "heading": "2.4 Uvicorn serving",
+    "diagramFile": "backend-01-overview-and-lifecycle-diagram-2.png",
+    "ok": true
+  },
+  {
+    "file": "backend-01-overview-and-lifecycle.md",
+    "heading": "4. Request Lifecycle: the Streamed Lookup (`POST /api/v1/lookup/stream`)",
+    "diagramFile": "backend-01-overview-and-lifecycle-diagram-3.png",
+    "ok": true
+  },
+  {
+    "file": "backend-02-api-reference.md",
+    "heading": "API Reference",
+    "diagramFile": "backend-02-api-reference-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "backend-05-runtime-configuration-architecture.md",
+    "heading": "Audit trail",
+    "diagramFile": "backend-05-runtime-configuration-architecture-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "backend-06-security-architecture.md",
+    "heading": "2. Authorization: Role-Based Access Control (RBAC)",
+    "diagramFile": "backend-06-security-architecture-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "backend-06-security-architecture.md",
+    "heading": "Windows installer: file-level protection for `.env`",
+    "diagramFile": "backend-06-security-architecture-diagram-2.png",
+    "ok": true
+  },
+  {
+    "file": "backend-07-background-processing-and-caching.md",
+    "heading": "Operational notes and gaps",
+    "diagramFile": "backend-07-background-processing-and-caching-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "backend-08-deployment-and-troubleshooting.md",
+    "heading": "2. The Windows Inno Setup Installer",
+    "diagramFile": "backend-08-deployment-and-troubleshooting-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "dev-01-overview-stack-repo-structure.md",
+    "heading": "6. Cross-Cutting Facts Worth Internalizing Before Reading Further",
+    "diagramFile": "dev-01-overview-stack-repo-structure-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "dev-02-frontend-architecture.md",
+    "heading": "The SSE-driven live investigation stream, end to end",
+    "diagramFile": "dev-02-frontend-architecture-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "dev-03-backend-architecture-and-request-flow.md",
+    "heading": "Summary of the full path",
+    "diagramFile": "dev-03-backend-architecture-and-request-flow-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "dev-04-provider-and-ai-architecture.md",
+    "heading": "3.2 `run_all_providers()` — the streaming fan-out generator",
+    "diagramFile": "dev-04-provider-and-ai-architecture-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "dev-05-runtime-configuration-and-credentials.md",
+    "heading": "Diagram",
+    "diagramFile": "dev-05-runtime-configuration-and-credentials-diagram-1.png",
+    "ok": true
+  },
+  {
+    "file": "dev-08-developer-troubleshooting.md",
+    "heading": "Quick Reference",
+    "diagramFile": "dev-08-developer-troubleshooting-diagram-1.png",
+    "ok": true
+  }
+]

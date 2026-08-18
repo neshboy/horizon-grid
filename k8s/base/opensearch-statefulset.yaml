@@ -1,0 +1,91 @@
+# Translation of docker-compose `opensearch` service
+# (opensearchproject/opensearch:2.17.0), single-node with security plugin
+# disabled -- matching docker-compose exactly (no auth configured there).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch
+  namespace: ioc-intel-platform
+  labels:
+    app: opensearch
+spec:
+  serviceName: opensearch
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opensearch
+  template:
+    metadata:
+      labels:
+        app: opensearch
+    spec:
+      containers:
+        - name: opensearch
+          image: opensearchproject/opensearch:2.17.0
+          env:
+            - name: discovery.type
+              valueFrom:
+                configMapKeyRef:
+                  name: ioc-intel-config
+                  key: OPENSEARCH_DISCOVERY_TYPE
+            - name: DISABLE_SECURITY_PLUGIN
+              valueFrom:
+                configMapKeyRef:
+                  name: ioc-intel-config
+                  key: DISABLE_SECURITY_PLUGIN
+            - name: OPENSEARCH_JAVA_OPTS
+              valueFrom:
+                configMapKeyRef:
+                  name: ioc-intel-config
+                  key: OPENSEARCH_JAVA_OPTS
+          ports:
+            - containerPort: 9200
+              name: http
+          volumeMounts:
+            - name: opensearch-data
+              mountPath: /usr/share/opensearch/data
+          readinessProbe:
+            tcpSocket:
+              port: 9200
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            tcpSocket:
+              port: 9200
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 1500m
+              memory: 2Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: opensearch-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch
+  namespace: ioc-intel-platform
+  labels:
+    app: opensearch
+spec:
+  clusterIP: None
+  selector:
+    app: opensearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200

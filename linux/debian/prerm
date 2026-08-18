@@ -1,0 +1,36 @@
+#!/bin/sh
+# Runs BEFORE dpkg removes the package's files -- the compose YAML files
+# under /opt/horizon-grid/app still exist at this point, which is why the
+# stop-the-stack step has to happen here rather than in postrm. Mirrors the
+# Windows uninstaller's "keep data" default path (stop containers, but never
+# pass -v -- volumes and therefore all data survive). Destructive teardown
+# (docker volume removal, deleting /etc/horizon-grid and
+# /var/lib/horizon-grid) is handled in postrm, and ONLY when dpkg passes
+# "purge" -- see that script's own header comment for why it uses
+# label-based lookups instead of `docker compose down -v` there.
+set -e
+
+APP_DIR=/opt/horizon-grid/app
+ENV_FILE=/etc/horizon-grid/.env
+
+case "$1" in
+    remove)
+        if [ -f "$ENV_FILE" ] && [ -d "$APP_DIR" ] && command -v docker >/dev/null 2>&1; then
+            echo "Stopping HORIZON GRID containers (data is preserved -- use 'apt purge' instead of 'apt remove' to also delete data)..."
+            (cd "$APP_DIR" && docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file "$ENV_FILE" stop) || \
+                echo "Warning: could not stop containers cleanly -- they may still be listed by 'docker ps'."
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop horizon-grid.service 2>/dev/null || true
+            systemctl disable horizon-grid.service 2>/dev/null || true
+        fi
+        ;;
+    upgrade|deconfigure)
+        # Package upgrade: leave the stack running on its current image.
+        # The administrator picks up new backend/frontend source by running
+        # `sudo horizon-grid configure` (or `restart`) afterward, same as a
+        # Windows Configuration re-run.
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,41 @@
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+.venv_test/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# --- Node / Next.js ---
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+
+# --- Generated documentation build pipeline (regenerate via documentation/build/build-doc-generic.js) ---
+documentation/build/
+documentation/pages_png/
+documentation/manual.txt
+
+# --- Release artifacts (regenerate via windows/installer.iss / linux/build-deb.sh; ship as GitHub Release assets, not git blobs) ---
+release/
+
+# --- Ad-hoc QA/test debris ---
+backend/qa_halluc_out_*.json
+/nul
+
+# --- Logs / OS / IDE ---
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

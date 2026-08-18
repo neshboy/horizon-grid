@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=HORIZON GRID
+Comment=Every Signal. One Operational Picture.
+GenericName=IOC Threat Intelligence Platform
+Exec=horizon-grid open
+Terminal=false
+Categories=Network;Security;
+StartupNotify=true
+# No custom icon exists yet (matches the Windows installer's own honest
+# disclosure that windows/assets is empty) -- omitted rather than pointing
+# at a fabricated file; the desktop environment falls back to a generic
+# application icon until a real one is added.

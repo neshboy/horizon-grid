@@ -1,0 +1,179 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ioc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ioc}
+      POSTGRES_DB: ${POSTGRES_DB:-ioc_intel}
+    ports:
+      # Bound to loopback only -- confirmed live that the default
+      # "0.0.0.0:5433:5432" form (Docker's shorthand for "publish on every
+      # host interface") made this reachable from any other device on the
+      # same LAN/WiFi, fully unauthenticated attempts aside (the app's own
+      # DATABASE_URL always talks to `postgres` over the internal Docker
+      # network below, completely independent of this host port mapping --
+      # this only controls HOST-side reachability, e.g. a developer running
+      # `psql` locally, and never needed to be network-wide).
+      - "127.0.0.1:${HOST_PORT_POSTGRES:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ioc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      # Loopback-only -- see the postgres service's port comment above for
+      # why (same LAN-exposure issue, same fix, same reasoning).
+      - "127.0.0.1:${HOST_PORT_REDIS:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-changeme-neo4j}
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      # Loopback-only -- see the postgres service's port comment above. Neo4j
+      # itself is password-protected (NEO4J_AUTH below), but confirmed live
+      # that its root HTTP endpoint (server/version metadata) answered with
+      # zero authentication from another machine on the same LAN -- no
+      # datastore should be network-reachable at all when only this host
+      # ever needs to talk to it.
+      - "127.0.0.1:${HOST_PORT_NEO4J_HTTP:-7475}:7474"
+      - "127.0.0.1:${HOST_PORT_NEO4J_BOLT:-7688}:7687"
+    volumes:
+      - neo4j_data:/data
+
+  opensearch:
+    image: opensearchproject/opensearch:2.17.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      # Loopback-only -- see the postgres service's port comment above.
+      # OpenSearch's security plugin is explicitly disabled below (no auth
+      # at all), so this was the most exposed of the four datastores:
+      # confirmed live that the full REST API was reachable and answering
+      # from another machine on the same LAN with zero credentials.
+      - "127.0.0.1:${HOST_PORT_OPENSEARCH:-9200}:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+
+  backend:
+    build:
+      context: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ioc}:${POSTGRES_PASSWORD:-ioc}@postgres:5432/${POSTGRES_DB:-ioc_intel}
+      # app-backend is the ONLY process that serves concurrent user-facing HTTP
+      # traffic (celery_worker/celery_beat below deliberately do NOT set these,
+      # falling back to config.py's much smaller defaults -- see that file's
+      # own comment on db_pool_size/db_pool_max_overflow for the full
+      # rationale, including why every authenticated request already costs 2
+      # connections, not 1). 30+20=50 here + 5+5=10 each for the two celery
+      # processes = 70 total worst-case, comfortably under Postgres's default
+      # max_connections=100.
+      DB_POOL_SIZE: "30"
+      DB_POOL_MAX_OVERFLOW: "20"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      NEO4J_URI: bolt://neo4j:7687
+      OPENSEARCH_URL: http://opensearch:9200
+      # Points at the native (non-Docker) Ollama install on the host --
+      # gemma4:26b's ~16GB mmap load is dramatically slower through Docker
+      # Desktop's WSL2 volume-mount layer (never finished loading in 5+ min
+      # in a containerized Ollama) than direct NTFS access (~1s load,
+      # confirmed via native Ollama). host.docker.internal resolves to the
+      # host machine from inside this container (Docker Desktop Windows/Mac).
+      #
+      # Was hardcoded here rather than using the ${VAR:-default} substitution
+      # every other setting in this file uses -- confirmed live that this
+      # silently overrode the real OLLAMA_BASE_URL written to .env by the
+      # setup wizard, since a compose `environment:` entry always wins over
+      # `env_file:` regardless of what's actually in .env. Any user pointing
+      # Ollama at a different host/port (e.g. a machine other than
+      # localhost) had that setting written correctly but never honored.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    ports:
+      - "${HOST_PORT_BACKEND:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  celery_worker:
+    build:
+      context: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ioc}:${POSTGRES_PASSWORD:-ioc}@postgres:5432/${POSTGRES_DB:-ioc_intel}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    restart: unless-stopped
+
+  celery_beat:
+    build:
+      context: ./backend
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      # Left empty by default so the frontend auto-detects its own origin
+      # (see frontend/lib/api.ts's getApiUrl()) -- only set PUBLIC_API_URL
+      # for a reverse-proxy or other non-default setup. Hyphen-only form
+      # (not ${VAR:-default}) so an explicitly-empty value stays empty
+      # instead of falling back to a hardcoded default.
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL-}
+      NEXT_PUBLIC_BACKEND_PORT: ${HOST_PORT_BACKEND:-8000}
+    ports:
+      - "${HOST_PORT_FRONTEND:-3000}:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  opensearch_data:

@@ -1,0 +1,140 @@
+# Verified Architecture Facts (source-of-truth for technical documentation sections)
+
+Compiled by direct source-code inspection of `C:\Users\User\ioc-intel-platform`. Every claim below is traceable to a specific file (and line number where noted). No secret values were read — only field names. This file is a research input for drafting the documentation, not itself part of the final deliverable.
+
+**Editorial flag**: `docker-compose.yml` (lines 9-16, 29-30, 44-49, 62-66, 82-95) contains first-person comments asserting completed live security/network testing (e.g. "confirmed live that... reachable from another machine on the same LAN"). These narrative claims were NOT treated as verified fact below — only the literal, machine-checkable YAML behavior (binds to `127.0.0.1`) is reported.
+
+---
+
+## 1. Component Architecture
+
+`docker-compose.yml` defines 7 services: `postgres` (postgres:16-alpine), `redis` (redis:7-alpine), `neo4j` (neo4j:5-community, APOC plugin), `opensearch` (opensearchproject/opensearch:2.17.0, `DISABLE_SECURITY_PLUGIN: "true"`), `backend`, `celery_worker`, `celery_beat`, `frontend` (8 total including frontend). `docker-compose.prod.yml` (used by the Windows installer) strips dev bind-mounts and switches backend/frontend to production start commands.
+
+- **Backend**: FastAPI (`backend/app/main.py`), Python 3.12 (`backend/Dockerfile` line 1), SQLAlchemy 2.0 async + asyncpg, Alembic migrations (`backend/alembic/`), Celery 5.4 for background jobs, structlog + prometheus-fastapi-instrumentator for logging/metrics (`backend/requirements.txt`). `app.title`/description in `main.py` lines 17-25 self-describes as "single-search IOC lookup across dozens of providers, correlated and summarized by a local Ollama model (or AWS Bedrock/Gemini/Anthropic)."
+- **celery_worker / celery_beat**: run `app.workers.celery_app`. Only one scheduled task exists: `run_osint_crawl`, hourly (`backend/app/workers/celery_app.py` lines 27-32), which re-crawls OSINT sources for IOCs looked up in the last 24h (`backend/app/workers/tasks.py`). The synchronous SSE lookup pipeline does **not** go through Celery (`celery_app.py` header comment, lines 1-6).
+- **Frontend**: Next.js 14.2.15, React 18.3.1, TypeScript, Tailwind, Zustand (state), Recharts, `react-force-graph-2d` (relationship graph), Radix UI primitives (`frontend/package.json`). Vitest is declared as the test runner but see §8 — no test files exist.
+- `k8s/` contains a parallel Kustomize-based Kubernetes deployment (statefulsets for postgres/neo4j/opensearch, deployments for backend/frontend/celery, ingress) — an alternative to the Docker Compose / Windows installer path, not otherwise covered here.
+
+## 2. Data Flow for an IOC Lookup
+
+Entry point: `POST /api/v1/lookup/stream` (`backend/app/api/routes/lookup.py`), an SSE endpoint. Verified sequence (lines 46-257):
+
+1. Rate limit check (Redis fixed-window, `RateLimiter` in `app/core/cache.py`) — max 10 calls/60s per user by default (`app/core/config.py` lines 94-96).
+2. `detect_ioc_type()` (`app/ioc/detector.py`) classifies the raw string via ordered regex/heuristics into one of 31 `IOCType` enum values (`app/ioc/types.py`).
+3. An `IOCLookup` row is created in Postgres with status `RUNNING`.
+4. `run_all_providers()` (`app/providers/orchestrator.py`) fans out concurrently (`asyncio.create_task` + `asyncio.as_completed`) to every registered provider whose `supports(ioc_type)` is true. Each call goes through Redis cache check -> `BaseProvider.run()` (timeout/retry via tenacity, configurable via `provider_timeout_seconds`/`provider_max_retries`) -> normalized `ProviderResult`.
+5. As each provider result arrives: it's persisted to Postgres (`ProviderResultRecord`), and if `status == ok`, `summarize_provider()` (`app/ai/service.py`) is called — one AI call **per provider**, grounded only in that provider's own JSON — persisted as `AISummaryRecord` with a `provider_id`. Both are SSE-streamed (`provider_result`, `provider_summary` events) and committed to Postgres after every single provider (lookup.py lines 122-136 explain this commit-per-result design defends against client-disconnect data loss).
+6. After all providers finish: `correlate()` (`app/correlation/engine.py`) runs — a pure, I/O-free function that extracts typed relationship edges from normalized provider fields (`resolved_ips`, `related_hashes`, `malware_families`, `mitre_techniques`, `cves`, etc. — table at engine.py lines 57-70), deduplicates/corroborates them (confidence boosted per additional corroborating provider, `_CORROBORATION_BONUS_PER_PROVIDER = 0.15`), and returns a `CorrelationResult` (nodes/edges/deduplicated_facts/provider_agreement). Edges are persisted as `CorrelationEdgeRecord` rows in Postgres and streamed as a `correlation` SSE event.
+7. `generate_final_assessment()` (`app/ai/service.py`) — **one** consolidated AI call grounded in all per-provider summaries + the correlation output (never raw provider JSON directly — service.py lines 8-11). Result is validated against the `FinalAssessment` Pydantic schema, cross-checked/grounded via `_ground_final_assessment()` (see §3), and written onto the `IOCLookup` row (`final_verdict`, `risk_score`, `confidence_score`, `final_assessment` JSONB).
+8. `build_evidence()` (`app/evidence/builder.py`) deterministically converts provider results + AI summaries + correlation edges into `EvidenceItem` rows — explicitly **not AI-generated** (module docstring, evidence/builder.py lines 1-9), so later AI explanations can cite real, checkable records.
+9. Final SSE events: `final_assessment`, then `done`.
+
+**Persistence split, confirmed by code, not by comment/claim:**
+- **Postgres** (`backend/app/models/lookup.py`, `evidence.py`, `case.py`, `basket.py`, `user.py`): system of record for everything — lookups, provider results, AI summaries, correlation edges, evidence ledger, cases, users. This is the only datastore actually written to during a lookup.
+- **Neo4j**: declared as a config setting (`neo4j_uri`/`neo4j_user`/`neo4j_password` in `app/core/config.py`) and provisioned in `docker-compose.yml`, and `CorrelationEdgeRecord`'s docstring (`models/lookup.py` line 101) and `correlation/engine.py`'s module docstring both describe edges as being "mirrored into Neo4j." **A full-repo grep of `backend/app/**/*.py` for `neo4j`/`Neo4j`/`GraphDatabase` outside `.venv` found zero driver instantiation, zero Cypher queries, zero write/read calls anywhere in the application code** — only the config field and two docstrings describing an intended design that is not implemented. Correlation edges are persisted **only** in Postgres today.
+- **OpenSearch**: same situation — `opensearch_url` exists in `app/core/config.py` (line 34) and the container runs, but a full-repo grep found **zero** OpenSearch client/index/search code anywhere in `backend/app`. No indexing pipeline exists.
+- **Redis**: two real, verified uses — (1) provider-result cache, keyed `provider_cache:{provider_id}:{ioc_type}:{sha256(value)}`, TTL `provider_cache_ttl_seconds` (default 3600s) (`app/core/cache.py`); (2) fixed-window rate limiter for the lookup-create endpoint. Also used as the Celery broker (`redis://redis:6379/1`) and result backend (`/2`), separate logical DB index (`/0`) for cache — per `docker-compose.yml` env and `app/core/config.py`.
+
+## 3. AI Architecture
+
+Files read in full: `backend/app/ai/service.py`, `schemas.py`, `analysis_service.py`, `hunting_service.py`, `analysis_schemas.py`, `ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`.
+
+**Backends supported** (`app/core/config.py` line 69, `ai_backend: str = "ollama"`): `ollama` (default, local, no key — `http://host.docker.internal:11434`, model `llama3.2:3b`), `anthropic` (direct Messages API, tool-forced JSON), `bedrock` (AWS Bedrock Converse API for Claude, supports bearer-token or IAM access-key/secret auth), `gemini` (Google Gemini `generateContent` REST, JSON-schema response mode). All four clients expose an identical `call_claude_json(system_prompt, user_prompt, json_schema, tool_name, max_tokens)` async method so `app/ai/service.py`'s `_get_ai_client()` never branches on which is active (service.py lines 42-78). Selection is fail-fast: if the selected backend's `is_configured` is False, a `RuntimeError` is raised rather than a confusing low-level HTTP error.
+
+**Two distinct AI call types, confirmed as genuinely separate:**
+- `summarize_provider()` — one call **per provider** that returned `OK` data, prompted with **only that provider's own JSON** (`_PROVIDER_SUMMARY_SYSTEM_PROMPT`, service.py lines 81-96). Persisted as `AISummaryRecord` with `provider_id` set.
+- `generate_final_assessment()` — **one** consolidated/"master" call after all providers finish, prompted with all per-provider `ProviderSummary` objects plus the correlation engine's output (never raw provider JSON — by design, to bound prompt size). Persisted on `IOCLookup.final_assessment` and as an `AISummaryRecord` with `provider_id = NULL` (the model comment at `models/lookup.py` line 93 explicitly marks null-provider_id rows as "the final consolidated assessment, not a per-provider one").
+
+**No-evidence short-circuit guard** (`service.py` lines 242-284): if `provider_summaries` is empty **and** `correlation.edges` is empty, `generate_final_assessment()` returns a hardcoded deterministic `FinalAssessment` (`final_verdict=Verdict.UNKNOWN`, all risk fields 0) **without calling the AI at all**. The code comment documents a specific reproduced failure: querying the EICAR test file's real MD5 hash (`44d88612fea8a8f36de82e1278abb02f`) against zero configured providers still made the small local model return `final_verdict="highly_malicious"`, `malicious_probability=92`, fabricating "association with ransomware and trojans" from pretrained knowledge — a direct violation of its own "never fabricate" system-prompt instruction. This is why the guard bypasses the model entirely rather than trying to prompt-engineer around it.
+
+**Grounding mechanism** — `_ground_final_assessment()` (service.py lines 137-190): cross-checks the AI's own structured output against the deterministic correlation data rather than trusting it. Concretely: (a) filters `agreeing_providers`/`disagreeing_providers` lists down to only provider_ids that actually appear in correlation edges, `provider_agreement`, or the set of providers that returned a real per-provider summary (`known_provider_ids`, passed in by the caller) — anything else is silently stripped; (b) sets `mapping.grounded = False` on any MITRE technique the model cited that isn't backed by a real `uses_technique` correlation edge. A parallel mechanism in `analysis_service.py` (`_strip_invalid_evidence_ids`, lines 55-71) recursively strips any `evidence_ids` citation from the analyst-facing explanation endpoints (WHY malicious, Challenge, Copilot, etc.) that doesn't match a real `EvidenceItem.id` for that lookup; a companion `_backfill_evidence_ids_from_prose()` (lines 74-112) recovers citations the model wrote correctly into prose text but forgot to structure — it only ever adds IDs already confirmed real, never invents one.
+
+**Verdict/confidence model** (`app/models/lookup.py` lines 22-34): `Verdict` enum has 12 values — `highly_malicious, malicious, suspicious, unknown, likely_benign, benign, scanner, tor_exit_node, vpn, cdn, cloud_infrastructure, dormant_infrastructure`. `RiskAssessment` (`app/ai/schemas.py` lines 101-131) carries `overall_risk_score`, `confidence_score`, `malicious_probability` — all explicitly 0-100 scale (not 0-1), with a `field_validator` that auto-rescales a value between 0 and 1 by x100, because llama3.2:3b was observed defaulting to a 0-1 convention. `FinalAssessment` has a `model_validator` (`_verdict_must_agree_with_risk`, schemas.py lines 187-208) that rejects egregiously self-contradictory outputs (e.g. `final_verdict="malicious"` with `malicious_probability < 30`).
+
+Beyond the core pipeline, `analysis_service.py` implements 8 additional grounded, evidence-cited AI features (WHY malicious, What Is This, Provider Disagreement, False-Positive Assessment, Challenge/red-team, Smart Next Actions, Intelligence Gaps, Score Explanation, plus Copilot Q&A and IOC comparison), and `hunting_service.py` implements hunting-query and detection-rule generation, both restricted to only cite indicators/evidence that are actually present in the real correlation graph/evidence ledger (never inventing an expansion target — `hunting_service.py` lines 74-79 explicitly strip any invented expansion target).
+
+## 4. Provider Architecture
+
+16 providers registered in `backend/app/providers/registry.py` (`_ALL_PROVIDERS`):
+
+| provider_id | Category | Supported IOC types | Key requirement | Notes |
+|---|---|---|---|---|
+| `virustotal` | threat_intel | ipv4, ipv6, domain, url, hashes | API key | v3 free tier |
+| `abuseipdb` | threat_intel | ipv4, ipv6 | API key | v2 |
+| `otx` | threat_intel | ipv4, ipv6, domain, hostname, url, hashes | API key | AlienVault OTX |
+| `urlhaus` | threat_intel | url, domain, ipv4 | abuse.ch Auth-Key | shares key w/ threatfox/malwarebazaar |
+| `threatfox` | threat_intel | ipv4, ipv6, domain, url, md5, sha256 | abuse.ch Auth-Key | shares key |
+| `malwarebazaar` | threat_intel | hash types (md5/sha1/sha256/sha512) | abuse.ch Auth-Key | shares key |
+| `crtsh` | certificate_intel | domain, tls_certificate | none | Certificate Transparency |
+| `nvd` | vulnerability | cve | none (optional key raises rate limit) | NIST NVD v2.0 |
+| `cisa_kev` | vulnerability | cve | none | in-memory cached catalog, 1hr TTL |
+| `mitre_attack` | threat_intel | mitre_technique | none | STIX bundle, cached 1hr |
+| `whois_rdap` | whois | domain, ipv4, ipv6, asn | none | python-whois (domains) + RDAP (IP/ASN) |
+| `hybrid_analysis` | sandbox | sha256 only | API key | v2 overview/summary endpoint; MD5/SHA1/URL explicitly unsupported per code comment (deprecated endpoints) |
+| `spamhaus` | threat_intel | ipv4, domain | none | DNSBL lookup, no HTTP call (raw DNS) |
+| `phishtank` | threat_intel | url | none (optional key raises rate limit) | |
+| `censys` | passive_dns | ipv4, ipv6 | Personal Access Token **and** Organization ID both required | Platform API v3 |
+| `internet_intelligence` | osint | domain, ipv4, malware_family, threat_actor, campaign, cve, file_name | none | OSINT crawler wrapping GitHub/Reddit/RSS/pastebin sources (`app/crawler/`) |
+
+**Cross-check against `windows/wizard/Setup-Wizard.ps1`'s `$ProviderDefs`** (lines 486-495): the wizard lists exactly `virustotal, abuseipdb, otx, abusech (URLhaus/ThreatFox/MalwareBazaar), nvd, hybrid_analysis, censys, phishtank` — all 8 have real, working backend implementations confirmed above. The wizard's Censys note ("Requires both a Personal Access Token and an Organization ID") matches `censys.py`'s `configured` check exactly (`bool(personal_access_token and organization_id)`). The abusech note ("One free Auth-Key covers all three abuse.ch connectors") matches `abusech.py`/`urlhaus.py`/`threatfox.py`/`malwarebazaar.py` all reading `settings.abusech_auth_key`. The NVD note ("works without a key at a lower rate limit") matches `nvd.py`'s `requires_key = False`, `configured = True` unconditionally.
+
+**Discrepancy found (consistent, not a bug)**: 6 backend providers have real code but are **not** in the wizard's UI: `crtsh`, `cisa_kev`, `mitre_attack`, `whois_rdap`, `spamhaus`, `internet_intelligence`. All six are `requires_key = False` with no credential to collect, so `backend/app/providers/connection_test.py`'s handler dict (lines 190-206) explicitly has no test handler for them either, with a fallback message naming them as needing none.
+
+## 5. Database Architecture
+
+Postgres tables (`backend/app/models/`): `users` (email, hashed_password, full_name, role enum admin/analyst/viewer, is_active), `ioc_lookups` (ioc_value, ioc_type, status enum pending/running/completed/failed, final_verdict, risk_score, confidence_score, final_assessment JSONB), `provider_results` (per-provider raw JSONB + status/latency), `ai_summaries` (JSONB, nullable provider_id distinguishes per-provider vs. final), `correlation_edges` (source/target type+value, relationship_type, confidence, provenance), `evidence_items` (evidence_type enum with 9 values, source_label, claim, interpretation, confidence 0-100, raw_data JSONB), `basket_items` (per-analyst scratch list, unique on owner_id+ioc_value), `cases`/`case_iocs`/`case_notes`/`case_reports` (lightweight case-management workflow with status/severity enums). Migrations managed via Alembic (`backend/alembic/`).
+
+**Neo4j**: provisioned (docker-compose service, `neo4j:5-community` + APOC) and has config fields, but — as detailed in §2 — has **no actual driver/query code anywhere in the backend**. It is not currently used for anything; the correlation graph lives entirely in Postgres's `correlation_edges` table.
+
+**OpenSearch**: provisioned but likewise has zero indexing/search code in the backend. No search functionality is implemented against it.
+
+**Redis**: confirmed real uses are (1) provider-result cache (`app/core/cache.py`), (2) per-user rate limiter for lookup creation, (3) Celery broker (db `/1`) and result backend (`/2`), separate logical DB index (`/0`) for cache — per `docker-compose.yml` env and `app/core/config.py`. No other Redis usage found.
+
+## 6. Windows Deployment / Installer Architecture
+
+`windows/installer.iss` (Inno Setup): copies `backend/`, `frontend/`, `docker-compose*.yml`, `docs/`, `README.md`, and the `windows/scripts`+`windows/wizard` PowerShell into `{autopf}\IOC Intelligence Platform\app\` (x64-only, `ArchitecturesAllowed=x64compatible`). It does **not** reimplement the platform as a native Windows service — Docker Compose remains the real runtime (installer.iss header comment, lines 6-10). A `[Code]` prerequisite check (`Check-Prerequisites.ps1`) runs before file copy, verifying 64-bit Win10+, admin privileges, >=8GB RAM (soft), disk space, Docker Desktop installed+running, Docker Compose v2, and required ports free — hard failures prompt "continue anyway?"
+
+**Shortcuts created** (`[Icons]` section): Open Platform, Configuration (re-runs the wizard), Start/Stop/Restart Platform, Service Status, Backup Database Now, Diagnostics, Documentation, Uninstall, plus an optional desktop icon.
+
+**Setup wizard** (`windows/wizard/Setup-Wizard.ps1`, WinForms, not Electron/HTML): self-elevates via UAC if not already running with a real (non-filtered) elevated token, then walks Welcome -> Admin Account -> AI Configuration -> Provider Configuration (8 providers, each with a live "Test" button hitting `POST /api/v1/providers/{id}/test`) -> Port Review -> Summary/Install -> Finish. On "Start Installation": writes `.env` (`Write-EnvFile.ps1`), runs `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`, polls `/health` for up to 3 minutes, then registers the admin account via `POST /api/v1/auth/register` + logs in. Re-running from "Configuration" on an existing install (`$State.IsUpgrade`) parses the existing `.env` to pre-populate fields and backs up the database first (`Backup-Database.ps1`, `pg_dump` inside the running postgres container).
+
+**Data locations** (`windows/scripts/Common.ps1` lines 28-40): binaries at `%ProgramFiles%\IOC Intelligence Platform\app\`; writable data at `%ProgramData%\IOC Intelligence Platform\` — `config\.env` (real secrets), `logs\setup.log`, `backups\` (pg_dump snapshots, most-recent-10 retained). `ProgramData` is ACL-locked to Administrators+SYSTEM via `icacls` (`Initialize-DataDirectories`). Because `docker-compose.yml`'s `env_file: .env` resolves relative to the compose project directory (not the `--env-file` flag), `Sync-ComposeEnvFile` copies the real `.env` into `{app}\app\.env` on every compose invocation and re-applies the same restrictive ACL there.
+
+**Start/stop**: `Service-Start.ps1` runs `docker compose up -d` then polls `/health`; `Service-Stop.ps1` runs `docker compose stop` (no `-v`, data preserved); `Open-Platform.ps1` (desktop icon default) checks health first, starts Docker Desktop if needed, then the stack, then opens the browser. Uninstall (`[Code]` in `installer.iss`) offers "Remove Application" (keep ProgramData/volumes) vs. "Remove Everything" (type `DELETE` to confirm; runs `docker compose down -v`, deletes ProgramData).
+
+## 7. Security Architecture
+
+**Auth**: JWT (`python-jose`, HS256, `backend/app/auth/security.py`), `passlib`+`bcrypt` password hashing. Access tokens expire in 30 min, refresh in 7 days (`app/core/config.py` lines 25-26). `POST /auth/register` (`app/api/routes/auth.py` lines 20-39): **first-ever registered user is automatically granted `Role.ADMIN`; every subsequent user gets `Role.ANALYST`** (line 26-28) — no manual DB edit needed to bootstrap. `docs/SECURITY.md` describes this same mechanism, independently confirmed against the code.
+
+**RBAC**: 3 roles (admin/analyst/viewer), permission-string matrix in `app/models/user.py` (`ROLE_PERMISSIONS`), enforced via `require_permission()` dependency (`app/auth/rbac.py`). **Correction to `docs/SECURITY.md`**: that doc claims no route calls `require_permission("provider:manage")` — this is stale. `backend/app/api/routes/providers.py` line 24 confirms `POST /api/v1/providers/{provider_id}/test` **does** gate on `require_permission("provider:manage")`. (`user:manage` and `audit:read` genuinely have no enforcing route.)
+
+**Secrets**: `.env` (git-ignored; `.env.example` tracked as template) loaded via pydantic-settings. `jwt_secret_key` defaults to the literal string `"change-me-in-production"` if unset (`config.py` line 23) — a real risk if that default ships unchanged. On Windows, secrets are generated via a CSPRNG (`New-RandomSecret`, .NET `RandomNumberGenerator`, not `Get-Random`) and written via `Write-EnvFile.ps1`, with the resulting file ACL-locked to Administrators+SYSTEM (`icacls`).
+
+**Network exposure**: every datastore port binding in `docker-compose.yml` (`postgres`, `redis`, `neo4j` x2, `opensearch`) uses the `127.0.0.1:<port>:<container_port>` form — syntactically bound to loopback only, not `0.0.0.0`. `backend`/`frontend` ports are published without an explicit host binding (`"${HOST_PORT_BACKEND:-8000}:8000"`), which Docker's shorthand form publishes on all host interfaces.
+
+**Rate limiting**: exactly one limiter in the codebase, Redis fixed-window, on `POST /lookup/stream` only (10 calls/60s/user, both configurable). No rate limiting on `/auth/login` or `/auth/register`.
+
+**CORS** (`app/main.py` lines 27-33): `allow_origins=["http://localhost:3000"]` when `settings.debug` (default `True`), else `[]` — a `DEBUG=false` deployment permits zero cross-origin browser requests until the code itself is edited; there's no `CORS_ORIGINS` env var.
+
+**Input validation of note**: `LookupCreateRequest.value` is an unconstrained `str` server-side (`app/schemas/lookup.py`); IOC-type detection (`ioc/detector.py`) is regex-based classification, not sanitization. `RegisterRequest.password` has no server-side strength constraint; the wizard's 8-char minimum (`Setup-Wizard.ps1` line 350) is a client-side-equivalent check on the admin account creation flow only, not a backend constraint.
+
+## 8. Testing
+
+Backend: `backend/app/tests/unit/` (13 files, ~1,486 lines) and `backend/app/tests/integration/` (3 files, ~1,009 lines), pytest + pytest-asyncio + pytest-cov + respx (HTTP mocking), declared in `requirements.txt`. Unit tests cover: abuse.ch status mapping, AI schemas/validators, AI service (incl. the no-evidence guard), analysis_service grounding, connection_test handlers, correlation engine, crawler collector/rate-limit, evidence builder, IOC detector, pivot, provider base class, whois/RDAP. Integration tests (`test_lookup_flow.py`, `test_lookup_stream_persistence.py`, `test_api_health.py`) exercise the real orchestrator end-to-end against **fake** `BaseProvider` subclasses (never the real network-hitting connectors) with `respx`-mocked HTTP and a **real Redis** dependency via docker-compose (auto-skipped if Redis isn't reachable) — verified concurrency behavior (parallel not sequential fan-out), partial-failure isolation, cache hit/miss, and unsupported/not-configured short-circuits.
+
+Frontend: `package.json` declares `"test": "vitest run"` and lists `vitest` as a devDependency, but a repo-wide search for `*.test.*`/`*.spec.*` under `frontend/` (excluding `node_modules`/`.next`) found **zero test files**. Vitest is configured as tooling but no actual frontend tests exist.
+
+No coverage percentages are asserted anywhere in this file — only what test files/frameworks exist, per the no-fabrication rule.
+
+## 9. Known Limitations Verifiable From Code
+
+- **Censys** (`app/providers/stubs/censys.py` lines 30-35): `configured` requires **both** `censys_personal_access_token` AND `censys_organization_id` — either alone leaves it `NOT_CONFIGURED`.
+- **NVD** (`app/providers/nvd.py` lines 24-27): `requires_key = False`, `configured = True` unconditionally; API key only raises from an unauthenticated rate limit (~5 req/30s) to ~50 req/30s per the module docstring.
+- **abuse.ch** (`app/providers/urlhaus.py`, `threatfox.py`, `malwarebazaar.py`, `abusech.py`): all three share exactly one `settings.abusech_auth_key`; a missing/invalid key is deliberately mapped to `ProviderStatus.ERROR`, not `NO_DATA`, specifically so a misconfigured key can't misrepresent a possibly-malicious IOC as clean (`abusech.py` lines 6-8).
+- **Hybrid Analysis** (`stubs/hybrid_analysis.py` lines 6-17): documented as SHA256-only — the connector's own comment states VirusTotal-style hash lookup (`/api/v2/search/hash`) is deprecated (HTTP 410) and URL search support was removed after every plausible request-body field name failed against the live API.
+- **PhishTank** (`connection_test.py` lines 158-183): documented to sometimes return HTTP 403 to any generic client regardless of key validity; the connection test treats a 403 as inconclusive/"ok" rather than a hard auth failure, since no key is ever required.
+- **Provider execution config** (`app/core/config.py` lines 89-92): `provider_timeout_seconds=20`, `provider_max_retries=2` (exponential backoff via tenacity, `wait_exponential(multiplier=0.5, max=4)`), `provider_cache_ttl_seconds=3600`.
+- **Ollama timeout** (`ollama_client.py` line 35): hardcoded `_TIMEOUT_SECONDS = 120`, with a code comment noting a model that spills from VRAM to CPU/mmap has been observed taking several minutes per response.
+- **Rate limit on lookup creation** (`config.py` lines 94-96): `lookup_rate_limit_max_calls=10` per `lookup_rate_limit_window_seconds=60`, per user.
+- **Neo4j and OpenSearch are provisioned infrastructure with no consuming application code** (see §2/§5) — the most significant gap between documented/intended design (docstrings, docker-compose) and actual implementation. Anything drafted for the documentation about a Neo4j-backed graph store or OpenSearch-backed full-text search must be labeled as architecturally provisioned-but-not-yet-integrated, not as a working feature.
+- **`docs/SECURITY.md` contains one stale/incorrect claim** (see §7) about `provider:manage` having no enforcing route — it does, on `POST /providers/{id}/test`. The rest of that document's spot-checked claims (JWT mechanics, RBAC matrix, register-endpoint admin bootstrap, CORS behavior, rate-limit scope) matched the code exactly.

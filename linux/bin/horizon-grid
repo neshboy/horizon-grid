@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# HORIZON GRID -- single CLI entrypoint. Installed to /usr/bin/horizon-grid
+# by the .deb package. Dispatches to the real implementation scripts under
+# the installed app's linux/ directory -- this is the direct equivalent of
+# the Windows installer's Start Menu shortcuts, each of which wraps one
+# .ps1 script; here, every subcommand wraps one .sh script or the Python
+# wizard, from one consistent command instead of a menu of separate icons.
+set -u
+
+HORIZON_GRID_APP_REPO_DIR="${HORIZON_GRID_APP_REPO_DIR:-/opt/horizon-grid/app}"
+SCRIPTS_DIR="$HORIZON_GRID_APP_REPO_DIR/linux/scripts"
+WIZARD_DIR="$HORIZON_GRID_APP_REPO_DIR/linux/wizard"
+
+usage() {
+    cat <<'EOF'
+HORIZON GRID -- command-line control
+
+Usage: horizon-grid <command>
+
+Commands:
+  configure     Run the setup wizard (admin account, AI backend, providers, ports)
+  start         Start the platform (all containers)
+  stop          Stop the platform (containers stopped, data preserved)
+  restart       Restart the platform
+  status        Show container status and health checks
+  open          Start the platform if needed and open it in your browser
+  backup        Take a database backup now
+  diagnostics   Collect a support diagnostics archive (no real credentials included)
+  check         Run the prerequisite checks (Docker, ports, disk, RAM)
+  uninstall     Show how to remove HORIZON GRID (via apt remove/purge)
+  version       Print the installed version
+
+Most commands need root -- run with sudo.
+EOF
+}
+
+case "${1:-}" in
+    configure)
+        shift
+        exec python3 "$WIZARD_DIR/setup_wizard.py" "$@"
+        ;;
+    start)
+        exec "$SCRIPTS_DIR/service-start.sh"
+        ;;
+    stop)
+        exec "$SCRIPTS_DIR/service-stop.sh"
+        ;;
+    restart)
+        exec "$SCRIPTS_DIR/service-restart.sh"
+        ;;
+    status)
+        exec "$SCRIPTS_DIR/service-status.sh"
+        ;;
+    open)
+        exec "$SCRIPTS_DIR/open-platform.sh"
+        ;;
+    backup)
+        shift
+        exec "$SCRIPTS_DIR/backup-database.sh" "$@"
+        ;;
+    diagnostics)
+        exec "$SCRIPTS_DIR/diagnostics.sh"
+        ;;
+    check)
+        shift
+        exec "$SCRIPTS_DIR/check-prerequisites.sh" "$@"
+        ;;
+    uninstall)
+        cat <<'EOF'
+HORIZON GRID is removed the standard Debian way:
+
+  sudo apt remove horizon-grid    Removes the application but KEEPS your
+                                   configuration, credentials, and all
+                                   investigation data (cases, watchlists,
+                                   notes) under /etc/horizon-grid and
+                                   /var/lib/horizon-grid -- reinstalling
+                                   later picks up right where you left off.
+
+  sudo apt purge horizon-grid     Removes EVERYTHING, including the Docker
+                                   volumes (all case/investigation data,
+                                   permanently) and every file under
+                                   /etc/horizon-grid, /var/lib/horizon-grid,
+                                   and /var/log/horizon-grid. There is no
+                                   undo. Only use this if you actually want
+                                   all data gone.
+EOF
+        ;;
+    version)
+        dpkg-query -W -f='${Version}\n' horizon-grid 2>/dev/null || echo "unknown (not installed via apt)"
+        ;;
+    -h|--help|help|"")
+        usage
+        ;;
+    *)
+        echo "Unknown command: $1" >&2
+        usage >&2
+        exit 1
+        ;;
+esac

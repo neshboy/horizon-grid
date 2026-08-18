@@ -1,0 +1,55 @@
+#!/bin/sh
+# Runs after dpkg unpacks the package's files. Mirrors what the Windows
+# installer's [Code] section + Inno's own file-copy step do together:
+# create the writable data directories (root-only, since they'll hold real
+# credentials), register the systemd unit (WITHOUT enabling/starting it --
+# nothing should auto-start before the administrator has actually configured
+# anything, matching the master prompt's explicit "do not automatically
+# install persistent services" rule and mirroring how the Windows installer
+# never runs docker compose up until the wizard's Summary page), and print
+# the real next step.
+set -e
+
+CONFIG_DIR=/etc/horizon-grid
+DATA_DIR=/var/lib/horizon-grid
+LOG_DIR=/var/log/horizon-grid
+APP_DIR=/opt/horizon-grid/app
+
+case "$1" in
+    configure)
+        for d in "$CONFIG_DIR" "$DATA_DIR" "$DATA_DIR/backups" "$LOG_DIR"; do
+            mkdir -p "$d"
+            chown root:root "$d"
+            chmod 700 "$d"
+        done
+
+        # Executable bits -- dpkg normally preserves the mode a file was
+        # built with, but this is cheap insurance against a packaging
+        # mistake silently leaving a script non-executable.
+        chmod 0755 /usr/bin/horizon-grid
+        find "$APP_DIR/linux/scripts" -name '*.sh' -exec chmod 0755 {} \; 2>/dev/null || true
+        chmod 0755 "$APP_DIR/linux/wizard/setup_wizard.py" 2>/dev/null || true
+
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload || true
+        fi
+
+        echo ""
+        echo "HORIZON GRID files are installed. Nothing has been started yet."
+        echo ""
+        if [ -x "$APP_DIR/linux/scripts/check-prerequisites.sh" ]; then
+            echo "Checking prerequisites..."
+            "$APP_DIR/linux/scripts/check-prerequisites.sh" >/dev/null 2>&1 || \
+                echo "(one or more soft/hard checks did not pass -- run 'sudo horizon-grid check' for detail)"
+        fi
+        echo ""
+        echo "Next step:"
+        echo "  sudo horizon-grid configure"
+        echo ""
+        echo "This runs the setup wizard (administrator account, AI backend, threat-"
+        echo "intelligence providers, network ports), then starts the platform."
+        echo ""
+        ;;
+esac
+
+exit 0

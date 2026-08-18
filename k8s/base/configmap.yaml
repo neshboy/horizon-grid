@@ -1,0 +1,53 @@
+# Non-secret configuration shared by backend, celery_worker, celery_beat and
+# frontend. This is a direct translation of the *non-credential* environment
+# variables set in docker-compose.yml (service hostnames/ports/URLs that
+# don't embed a password).
+#
+# NOTE on DATABASE_URL: docker-compose sets
+#   DATABASE_URL: postgresql+asyncpg://ioc:ioc@postgres:5432/ioc_intel
+# which embeds the postgres password inline, so the *full* DATABASE_URL value
+# lives in the Secret (secret.example.yaml), not here. POSTGRES_HOST/PORT/DB
+# below capture the non-secret "host/port structure" of that same connection
+# for reference/troubleshooting and for the postgres StatefulSet itself.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ioc-intel-config
+  namespace: ioc-intel-platform
+data:
+  # --- Postgres (structure only -- credentials are in the Secret) ---
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "ioc_intel"
+
+  # --- Redis / Celery broker+backend (no auth in docker-compose) ---
+  REDIS_URL: "redis://redis:6379/0"
+  CELERY_BROKER_URL: "redis://redis:6379/1"
+  CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+
+  # --- Neo4j (URI only -- NEO4J_AUTH/password is in the Secret) ---
+  NEO4J_URI: "bolt://neo4j:7687"
+  NEO4J_PLUGINS: '["apoc"]'
+
+  # --- OpenSearch ---
+  OPENSEARCH_URL: "http://opensearch:9200"
+  OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+  DISABLE_SECURITY_PLUGIN: "true"
+  OPENSEARCH_DISCOVERY_TYPE: "single-node"
+
+  # --- AWS Bedrock (Claude) -- non-secret settings only, credentials are in the Secret ---
+  AWS_REGION: "us-east-1"
+  BEDROCK_MODEL_ID: "anthropic.claude-sonnet-4-5-20250929-v1:0"
+  BEDROCK_MAX_TOKENS: "4096"
+
+  # --- App (field names from backend/app/core/config.py Settings, which
+  # pydantic-settings matches case-insensitively against env var names) ---
+  ENVIRONMENT: "production"
+  DEBUG: "false"
+
+  # --- Frontend ---
+  # Points the Next.js app at the backend. When you have the Ingress host
+  # set up, change this to the externally reachable URL (e.g.
+  # "https://ioc-intel.example.com") so browser-side fetches hit /api there
+  # instead of localhost.
+  NEXT_PUBLIC_API_URL: "http://localhost:8000"

@@ -1,0 +1,283 @@
+"""Live "does this AI backend actually work" check -- the AI-backend analog
+of app/providers/connection_test.py.
+
+Investigation finding: none of the original five AI backends (Ollama,
+Anthropic, Bedrock, Gemini, and Groq) had ANY live connection test before
+this file existed -- the wizard's AI Configuration page collected keys with
+no way to verify them before saving. This closes that gap for all of them
+(now six, with OpenAI added) in one consistent mechanism, the same way
+connection_test.py did for the intelligence providers.
+
+Mirrors that same trust model exactly: every check below uses the
+*candidate* credentials passed in the request, never app.core.config's
+get_settings() singleton, and never persists anything. Each check makes one
+minimal, real request to the backend's own API and reports what actually
+happened -- never a fabricated/simulated latency, model name, or result.
+"""
+import os
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+import httpx
+
+from app.core.url_safety import assert_safe_outbound_url
+
+_MINIMAL_SYSTEM = "You are a connection test. Reply with exactly one word: pong"
+_MINIMAL_USER = "ping"
+
+
+@dataclass
+class AITestResult:
+    ok: bool
+    message: str
+    model: Optional[str] = None
+    latency_ms: Optional[int] = None
+
+
+async def _timed(coro_factory) -> tuple[AITestResult, int]:
+    start = time.monotonic()
+    try:
+        result = await coro_factory()
+    except httpx.TimeoutException:
+        return AITestResult(ok=False, message="Request timed out."), int((time.monotonic() - start) * 1000)
+    except httpx.HTTPError as exc:
+        return AITestResult(ok=False, message=f"Network error: {exc}"), int((time.monotonic() - start) * 1000)
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the UI as a message, never a raw traceback
+        return AITestResult(ok=False, message=f"{exc}"), int((time.monotonic() - start) * 1000)
+    return result, int((time.monotonic() - start) * 1000)
+
+
+async def _check_groq(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _MINIMAL_SYSTEM},
+                    {"role": "user", "content": _MINIMAL_USER},
+                ],
+                "max_completion_tokens": 8,
+                "temperature": 0,
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code == 401:
+        return AITestResult(ok=False, message="Authentication failed -- check your Groq API key.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_openai(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _MINIMAL_SYSTEM},
+                    {"role": "user", "content": _MINIMAL_USER},
+                ],
+                "max_completion_tokens": 8,
+                "temperature": 0,
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code == 401:
+        return AITestResult(ok=False, message="Authentication failed -- check your OpenAI API key.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_anthropic(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={
+                "model": model,
+                "max_tokens": 8,
+                "system": _MINIMAL_SYSTEM,
+                "messages": [{"role": "user", "content": _MINIMAL_USER}],
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = "".join(b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code == 401:
+        return AITestResult(ok=False, message="Authentication failed -- check your Anthropic API key.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_gemini(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        # Key goes in the x-goog-api-key header, not the ?key= query string --
+        # httpx logs the full request URL at INFO level, which would
+        # otherwise put the candidate key in plain text in the logs on every
+        # Test Connection click.
+        r = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": api_key},
+            json={
+                "contents": [{"role": "user", "parts": [{"text": _MINIMAL_USER}]}],
+                "systemInstruction": {"parts": [{"text": _MINIMAL_SYSTEM}]},
+                "generationConfig": {"maxOutputTokens": 8, "temperature": 0},
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        candidates = payload.get("candidates") or []
+        parts = candidates[0].get("content", {}).get("parts") if candidates else []
+        reply = "".join(p.get("text", "") for p in (parts or []))
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=model)
+    if r.status_code in (400, 403):
+        return AITestResult(ok=False, message="Authentication failed -- check your Gemini API key.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_ollama(base_url: str, model: str) -> AITestResult:
+    base_url = (base_url or "").rstrip("/")
+    if not base_url or not model:
+        return AITestResult(ok=False, message="Ollama base URL and model are both required.")
+    try:
+        assert_safe_outbound_url(base_url)
+    except ValueError as exc:
+        return AITestResult(ok=False, message=f"Refusing to connect to {base_url}: {exc}")
+    async with httpx.AsyncClient(timeout=60) as client:
+        try:
+            r = await client.post(
+                f"{base_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": _MINIMAL_SYSTEM},
+                        {"role": "user", "content": _MINIMAL_USER},
+                    ],
+                    "stream": False,
+                    "options": {"num_predict": 8, "temperature": 0},
+                },
+            )
+        except httpx.ConnectError as exc:
+            return AITestResult(ok=False, message=f"Could not reach Ollama at {base_url} -- is it running? ({exc})")
+    if r.status_code == 200:
+        payload = r.json()
+        reply = payload.get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=model)
+    if r.status_code == 404:
+        return AITestResult(
+            ok=False,
+            message=f"Model {model!r} is not pulled on this Ollama instance -- run `ollama pull {model}` first.",
+        )
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_bedrock(credentials: dict[str, str], model: str) -> AITestResult:
+    """Builds a throwaway boto3 client from the *candidate* credentials only
+    -- never app.core.config's global Settings -- so testing a key the user
+    just typed can never be confused with, or mutate, the backend's actual
+    configured Bedrock session."""
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bearer_token = credentials.get("bedrock_api_key", "")
+    access_key = credentials.get("aws_access_key_id", "")
+    secret_key = credentials.get("aws_secret_access_key", "")
+    region = credentials.get("aws_region") or "us-east-1"
+
+    if not bearer_token and not (access_key and secret_key):
+        return AITestResult(ok=False, message="Provide either a Bedrock API key (bearer token) or an AWS access key + secret.")
+
+    session_kwargs: dict[str, str] = {"region_name": region}
+    restore_env = None
+    if bearer_token:
+        restore_env = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = bearer_token
+    else:
+        session_kwargs["aws_access_key_id"] = access_key
+        session_kwargs["aws_secret_access_key"] = secret_key
+
+    try:
+        client = boto3.client("bedrock-runtime", **session_kwargs)
+        response = client.converse(
+            modelId=model,
+            system=[{"text": _MINIMAL_SYSTEM}],
+            messages=[{"role": "user", "content": [{"text": _MINIMAL_USER}]}],
+            inferenceConfig={"maxTokens": 8, "temperature": 0},
+        )
+        reply = "".join(b.get("text", "") for b in response["output"]["message"]["content"] if "text" in b)
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=model)
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code in ("UnrecognizedClientException", "AccessDeniedException"):
+            return AITestResult(ok=False, message="Authentication failed -- check your Bedrock credentials and IAM permissions.")
+        if error_code == "ResourceNotFoundException":
+            return AITestResult(ok=False, message=f"Model {model!r} was not found or is not enabled in this AWS account/region.")
+        if error_code == "ThrottlingException":
+            return AITestResult(ok=False, message="Rate limited -- credentials may be valid, but too many requests right now.")
+        return AITestResult(ok=False, message=f"Bedrock error ({error_code}): {exc}")
+    except BotoCoreError as exc:
+        return AITestResult(ok=False, message=f"AWS SDK error: {exc}")
+    finally:
+        if bearer_token:
+            if restore_env is None:
+                os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+            else:
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = restore_env
+
+
+async def test_ai_connection(backend: str, credentials: dict[str, str], model: Optional[str] = None) -> AITestResult:
+    """credentials keys vary by backend:
+    - groq / openai / anthropic / gemini: {"api_key": "..."}
+    - ollama: {"base_url": "..."}  (model passed separately)
+    - bedrock: {"bedrock_api_key": "..."} OR {"aws_access_key_id": "...", "aws_secret_access_key": "...", "aws_region": "..."}
+    """
+    from app.ai import groq_client as _groq_defaults
+    from app.ai import openai_client as _openai_defaults
+
+    handlers = {
+        "groq": lambda: _check_groq(credentials.get("api_key", ""), model or _groq_defaults.DEFAULT_MODEL),
+        "openai": lambda: _check_openai(credentials.get("api_key", ""), model or _openai_defaults.DEFAULT_MODEL),
+        "anthropic": lambda: _check_anthropic(credentials.get("api_key", ""), model or "claude-sonnet-4-5-20250929"),
+        "gemini": lambda: _check_gemini(credentials.get("api_key", ""), model or "gemini-2.0-flash"),
+        "ollama": lambda: _check_ollama(credentials.get("base_url", ""), model or "llama3.2:3b"),
+        "bedrock": lambda: _check_bedrock(credentials, model or "global.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+    }
+    handler = handlers.get(backend)
+    if handler is None:
+        return AITestResult(ok=False, message=f"Unknown AI backend {backend!r}.")
+
+    result, elapsed_ms = await _timed(handler)
+    result.latency_ms = elapsed_ms
+    return result

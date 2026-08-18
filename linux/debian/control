@@ -1,0 +1,29 @@
+Package: horizon-grid
+Version: 0.1.0
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: HORIZON GRID <horizon-grid@localhost>
+Depends: python3 (>= 3.8), curl, ca-certificates
+Recommends: docker-ce | docker.io
+Suggests: ufw
+Installed-Size: 1
+Homepage: http://localhost:3000
+Description: Self-hosted multi-provider IOC threat-intelligence platform
+ HORIZON GRID takes a single indicator of compromise (an IP, domain, URL,
+ file hash, or CVE) and queries every configured threat-intelligence
+ provider in parallel, correlates the results, and asks an AI model to
+ produce an evidence-backed assessment -- all from a self-hosted stack you
+ control.
+ .
+ This package installs the application (a Docker Compose stack: Postgres,
+ Redis, Neo4j, OpenSearch, the FastAPI backend, the Next.js frontend, and
+ two Celery workers), a CLI setup wizard (`horizon-grid configure`), a
+ systemd unit for the running stack, and a desktop launcher.
+ .
+ Docker Engine with the Compose v2 plugin must already be installed and
+ running -- see `horizon-grid check` after installing this package. On
+ Debian 12 and Ubuntu 22.04/24.04, the distribution's own docker.io package
+ does NOT include the Compose v2 plugin; install Docker via the official
+ method instead (curl -fsSL https://get.docker.com | sh, or Docker's own
+ apt repository per https://docs.docker.com/engine/install/).

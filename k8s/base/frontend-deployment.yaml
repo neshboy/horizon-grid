@@ -1,0 +1,73 @@
+# Translation of docker-compose `frontend` service. docker-compose runs
+# `npm run dev` against a bind-mounted source tree; in k8s there's no source
+# bind-mount, so this runs the production server (`npm start` against a
+# `next build` output) baked into the image instead. NEXT_PUBLIC_API_URL is
+# supplied via the shared ConfigMap (see configmap.yaml) since it's a
+# build/runtime URL, not a secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: ioc-intel-platform
+  labels:
+    app: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ioc-intel-platform/frontend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["npm", "start"]
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: NEXT_PUBLIC_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: ioc-intel-config
+                  key: NEXT_PUBLIC_API_URL
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: ioc-intel-platform
+  labels:
+    app: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

@@ -1,0 +1,10 @@
+# Dedicated namespace for every resource in this kustomization.
+# kustomization.yaml also sets `namespace:` at the top level so every
+# resource lands here even though most of the individual manifests below
+# don't repeat `metadata.namespace` themselves.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ioc-intel-platform
+  labels:
+    app.kubernetes.io/part-of: ioc-intel-platform

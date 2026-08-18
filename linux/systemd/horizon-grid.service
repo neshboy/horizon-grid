@@ -1,0 +1,30 @@
+[Unit]
+Description=HORIZON GRID -- IOC intelligence platform (Docker Compose stack)
+Documentation=https://github.com/
+# Real runtime dependency: this unit only manages the Compose stack, it does
+# not replace Docker Compose as the runtime (same principle as the Windows
+# installer's own top comment -- "this does NOT reimplement the platform as
+# a native service"). Requires the docker service to already be up.
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+# oneshot + RemainAfterExit: `docker compose up -d` returns as soon as the
+# containers are started (it does not stay in the foreground), so a
+# long-running Type=simple unit would immediately be considered "exited" and
+# get restarted in a loop. oneshot with RemainAfterExit=yes is the correct,
+# standard pattern for a unit that wraps a detaching command and should be
+# reported as "active" until explicitly stopped -- the containers' own
+# restart policies (see docker-compose.yml) handle individual container
+# health, not this unit.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/horizon-grid start
+ExecStop=/usr/bin/horizon-grid stop
+ExecReload=/usr/bin/horizon-grid restart
+TimeoutStartSec=600
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
