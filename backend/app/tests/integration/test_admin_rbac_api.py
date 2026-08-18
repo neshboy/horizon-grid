@@ -182,6 +182,14 @@ async def test_role_downgrade_immediately_revokes_the_old_roles_access(client):
     still-unexpired token immediately loses that access again."""
     from app.core.users import update_user
 
+    # A companion admin is required so that demoting `user_id` back to
+    # ANALYST below never makes it the LAST active admin -- on a genuinely
+    # fresh database (e.g. a clean CI run with no pre-existing admin
+    # account) this test's own promoted user would otherwise BE the sole
+    # active admin, and the demotion would trip the last-admin guard
+    # (LastAdminError) instead of exercising the role-revocation behavior
+    # this test is actually about.
+    companion_id, _, _ = await _make_user(Role.ADMIN, "qa-roleswitch-companion")
     user_id, email, token = await _make_user(Role.ANALYST, "qa-roleswitch")
     try:
         before = await client.get(f"{API}/admin/users", headers=_auth(token))
@@ -196,6 +204,7 @@ async def test_role_downgrade_immediately_revokes_the_old_roles_access(client):
         assert demoted.status_code == 403, "the SAME token must lose access the instant the role changes back"
     finally:
         await _delete_user(user_id)
+        await _delete_user(companion_id)
 
 
 @pytest.mark.asyncio
