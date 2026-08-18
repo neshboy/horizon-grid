@@ -10,7 +10,7 @@ All Linux-specific work is confined to the outer packaging and lifecycle-managem
 
 | Windows | Linux |
 |---|---|
-| Inno Setup installer | `.deb` package (`horizon-grid_0.1.0_amd64.deb`) |
+| Inno Setup installer | `.deb` package (`horizon-grid_0.2.0_amd64.deb`) |
 | WinForms setup wizard | Python CLI setup wizard (terminal-based, `horizon-grid configure`) |
 | Windows service registration | systemd unit (`horizon-grid.service`) |
 | Start Menu shortcut group | `horizon-grid` CLI entrypoint + desktop menu launcher |

@@ -26,7 +26,7 @@ from app.models.runtime_config import ProviderKind, ProviderRuntimeConfig
 
 logger = logging.getLogger(__name__)
 
-AI_BACKENDS = ["ollama", "anthropic", "bedrock", "gemini", "groq", "openai"]
+AI_BACKENDS = ["ollama", "anthropic", "bedrock", "gemini", "groq", "openai", "kimi", "deepseek", "xai", "mistral", "openrouter"]
 
 # Single source of truth for which credential fields each built-in IOC
 # provider needs, and which Settings field currently seeds each one from
@@ -80,6 +80,11 @@ _AI_ENV_SEED_MAP: dict[str, dict] = {
     "gemini": {"credentials": {"api_key": "gemini_api_key"}, "model": "gemini_model_id"},
     "groq": {"credentials": {"api_key": "groq_api_key"}, "model": "groq_model_id"},
     "openai": {"credentials": {"api_key": "openai_api_key"}, "model": "openai_model_id"},
+    "kimi": {"credentials": {"api_key": "kimi_api_key"}, "model": "kimi_model_id"},
+    "deepseek": {"credentials": {"api_key": "deepseek_api_key"}, "model": "deepseek_model_id"},
+    "xai": {"credentials": {"api_key": "xai_api_key"}, "model": "xai_model_id"},
+    "mistral": {"credentials": {"api_key": "mistral_api_key"}, "model": "mistral_model_id"},
+    "openrouter": {"credentials": {"api_key": "openrouter_api_key"}, "model": "openrouter_model_id"},
 }
 
 

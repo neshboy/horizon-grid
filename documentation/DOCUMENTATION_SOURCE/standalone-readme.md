@@ -2,7 +2,7 @@
 
 **Every Signal. One Operational Picture.**
 
-**Application Version:** 0.1.0
+**Application Version:** 0.2.0
 **Status:** Release Ready with Known Limitations — see the Final Release QA Report for the full evidence behind that verdict.
 
 ## What Is HORIZON GRID?

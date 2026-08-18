@@ -25,6 +25,11 @@ const BACKEND_LABELS: Record<string, string> = {
   gemini: "Gemini",
   groq: "Groq",
   openai: "ChatGPT (OpenAI)",
+  kimi: "Kimi (Moonshot AI)",
+  deepseek: "DeepSeek",
+  xai: "Grok (xAI)",
+  mistral: "Mistral AI",
+  openrouter: "OpenRouter",
 };
 
 export function AiQuickSwitch() {

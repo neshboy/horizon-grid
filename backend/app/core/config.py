@@ -96,6 +96,40 @@ class Settings(BaseSettings):
     openai_model_id: str = "gpt-4o-mini"
     openai_max_tokens: int = 8192
 
+    # --- Kimi / Moonshot AI (alternative AI backend -- api.moonshot.ai) ---
+    # See app/ai/kimi_client.py for endpoint/model sourcing notes, including
+    # why the default model deliberately avoids Moonshot's "thinking"-mode
+    # models (forced tool_choice 400s on those).
+    kimi_api_key: Optional[str] = None
+    kimi_model_id: str = "kimi-k2.5"
+    kimi_max_tokens: int = 8192
+
+    # --- DeepSeek (alternative AI backend -- api.deepseek.com) ---
+    # See app/ai/deepseek_client.py for endpoint/model sourcing notes.
+    deepseek_api_key: Optional[str] = None
+    deepseek_model_id: str = "deepseek-v4-flash"
+    deepseek_max_tokens: int = 8192
+
+    # --- xAI / Grok (alternative AI backend -- api.x.ai) ---
+    # Not to be confused with Groq (api.groq.com) -- this is xAI's Grok.
+    # See app/ai/xai_client.py for endpoint/model sourcing notes.
+    xai_api_key: Optional[str] = None
+    xai_model_id: str = "grok-4.6"
+    xai_max_tokens: int = 8192
+
+    # --- Mistral AI (alternative AI backend -- api.mistral.ai) ---
+    # See app/ai/mistral_client.py for endpoint/model sourcing notes.
+    mistral_api_key: Optional[str] = None
+    mistral_model_id: str = "mistral-small-2506"
+    mistral_max_tokens: int = 8192
+
+    # --- OpenRouter (alternative AI backend -- meta-router across many
+    # underlying model providers, api openrouter.ai) ---
+    # See app/ai/openrouter_client.py for endpoint/model sourcing notes.
+    openrouter_api_key: Optional[str] = None
+    openrouter_model_id: str = "openai/gpt-4o"
+    openrouter_max_tokens: int = 8192
+
     # --- Ollama (primary AI backend -- local, no API key/quota) ---
     # host.docker.internal resolves to the host machine from inside the
     # backend container (Docker Desktop on Windows/Mac); if Ollama runs on a
@@ -104,7 +138,7 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.2:3b"
     ollama_max_tokens: int = 8192
 
-    ai_backend: str = "ollama"  # "ollama", "anthropic", "gemini", "bedrock", "groq", or "openai"
+    ai_backend: str = "ollama"  # "ollama", "anthropic", "gemini", "bedrock", "groq", "openai", "kimi", "deepseek", "xai", "mistral", or "openrouter"
 
     # --- Provider API keys (free-tier / real connectors) ---
     virustotal_api_key: Optional[str] = None

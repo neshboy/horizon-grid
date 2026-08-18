@@ -41,6 +41,11 @@ def _model_id_for_backend(backend: str, settings) -> Optional[str]:
         "gemini": settings.gemini_model_id,
         "groq": settings.groq_model_id,
         "openai": settings.openai_model_id,
+        "kimi": settings.kimi_model_id,
+        "deepseek": settings.deepseek_model_id,
+        "xai": settings.xai_model_id,
+        "mistral": settings.mistral_model_id,
+        "openrouter": settings.openrouter_model_id,
     }.get(backend)
 
 
@@ -101,6 +106,36 @@ def _build_client(backend: str, credentials: Optional[dict], model_id: Optional[
         if credentials is None:
             return get_openai_client()
         return OpenAIClient(api_key=credentials.get("api_key"), model_id=model_id)
+    if backend == "kimi":
+        from app.ai.kimi_client import KimiClient, get_kimi_client
+
+        if credentials is None:
+            return get_kimi_client()
+        return KimiClient(api_key=credentials.get("api_key"), model_id=model_id)
+    if backend == "deepseek":
+        from app.ai.deepseek_client import DeepSeekClient, get_deepseek_client
+
+        if credentials is None:
+            return get_deepseek_client()
+        return DeepSeekClient(api_key=credentials.get("api_key"), model_id=model_id)
+    if backend == "xai":
+        from app.ai.xai_client import XAIClient, get_xai_client
+
+        if credentials is None:
+            return get_xai_client()
+        return XAIClient(api_key=credentials.get("api_key"), model_id=model_id)
+    if backend == "mistral":
+        from app.ai.mistral_client import MistralClient, get_mistral_client
+
+        if credentials is None:
+            return get_mistral_client()
+        return MistralClient(api_key=credentials.get("api_key"), model_id=model_id)
+    if backend == "openrouter":
+        from app.ai.openrouter_client import OpenRouterClient, get_openrouter_client
+
+        if credentials is None:
+            return get_openrouter_client()
+        return OpenRouterClient(api_key=credentials.get("api_key"), model_id=model_id)
 
     from app.ai.ollama_client import OllamaClient, get_ollama_client
 
@@ -121,7 +156,7 @@ async def _get_ai_client(backend_override: Optional[str] = None) -> tuple[_AICli
     3. The legacy frozen Settings singleton (settings.ai_backend), only if
        no runtime config has been seeded yet at all.
 
-    All six clients expose the identical call_claude_json() method name so
+    All eleven clients expose the identical call_claude_json() method name so
     the rest of this module never branches on which backend is active.
     Checks is_configured here (rather than leaving each client to discover
     its own missing key/URL deep inside an HTTP call) so a misconfigured

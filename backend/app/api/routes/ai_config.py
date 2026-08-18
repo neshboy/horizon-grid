@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.ai import groq_client, openai_client
+from app.ai import deepseek_client, groq_client, kimi_client, mistral_client, openai_client, openrouter_client, xai_client
 from app.ai.connection_test import test_ai_connection
 from app.auth.rbac import CurrentUser, require_permission
 from app.core.url_safety import assert_safe_outbound_url
@@ -21,10 +21,10 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 # endpoint wired up yet. These are a starting point for the UI's dropdown,
 # not an enforced allow-list -- the actual call always sends whatever
 # model id the caller configured; the provider's own API is the authority
-# on whether that model exists. Groq and OpenAI are the two backends with
-# real dynamic discovery (see /ai/groq/models and /ai/openai/models below),
-# per the explicit requirement to not hard-code an assumed model list that
-# goes stale.
+# on whether that model exists. Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral,
+# and OpenRouter all have real dynamic discovery (see the matching branches
+# below), per the explicit requirement to not hard-code an assumed model
+# list that goes stale. Anthropic/Gemini/Bedrock remain static-list-only.
 _STATIC_MODEL_LISTS = {
     "anthropic": ["claude-sonnet-4-5-20250929", "claude-opus-4-1-20250805", "claude-haiku-4-5-20251001"],
     "gemini": ["gemini-2.0-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
@@ -97,6 +97,66 @@ async def ai_list_models(
         except httpx.HTTPError as exc:
             logger.warning("OpenAI live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": openai_client.FALLBACK_MODELS, "source": "fallback", "default": openai_client.DEFAULT_MODEL}
+
+    if backend == "kimi":
+        api_key = payload.credentials.get("api_key", "")
+        if not api_key:
+            return {"backend": backend, "models": kimi_client.FALLBACK_MODELS, "source": "fallback", "default": kimi_client.DEFAULT_MODEL}
+        try:
+            models = await kimi_client.list_models(api_key)
+            if models:
+                return {"backend": backend, "models": sorted(models), "source": "live", "default": kimi_client.DEFAULT_MODEL}
+        except httpx.HTTPError as exc:
+            logger.warning("Kimi live model discovery failed, falling back to static list: %r", exc)
+        return {"backend": backend, "models": kimi_client.FALLBACK_MODELS, "source": "fallback", "default": kimi_client.DEFAULT_MODEL}
+
+    if backend == "deepseek":
+        api_key = payload.credentials.get("api_key", "")
+        if not api_key:
+            return {"backend": backend, "models": deepseek_client.FALLBACK_MODELS, "source": "fallback", "default": deepseek_client.DEFAULT_MODEL}
+        try:
+            models = await deepseek_client.list_models(api_key)
+            if models:
+                return {"backend": backend, "models": sorted(models), "source": "live", "default": deepseek_client.DEFAULT_MODEL}
+        except httpx.HTTPError as exc:
+            logger.warning("DeepSeek live model discovery failed, falling back to static list: %r", exc)
+        return {"backend": backend, "models": deepseek_client.FALLBACK_MODELS, "source": "fallback", "default": deepseek_client.DEFAULT_MODEL}
+
+    if backend == "xai":
+        api_key = payload.credentials.get("api_key", "")
+        if not api_key:
+            return {"backend": backend, "models": xai_client.FALLBACK_MODELS, "source": "fallback", "default": xai_client.DEFAULT_MODEL}
+        try:
+            models = await xai_client.list_models(api_key)
+            if models:
+                return {"backend": backend, "models": sorted(models), "source": "live", "default": xai_client.DEFAULT_MODEL}
+        except httpx.HTTPError as exc:
+            logger.warning("xAI live model discovery failed, falling back to static list: %r", exc)
+        return {"backend": backend, "models": xai_client.FALLBACK_MODELS, "source": "fallback", "default": xai_client.DEFAULT_MODEL}
+
+    if backend == "mistral":
+        api_key = payload.credentials.get("api_key", "")
+        if not api_key:
+            return {"backend": backend, "models": mistral_client.FALLBACK_MODELS, "source": "fallback", "default": mistral_client.DEFAULT_MODEL}
+        try:
+            models = await mistral_client.list_models(api_key)
+            if models:
+                return {"backend": backend, "models": sorted(models), "source": "live", "default": mistral_client.DEFAULT_MODEL}
+        except httpx.HTTPError as exc:
+            logger.warning("Mistral live model discovery failed, falling back to static list: %r", exc)
+        return {"backend": backend, "models": mistral_client.FALLBACK_MODELS, "source": "fallback", "default": mistral_client.DEFAULT_MODEL}
+
+    if backend == "openrouter":
+        api_key = payload.credentials.get("api_key", "")
+        if not api_key:
+            return {"backend": backend, "models": openrouter_client.FALLBACK_MODELS, "source": "fallback", "default": openrouter_client.DEFAULT_MODEL}
+        try:
+            models = await openrouter_client.list_models(api_key)
+            if models:
+                return {"backend": backend, "models": sorted(models), "source": "live", "default": openrouter_client.DEFAULT_MODEL}
+        except httpx.HTTPError as exc:
+            logger.warning("OpenRouter live model discovery failed, falling back to static list: %r", exc)
+        return {"backend": backend, "models": openrouter_client.FALLBACK_MODELS, "source": "fallback", "default": openrouter_client.DEFAULT_MODEL}
 
     if backend == "ollama":
         base_url = payload.credentials.get("base_url", "").rstrip("/")

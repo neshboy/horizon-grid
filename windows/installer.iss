@@ -16,7 +16,7 @@
 ; winget install.)
 
 #define MyAppName "HORIZON GRID"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "HORIZON GRID"
 #define MyAppURL "http://localhost:3000"
 #define RepoRoot "..\"
@@ -93,7 +93,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; gets baked into the installer permanently and reappears on every future install/reinstall
 ; even after being deleted from the dev tree, since Inno Setup's own uninstall log never
 ; tracked it as something IT installed in the first place.
-Source: "{#RepoRoot}backend\*"; DestDir: "{app}\app\backend"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__,*.pyc,.pytest_cache,celerybeat-schedule,nul,_qa_*.py,cleanup_qa_*.py"
+; .venv/.venv_test are local dev-only virtualenvs used for running the test
+; suite outside Docker -- the real app never runs from them (it builds fresh
+; inside python:3.12-slim containers from requirements.txt on `docker compose
+; up --build`). Found during a release-QA pass: without this exclusion, a
+; 190MB+ local venv silently became the vast majority of every installer
+; build's compressed content -- pure dead weight, never installed or run.
+Source: "{#RepoRoot}backend\*"; DestDir: "{app}\app\backend"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".venv,.venv_test,__pycache__,*.pyc,.pytest_cache,celerybeat-schedule,nul,_qa_*.py,cleanup_qa_*.py,qa_halluc_out_*.json"
 Source: "{#RepoRoot}frontend\*"; DestDir: "{app}\app\frontend"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "node_modules,.next,*.tsbuildinfo"
 Source: "{#RepoRoot}docker-compose.yml"; DestDir: "{app}\app"; Flags: ignoreversion
 Source: "{#RepoRoot}docker-compose.prod.yml"; DestDir: "{app}\app"; Flags: ignoreversion

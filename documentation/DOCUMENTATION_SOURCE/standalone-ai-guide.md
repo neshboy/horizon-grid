@@ -2,9 +2,9 @@
 
 ## Why this document exists
 
-`tech-03-ai-architecture.md` already covers the AI layer's architecture from a source-code-reading point of view — the two-call structure, the grounding/cross-check mechanisms, the `Verdict`/`RiskAssessment` data model. `user-07-ai-analysis.md` already covers what an analyst actually sees on an investigation page and how to check an AI-written claim against the real evidence behind it. This document sits alongside both: a single, hands-on guide for whoever is actually setting up and operating the AI layer — how to add credentials for each of the five supported backends, test a connection before trusting it, switch the active backend at runtime with zero downtime, run a side-by-side comparison between two backends on the same evidence, and understand precisely what the platform does and does not guarantee about the AI's output. Everything below is drawn directly from `backend/app/ai/service.py`, `backend/app/ai/schemas.py`, the five per-backend client modules (`ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, `groq_client.py`), `backend/app/ai/connection_test.py`, `backend/app/core/runtime_config.py`, `backend/app/api/routes/ai_config.py`, `backend/app/api/routes/runtime.py`, and `backend/app/ai/dashboard_summary.py` — nothing here is inferred from the feature's general shape.
+`tech-03-ai-architecture.md` already covers the AI layer's architecture from a source-code-reading point of view — the two-call structure, the grounding/cross-check mechanisms, the `Verdict`/`RiskAssessment` data model. `user-07-ai-analysis.md` already covers what an analyst actually sees on an investigation page and how to check an AI-written claim against the real evidence behind it. This document sits alongside both: a single, hands-on guide for whoever is actually setting up and operating the AI layer — how to add credentials for each of the eleven supported backends, test a connection before trusting it, switch the active backend at runtime with zero downtime, run a side-by-side comparison between two backends on the same evidence, and understand precisely what the platform does and does not guarantee about the AI's output. Everything below is drawn directly from `backend/app/ai/service.py`, `backend/app/ai/schemas.py`, the eleven per-backend client modules (`ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, `groq_client.py`, `openai_client.py`, `kimi_client.py`, `deepseek_client.py`, `xai_client.py`, `mistral_client.py`, `openrouter_client.py`), `backend/app/ai/connection_test.py`, `backend/app/core/runtime_config.py`, `backend/app/core/config.py`, `backend/app/api/routes/ai_config.py`, `backend/app/api/routes/runtime.py`, and `backend/app/ai/dashboard_summary.py` — nothing here is inferred from the feature's general shape.
 
-## 1. The Five Supported Backends
+## 1. The Eleven Supported Backends
 
 | Backend | Config value | Mode | Credential(s) | Default model |
 |---|---|---|---|---|
@@ -13,8 +13,14 @@
 | AWS Bedrock | `bedrock` | Cloud, via AWS | Bedrock bearer token, **or** an IAM access key + secret | `global.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 | Google Gemini | `gemini` | Cloud | One API key | `gemini-2.0-flash` |
 | Groq | `groq` | Cloud, fast inference | One API key | `llama-3.3-70b-versatile` |
+| OpenAI | `openai` | Direct API | One API key | `gpt-4o-mini` |
+| Kimi (Moonshot AI) | `kimi` | Direct API | One API key | `kimi-k2.5` |
+| DeepSeek | `deepseek` | Direct API | One API key | `deepseek-v4-flash` |
+| xAI (Grok) | `xai` | Direct API | One API key | `grok-4.6` |
+| Mistral AI | `mistral` | Direct API | One API key | `mistral-small-2506` |
+| OpenRouter | `openrouter` | Cloud, meta-router across many underlying model providers | One API key | `openai/gpt-4o` |
 
-All five client classes expose the identical `call_claude_json(system_prompt, user_prompt, json_schema, tool_name, max_tokens)` method, which is what lets `app/ai/service.py` treat every backend interchangeably without branching on which one happens to be active. Ollama is the default specifically because it needs neither a key nor a paid quota — Bedrock needs IAM provisioning, Gemini and Groq need a cloud account with billing/quota set up, Anthropic needs only a key but still a funded account.
+All eleven client classes expose the identical `call_claude_json(system_prompt, user_prompt, json_schema, tool_name, max_tokens)` method, which is what lets `app/ai/service.py` treat every backend interchangeably without branching on which one happens to be active. Ollama is the default specifically because it needs neither a key nor a paid quota — Bedrock needs IAM provisioning, and Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, and OpenRouter all need a cloud account with billing/quota set up; Anthropic needs only a key but still a funded account.
 
 ## 2. Where You Configure This
 
@@ -32,10 +38,16 @@ Each backend appears as its own card on the AI Providers tab (`ProviderConfigRow
 | `bedrock` | `bedrock_api_key`, `aws_access_key_id`, `aws_secret_access_key`, `aws_region` |
 | `gemini` | `api_key` |
 | `groq` | `api_key` |
+| `openai` | `api_key` |
+| `kimi` | `api_key` |
+| `deepseek` | `api_key` |
+| `xai` | `api_key` |
+| `mistral` | `api_key` |
+| `openrouter` | `api_key` |
 
 Every card also carries a model-ID field, a **Test Connection** button, a **Save** button, and — for whichever backend isn't already active — a **Set Active** button. A backend that is currently active shows an "Active" badge instead of the Set Active button.
 
-[FIGURE: standalone-ai-manage-providers-tab.png | The Manage Providers page's AI Providers tab, showing all five backend cards with their credential fields, Test Connection/Save buttons, and the Active badge on whichever backend is currently selected.]
+[FIGURE: standalone-ai-manage-providers-tab.png | The Manage Providers page's AI Providers tab, showing all eleven backend cards with their credential fields, Test Connection/Save buttons, and the Active badge on whichever backend is currently selected.]
 
 ## 3. Adding and Configuring Each Backend
 
@@ -66,13 +78,61 @@ Field: `api_key`, from a Google AI Studio / Cloud project with the Gemini API en
 
 Field: `api_key`, from the Groq console (`console.groq.com`). Groq is a distinct inference provider from "Grok" (xAI) — this is `api.groq.com`, an OpenAI-compatible chat-completions API.
 
-Groq's model field is the one that behaves differently from the other four: instead of a fixed dropdown, the platform discovers Groq's real, currently-available model list **live**, by calling Groq's own `GET /v1/models` with whatever key you've just typed (`POST /api/v1/ai/groq/models` on the backend, wired to the wizard/UI's model field). This exists because Groq's hosted model lineup changes over time — a hardcoded list would silently go stale as Groq deprecates or introduces models. If no key has been entered yet, or the live call fails, the field falls back to a short static list (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`) that is explicitly not treated as exhaustive — whatever model ID you actually submit to a real chat-completion call is sent as-is; Groq's own API is the only authority on whether it exists, not this fallback list.
+Groq's model field is the first one in this guide that behaves differently from Ollama, Anthropic, Bedrock, and Gemini above: instead of a fixed dropdown, the platform discovers Groq's real, currently-available model list **live**, by calling Groq's own `GET /v1/models` with whatever key you've just typed (`POST /api/v1/ai/groq/models` on the backend, wired to the wizard/UI's model field). This exists because Groq's hosted model lineup changes over time — a hardcoded list would silently go stale as Groq deprecates or introduces models. If no key has been entered yet, or the live call fails, the field falls back to a short static list (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`) that is explicitly not treated as exhaustive — whatever model ID you actually submit to a real chat-completion call is sent as-is; Groq's own API is the only authority on whether it exists, not this fallback list. Every backend documented after this one (OpenAI, Kimi, DeepSeek, xAI, Mistral, and OpenRouter) uses this same live-discovery mechanism for the identical reason.
 
 [FIGURE: standalone-ai-groq-model-dropdown.png | The Groq AI Providers card with its live-refreshing model dropdown after a valid API key has been entered.]
 
+### OpenAI
+
+Field: `api_key`, from `platform.openai.com/api-keys`. Base URL `https://api.openai.com/v1`, default model `gpt-4o-mini`. OpenAI is, architecturally, the template every other OpenAI-*compatible* backend in this module (Groq, Kimi, DeepSeek, xAI, Mistral, OpenRouter) copies its request/response shape from — `openai_client.py`'s own docstring says this outright: "OpenAI is the origin of the request/response shape both clients use, not a coincidence."
+
+Like Groq, OpenAI's model field is live-discovered rather than a fixed dropdown (`POST /api/v1/ai/openai/models`, calling OpenAI's own `GET /v1/models`). OpenAI's `/models` endpoint lists every model visible to the account, including embedding, moderation, image, audio, and realtime/transcription models that can't serve a chat-completion call at all — `list_models()` filters these out, keeping only ids that start with `gpt-`, `o1`, `o3`, `o4`, or `chatgpt-` and excluding anything with `audio`, `realtime`, `transcribe`, `tts`, or `embedding` in the id, so the dropdown isn't cluttered with entries that would fail immediately if selected. If that filter happens to remove every candidate, `list_models()` falls back to returning the full unfiltered id list rather than an empty dropdown.
+
+### Kimi (Moonshot AI)
+
+Field: `api_key`, from `platform.moonshot.ai/console/api-keys`. Base URL `https://api.moonshot.ai/v1`, default model `kimi-k2.5`.
+
+The default model choice here is deliberate, not arbitrary: this platform's structured output relies on forcing a specific `tool_choice` on every call, and Moonshot's newer "thinking"-mode models — `kimi-k3` and `kimi-k2.7-code` — always have thinking mode on with no way to disable it, which makes a forced `tool_choice` call fail with an HTTP 400. `kimi-k2.5` and the `moonshot-v1-*` family have no thinking parameter at all and work with forced tool-calling with zero special handling, which is why `DEFAULT_MODEL` is pinned to `kimi-k2.5` rather than a newer model. `kimi_client.py`'s own comments note that `kimi-k2.6` can go either way depending on how it's deployed — if a forced-tool-call 400 shows up against `kimi-k2.6` or a future thinking-capable model, the code-level fix is adding a `"thinking": {"type": "disabled"}` field to the request body for that model, deliberately not done pre-emptively so this client stays as simple/uniform as the others. The connection test surfaces this distinctly: a `400` response whose body mentions "thinking" is reported as "Model '...' requires disabling 'thinking' mode to use a forced tool call — pick a non-reasoning model (e.g. kimi-k2.5) or a model where thinking can be disabled," rather than a generic failure.
+
+Kimi's model field is also live-discovered (`POST /api/v1/ai/kimi/models`, against Moonshot's own `GET /v1/models`); unlike OpenAI's, Moonshot's listing doesn't distinguish chat-capable models from any other kind, so there's nothing for `list_models()` to filter there.
+
+### DeepSeek
+
+Field: `api_key`, from `platform.deepseek.com/api_keys`. Default model `deepseek-v4-flash`.
+
+The one real, verified quirk worth knowing before typing a base URL by hand: DeepSeek's base URL is `https://api.deepseek.com` — **no** `/v1` segment — unlike every other OpenAI-compatible backend in this module (Groq's `https://api.groq.com/openai/v1`, OpenAI's own `https://api.openai.com/v1`, and so on). `deepseek_client.py`'s docstring is explicit that this was "confirmed verbatim from live docs," not a typo left uncorrected.
+
+DeepSeek's model field is live-discovered the same way (`POST /api/v1/ai/deepseek/models`, against `GET https://api.deepseek.com/models`); every model DeepSeek's own listing returns is chat-capable, so there's no filtering to do. One other DeepSeek-specific behavior: its API returns a provider-specific HTTP `402` ("Insufficient Balance") in addition to the standard 401/404/429 codes, and the connection test reports that distinctly as "DeepSeek account balance is insufficient to make this request" rather than a generic failure.
+
+### xAI (Grok)
+
+Field: `api_key`, from `console.x.ai`. Base URL `https://api.x.ai/v1`, default model `grok-4.6`.
+
+xAI is a **different product from Groq** (`api.groq.com`) — the same naming-collision warning the Groq section above makes in the other direction. `xai_client.py`'s own docstring calls this out explicitly, and the connection test's authentication-failure message spells out "xAI (Grok)" rather than a bare "xAI" for exactly this reason. One xAI-specific quirk worth knowing: unlike every other backend's connection test in this module, xAI's check treats an HTTP `400` the same as a `401` — both are reported as "Authentication failed — check your xAI (Grok) API key" — because xAI's own error-response shape is flat (`{"code": "...", "error": "message text"}`, a bare top-level `error` *string*) rather than OpenAI's nested `{"error": {"message": ...}}` object, confirmed live against `api.x.ai`.
+
+xAI's model field is live-discovered the same way as the others (`POST /api/v1/ai/xai/models`). `xai_client.py` also notes that xAI's own documentation states forced `tool_choice` "should" be followed by the model but is "not enforced at the moment" — there's no guaranteed strict schema adherence on xAI's end, which is why the client's JSON-decode error handling on the tool-call arguments is left exactly as defensive as every other backend's, not loosened.
+
+### Mistral AI
+
+Field: `api_key`, from `console.mistral.ai/api-keys`. Base URL `https://api.mistral.ai/v1`, default model `mistral-small-2506`.
+
+Mistral versions its models with dated suffixes (`mistral-small-2506`, `mistral-large-2411`) rather than a single rolling name, though rolling aliases such as `mistral-large-latest` also exist on Mistral's side; `DEFAULT_MODEL` follows this project's existing convention of defaulting to the smaller/faster/cheaper model rather than the largest (the same reasoning behind OpenAI's `gpt-4o-mini` and Groq's `llama-3.3-70b-versatile` defaults). Mistral's model field is live-discovered the same way as the other cloud backends (`POST /api/v1/ai/mistral/models`).
+
+Unlike DeepSeek and OpenRouter, Mistral's error-response body shape wasn't confirmed against a dedicated schema during this client's own research — `mistral_client.py`'s docstring notes this plainly rather than guessing — so, same as the OpenAI-template default, a non-2xx response is surfaced as raw response text rather than parsed for a provider-specific field.
+
+### OpenRouter
+
+Field: `api_key`, from `openrouter.ai/keys`. Base URL `https://openrouter.ai/api/v1`, default model `openai/gpt-4o`.
+
+OpenRouter is architecturally different from every other backend in this section: it is not a model provider of its own, but a **meta-router** giving access to hundreds of underlying models from many different companies (OpenAI, Anthropic, Google, Meta, DeepSeek, and others) through one OpenAI-compatible API surface. That has a direct, load-bearing consequence for this platform: most of those underlying models do **not** support the forced `tool_choice` structured-output mechanism this app requires for every AI call, and selecting one that doesn't would 400 against `call_claude_json()`.
+
+`list_models()` handles this by filtering OpenRouter's live `GET /models` response down to ids whose own `supported_parameters` array includes `"tool_choice"` — confirmed live at the time `openrouter_client.py` was written, when 342 of 413 listed models declared `tool_choice` support — so the wizard/UI's model dropdown (`POST /api/v1/ai/openrouter/models`) never offers a model that would fail immediately. If a future response happens to omit `supported_parameters` for every model (nothing left to filter on), `list_models()` falls back to returning every listed id rather than an empty dropdown. `FALLBACK_MODELS` mirrors the same constraint with a short, static list of current, tool-calling-capable ids spanning several underlying providers (`openai/gpt-4o`, `anthropic/claude-sonnet-4.5`, `google/gemini-2.5-pro`, `deepseek/deepseek-chat`, `meta-llama/llama-3.3-70b-instruct`), used only when a live call isn't possible. OpenRouter also returns an HTTP `402` for insufficient account credits, reported distinctly by the connection test as "OpenRouter account has insufficient credits for this request."
+
+[FIGURE: standalone-ai-openrouter-model-dropdown.png | The OpenRouter AI Providers card with its live-refreshing model dropdown after a valid API key has been entered, showing the tool_choice-filtered subset of OpenRouter's full model catalog.]
+
 ## 4. Testing a Connection Before You Trust It
 
-Every one of the five backends has a real, live "does this actually work" check — `POST /api/v1/ai/test` (`app/api/routes/ai_config.py`'s `ai_test_connection()`, calling `app/ai/connection_test.py`'s `test_ai_connection()`), gated behind the same `provider:manage` permission as everything else on this page. Two properties hold for every backend, without exception:
+Every one of the eleven backends has a real, live "does this actually work" check — `POST /api/v1/ai/test` (`app/api/routes/ai_config.py`'s `ai_test_connection()`, calling `app/ai/connection_test.py`'s `test_ai_connection()`), gated behind the same `provider:manage` permission as everything else on this page. Two properties hold for every backend, without exception:
 
 - **It always tests the candidate credentials you just typed, never whatever is already saved.** This is a deliberate trust-model choice, shared with the equivalent IOC-provider test: you can safely try a new key in the field before overwriting a working one, and testing never mutates the stored configuration.
 - **It makes one real, minimal round trip to the backend's own API** — a one-word "reply with exactly one word: pong" prompt — and reports what actually happened: whether it succeeded, which model actually replied, and the real measured latency in milliseconds. Nothing about the result (model name, latency, success) is simulated.
@@ -95,11 +155,11 @@ What makes this possible mechanically is that `app/ai/service.py`'s `_get_ai_cli
 2. The currently **active** runtime-configured backend — a fresh database read of `provider_runtime_configs` on that exact call.
 3. The legacy, frozen `Settings` singleton (`.env`-derived), kept only as a fallback for an install where no runtime config has ever been seeded at all.
 
-Because step 2 is a fresh read every time rather than a cached value from process start, and because each of the five client classes accepts constructor overrides so a fresh, correctly-credentialed instance can be built per call instead of reusing a stale singleton, "switch AI backend" really is a config change with immediate effect, not a code change or a restart.
+Because step 2 is a fresh read every time rather than a cached value from process start, and because each of the eleven client classes accepts constructor overrides so a fresh, correctly-credentialed instance can be built per call instead of reusing a stale singleton, "switch AI backend" really is a config change with immediate effect, not a code change or a restart.
 
 If the resolved backend's `is_configured` check fails (a backend selected active with no working key/URL), the platform raises immediately with a clear message naming the problem, rather than letting the request fall into a confusing low-level failure — e.g. an `httpx` `TypeError` on a `None` header, or Gemini silently sending the literal string `"None"` as an API key and getting back an ordinary-looking 4xx.
 
-[FIGURE: standalone-ai-quickswitch-dropdown.png | The home page's "AI:" dropdown open, showing all five backends with their configured-status dot, immediately before switching the active backend.]
+[FIGURE: standalone-ai-quickswitch-dropdown.png | The home page's "AI:" dropdown open, showing all eleven backends with their configured-status dot, immediately before switching the active backend.]
 
 ## 6. AI Backend Comparison — Reanalyzing the Same Evidence
 
@@ -157,7 +217,7 @@ The user prompt hands the model those four values in an explicit "Deterministic 
 
 So the platform does not rely on the model getting this right. After a response validates, `generate_final_assessment()` unconditionally **overwrites** `risk.overall_risk_score`, `confidence_score`, `malicious_probability`, `severity`, `scoring_engine_version`, and `scoring_breakdown` with the real, already-computed values from the scoring engine — regardless of what the model actually emitted for those fields. Critically, it does not stop at swapping the numbers in: it re-runs `FinalAssessment.model_validate()` on the **entire object** with the real risk spliced in, which re-executes every validator on the model — including `_verdict_must_agree_with_risk` — against the values that are actually about to be persisted, not just against whatever the model itself originally emitted. A model that emitted a self-consistent-but-wrong pair (its own invented `malicious_probability=92` alongside `final_verdict="malicious"`) would sail through the validator on its own numbers; only re-validating against the *real* numbers can catch a verdict that flatly contradicts them. If that re-validation fails, the same retry loop that already exists for a first-pass validation failure gives the model one more attempt, still working from the same given numbers. `ai_backend` and `ai_model` are overwritten the same mechanical way, with the real, code-derived identity of whichever backend actually produced the call — never left to a model's own (possibly wrong, possibly absent) self-report.
 
-The practical upshot: re-analyzing the same evidence with a different backend (§6) will always show the identical score, every time, no matter which of the five backends produced it or how that backend chose to phrase its reasoning — because the score was never the AI's to decide in the first place.
+The practical upshot: re-analyzing the same evidence with a different backend (§6) will always show the identical score, every time, no matter which of the eleven backends produced it or how that backend chose to phrase its reasoning — because the score was never the AI's to decide in the first place.
 
 ## 10. The Executive Summary's Honest AI/Template Disclosure
 
@@ -176,7 +236,7 @@ Two things are true about this limitation and worth stating plainly:
 - **It never affects data correctness.** The underlying KPI numbers, deterministic risk scores, and provider evidence are always the same real values regardless of how long the AI narrative itself takes to generate — this is purely a latency characteristic of a single local model instance, not a correctness gap.
 - **It does not touch the Dashboard's core KPI tiles or the Provider Health page**, both of which are pure database reads, unaffected by AI backend choice or load, and both of which were separately load-tested to 25 concurrent requests with a genuine 100%-success outcome (see `tech-09-performance.md`).
 
-An administrator who expects many concurrent users should consider a cloud backend (Anthropic, Bedrock, Gemini, or Groq) rather than Ollama specifically to get consistently fast AI generation under concurrent load — the runtime-switching mechanism in §5 makes this a config change, not a re-deployment.
+An administrator who expects many concurrent users should consider any of the ten cloud backends (Anthropic, Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, or OpenRouter) rather than Ollama specifically to get consistently fast AI generation under concurrent load — the runtime-switching mechanism in §5 makes this a config change, not a re-deployment.
 
 ## See Also
 

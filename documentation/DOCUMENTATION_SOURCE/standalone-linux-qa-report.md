@@ -1,7 +1,7 @@
 # Executive Summary
 
 This is the real, executed quality-assurance report for the HORIZON GRID Linux release --
-`horizon-grid_0.1.0_amd64.deb` -- covering Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, and Debian 12
+`horizon-grid_0.2.0_amd64.deb` -- covering Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, and Debian 12
 (bookworm). Every number in this report comes from an actual, real test run performed against real
 Docker containers this session; nothing here is estimated, rounded up, or assumed. Where a test
 surfaced a real defect, that defect is reported here along with the fix that was applied and
@@ -62,9 +62,9 @@ stack) -- is recorded here as a deliberate architectural choice, not an oversigh
 
 | | |
 |---|---|
-| Application version | 0.1.0 (matches Windows -- no version drift) |
-| Package | `horizon-grid_0.1.0_amd64.deb`, 6,096,276 bytes |
-| Package SHA256 | `d29a5192990e2a769dcef2ed24d06b2f4afd049bc50d109a7a35f09bd192dbb5` |
+| Application version | 0.2.0 (matches Windows -- no version drift) |
+| Package | `horizon-grid_0.2.0_amd64.deb`, 6,077,300 bytes |
+| Package SHA256 | `57d0db31d4e67dfd8ccad9f0c9dfbbf6e501382e3972f0a538f8cc4b7b912812` |
 | Tested distributions | Ubuntu 24.04.4 LTS, Ubuntu 22.04.5 LTS, Debian GNU/Linux 12 (bookworm) |
 | Kernel (all three, same host) | `6.6.87.2-microsoft-standard-WSL2` (Docker Desktop's Linux VM) |
 | Architecture | x86_64 (only architecture built or tested) |

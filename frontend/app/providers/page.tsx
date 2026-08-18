@@ -46,6 +46,11 @@ const AI_CREDENTIAL_FIELDS: Record<string, string[]> = {
   gemini: ["api_key"],
   groq: ["api_key"],
   openai: ["api_key"],
+  kimi: ["api_key"],
+  deepseek: ["api_key"],
+  xai: ["api_key"],
+  mistral: ["api_key"],
+  openrouter: ["api_key"],
 };
 
 export default function ProvidersPage() {

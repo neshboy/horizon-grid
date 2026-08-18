@@ -193,6 +193,11 @@ if ($State.IsUpgrade) {
                     GEMINI_API_KEY = "GeminiApiKey"; GEMINI_MODEL_ID = "GeminiModelId"; ANTHROPIC_API_KEY = "AnthropicApiKey"
                     ANTHROPIC_MODEL_ID = "AnthropicModelId"; GROQ_API_KEY = "GroqApiKey"; GROQ_MODEL_ID = "GroqModelId"
                     OPENAI_API_KEY = "OpenAiApiKey"; OPENAI_MODEL_ID = "OpenAiModelId"
+                    KIMI_API_KEY = "KimiApiKey"; KIMI_MODEL_ID = "KimiModelId"
+                    DEEPSEEK_API_KEY = "DeepSeekApiKey"; DEEPSEEK_MODEL_ID = "DeepSeekModelId"
+                    XAI_API_KEY = "XaiApiKey"; XAI_MODEL_ID = "XaiModelId"
+                    MISTRAL_API_KEY = "MistralApiKey"; MISTRAL_MODEL_ID = "MistralModelId"
+                    OPENROUTER_API_KEY = "OpenRouterApiKey"; OPENROUTER_MODEL_ID = "OpenRouterModelId"
                     VIRUSTOTAL_API_KEY = "VirusTotalApiKey"; ABUSEIPDB_API_KEY = "AbuseIpdbApiKey"
                     OTX_API_KEY = "OtxApiKey"; NVD_API_KEY = "NvdApiKey"; ABUSECH_AUTH_KEY = "AbuseChAuthKey"
                     HYBRID_ANALYSIS_API_KEY = "HybridAnalysisApiKey"; CENSYS_PERSONAL_ACCESS_TOKEN = "CensysPersonalAccessToken"
@@ -520,10 +525,15 @@ $Pages += @{
             "bedrock (AWS Bedrock)",
             "gemini (Google Gemini API key)",
             "groq (fast inference, OpenAI-compatible API key)",
-            "openai (ChatGPT, api.openai.com)"
+            "openai (ChatGPT, api.openai.com)",
+            "kimi (Moonshot AI, api.moonshot.ai)",
+            "deepseek (DeepSeek, api.deepseek.com)",
+            "xai (Grok, api.x.ai)",
+            "mistral (Mistral AI, api.mistral.ai)",
+            "openrouter (meta-router across many models, openrouter.ai)"
         ))
-        $backendMap = @{0="ollama"; 1="anthropic"; 2="bedrock"; 3="gemini"; 4="groq"; 5="openai"}
-        $reverseMap = @{"ollama"=0; "anthropic"=1; "bedrock"=2; "gemini"=3; "groq"=4; "openai"=5}
+        $backendMap = @{0="ollama"; 1="anthropic"; 2="bedrock"; 3="gemini"; 4="groq"; 5="openai"; 6="kimi"; 7="deepseek"; 8="xai"; 9="mistral"; 10="openrouter"}
+        $reverseMap = @{"ollama"=0; "anthropic"=1; "bedrock"=2; "gemini"=3; "groq"=4; "openai"=5; "kimi"=6; "deepseek"=7; "xai"=8; "mistral"=9; "openrouter"=10}
         $combo.SelectedIndex = $reverseMap[$State.Settings.AiBackend]
         $p.Controls.Add($combo)
 
@@ -714,7 +724,253 @@ $Pages += @{
             }
         }.GetNewClosure())
 
-        $allPanels = @($ollamaPanel, $anthropicPanel, $bedrockPanel, $geminiPanel, $groqPanel, $openaiPanel)
+        # Kimi (Moonshot AI) -- api.moonshot.ai. Default model kimi-k2.5
+        # deliberately avoids Moonshot's "thinking"-mode models, which 400
+        # on the forced tool_choice this app always sends (see
+        # app/ai/kimi_client.py for the full explanation).
+        $kimiPanel = New-Object System.Windows.Forms.Panel
+        $kimiPanel.Location = New-Object System.Drawing.Point(0, 160)
+        $kimiPanel.Size = New-Object System.Drawing.Size(640, 140)
+        $kimiPanel.Controls.Add((New-StyledLabel -Text "Kimi (Moonshot) API Key" -X 0 -Y 0))
+        $tbKimiKey = New-StyledTextBox -X 0 -Y 24 -W 300 -Password $true
+        $tbKimiKey.Text = $State.Settings.KimiApiKey
+        $kimiPanel.Controls.Add($tbKimiKey)
+        $lnkKimi = New-Object System.Windows.Forms.LinkLabel
+        $lnkKimi.Text = "platform.moonshot.ai/console/api-keys"
+        $lnkKimi.Location = New-Object System.Drawing.Point(0, 58)
+        $lnkKimi.Size = New-Object System.Drawing.Size(300, 20)
+        $lnkKimi.LinkColor = $AccentColor
+        $lnkKimi.Add_LinkClicked({ Start-Process "https://platform.moonshot.ai/console/api-keys" })
+        $kimiPanel.Controls.Add($lnkKimi)
+        $kimiPanel.Controls.Add((New-StyledLabel -Text "Model" -X 320 -Y 0))
+        $comboKimiModel = New-Object System.Windows.Forms.ComboBox
+        $comboKimiModel.Location = New-Object System.Drawing.Point(320, 24)
+        $comboKimiModel.Size = New-Object System.Drawing.Size(300, 26)
+        $comboKimiModel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+        $comboKimiModel.Font = $FontRegular
+        [void]$comboKimiModel.Items.AddRange(@("kimi-k2.5", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k", "kimi-k2.6"))
+        $comboKimiModel.Text = if ($State.Settings.KimiModelId) { $State.Settings.KimiModelId } else { "kimi-k2.5" }
+        $kimiPanel.Controls.Add($comboKimiModel)
+        Add-AiTestConnectionRow -Panel $kimiPanel -Y 90 -BackendId "kimi" `
+            -GetCredentials { @{ api_key = $tbKimiKey.Text.Trim() } }.GetNewClosure() `
+            -GetModel { $comboKimiModel.Text.Trim() }.GetNewClosure()
+        $tbKimiKey.Add_Leave({
+            $apiKey = $tbKimiKey.Text.Trim()
+            if (-not $apiKey) { return }
+            $token = Get-OrCreateWizardSession
+            if (-not $token) { return }
+            try {
+                $body = @{ credentials = @{ api_key = $apiKey } } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/kimi/models" `
+                    -Method Post -Body $body -ContentType "application/json" `
+                    -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 15
+                if ($resp.models -and $resp.models.Count -gt 0) {
+                    $current = $comboKimiModel.Text
+                    $comboKimiModel.Items.Clear()
+                    [void]$comboKimiModel.Items.AddRange(@($resp.models))
+                    $comboKimiModel.Text = if ($current) { $current } else { $resp.default }
+                }
+            } catch {
+                # Silent -- convenience refresh only, Test Connection reports real errors.
+            }
+        }.GetNewClosure())
+
+        # DeepSeek -- api.deepseek.com.
+        $deepseekPanel = New-Object System.Windows.Forms.Panel
+        $deepseekPanel.Location = New-Object System.Drawing.Point(0, 160)
+        $deepseekPanel.Size = New-Object System.Drawing.Size(640, 140)
+        $deepseekPanel.Controls.Add((New-StyledLabel -Text "DeepSeek API Key" -X 0 -Y 0))
+        $tbDeepSeekKey = New-StyledTextBox -X 0 -Y 24 -W 300 -Password $true
+        $tbDeepSeekKey.Text = $State.Settings.DeepSeekApiKey
+        $deepseekPanel.Controls.Add($tbDeepSeekKey)
+        $lnkDeepSeek = New-Object System.Windows.Forms.LinkLabel
+        $lnkDeepSeek.Text = "platform.deepseek.com/api_keys"
+        $lnkDeepSeek.Location = New-Object System.Drawing.Point(0, 58)
+        $lnkDeepSeek.Size = New-Object System.Drawing.Size(300, 20)
+        $lnkDeepSeek.LinkColor = $AccentColor
+        $lnkDeepSeek.Add_LinkClicked({ Start-Process "https://platform.deepseek.com/api_keys" })
+        $deepseekPanel.Controls.Add($lnkDeepSeek)
+        $deepseekPanel.Controls.Add((New-StyledLabel -Text "Model" -X 320 -Y 0))
+        $comboDeepSeekModel = New-Object System.Windows.Forms.ComboBox
+        $comboDeepSeekModel.Location = New-Object System.Drawing.Point(320, 24)
+        $comboDeepSeekModel.Size = New-Object System.Drawing.Size(300, 26)
+        $comboDeepSeekModel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+        $comboDeepSeekModel.Font = $FontRegular
+        [void]$comboDeepSeekModel.Items.AddRange(@("deepseek-v4-flash", "deepseek-v4-pro"))
+        $comboDeepSeekModel.Text = if ($State.Settings.DeepSeekModelId) { $State.Settings.DeepSeekModelId } else { "deepseek-v4-flash" }
+        $deepseekPanel.Controls.Add($comboDeepSeekModel)
+        Add-AiTestConnectionRow -Panel $deepseekPanel -Y 90 -BackendId "deepseek" `
+            -GetCredentials { @{ api_key = $tbDeepSeekKey.Text.Trim() } }.GetNewClosure() `
+            -GetModel { $comboDeepSeekModel.Text.Trim() }.GetNewClosure()
+        $tbDeepSeekKey.Add_Leave({
+            $apiKey = $tbDeepSeekKey.Text.Trim()
+            if (-not $apiKey) { return }
+            $token = Get-OrCreateWizardSession
+            if (-not $token) { return }
+            try {
+                $body = @{ credentials = @{ api_key = $apiKey } } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/deepseek/models" `
+                    -Method Post -Body $body -ContentType "application/json" `
+                    -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 15
+                if ($resp.models -and $resp.models.Count -gt 0) {
+                    $current = $comboDeepSeekModel.Text
+                    $comboDeepSeekModel.Items.Clear()
+                    [void]$comboDeepSeekModel.Items.AddRange(@($resp.models))
+                    $comboDeepSeekModel.Text = if ($current) { $current } else { $resp.default }
+                }
+            } catch {
+                # Silent -- convenience refresh only, Test Connection reports real errors.
+            }
+        }.GetNewClosure())
+
+        # xAI (Grok) -- api.x.ai. Not to be confused with Groq (api.groq.com).
+        $xaiPanel = New-Object System.Windows.Forms.Panel
+        $xaiPanel.Location = New-Object System.Drawing.Point(0, 160)
+        $xaiPanel.Size = New-Object System.Drawing.Size(640, 140)
+        $xaiPanel.Controls.Add((New-StyledLabel -Text "xAI (Grok) API Key" -X 0 -Y 0))
+        $tbXaiKey = New-StyledTextBox -X 0 -Y 24 -W 300 -Password $true
+        $tbXaiKey.Text = $State.Settings.XaiApiKey
+        $xaiPanel.Controls.Add($tbXaiKey)
+        $lnkXai = New-Object System.Windows.Forms.LinkLabel
+        $lnkXai.Text = "console.x.ai"
+        $lnkXai.Location = New-Object System.Drawing.Point(0, 58)
+        $lnkXai.Size = New-Object System.Drawing.Size(300, 20)
+        $lnkXai.LinkColor = $AccentColor
+        $lnkXai.Add_LinkClicked({ Start-Process "https://console.x.ai" })
+        $xaiPanel.Controls.Add($lnkXai)
+        $xaiPanel.Controls.Add((New-StyledLabel -Text "Model" -X 320 -Y 0))
+        $comboXaiModel = New-Object System.Windows.Forms.ComboBox
+        $comboXaiModel.Location = New-Object System.Drawing.Point(320, 24)
+        $comboXaiModel.Size = New-Object System.Drawing.Size(300, 26)
+        $comboXaiModel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+        $comboXaiModel.Font = $FontRegular
+        [void]$comboXaiModel.Items.AddRange(@("grok-4.6", "grok-4.5", "grok-4.3", "grok-code-fast-1"))
+        $comboXaiModel.Text = if ($State.Settings.XaiModelId) { $State.Settings.XaiModelId } else { "grok-4.6" }
+        $xaiPanel.Controls.Add($comboXaiModel)
+        Add-AiTestConnectionRow -Panel $xaiPanel -Y 90 -BackendId "xai" `
+            -GetCredentials { @{ api_key = $tbXaiKey.Text.Trim() } }.GetNewClosure() `
+            -GetModel { $comboXaiModel.Text.Trim() }.GetNewClosure()
+        $tbXaiKey.Add_Leave({
+            $apiKey = $tbXaiKey.Text.Trim()
+            if (-not $apiKey) { return }
+            $token = Get-OrCreateWizardSession
+            if (-not $token) { return }
+            try {
+                $body = @{ credentials = @{ api_key = $apiKey } } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/xai/models" `
+                    -Method Post -Body $body -ContentType "application/json" `
+                    -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 15
+                if ($resp.models -and $resp.models.Count -gt 0) {
+                    $current = $comboXaiModel.Text
+                    $comboXaiModel.Items.Clear()
+                    [void]$comboXaiModel.Items.AddRange(@($resp.models))
+                    $comboXaiModel.Text = if ($current) { $current } else { $resp.default }
+                }
+            } catch {
+                # Silent -- convenience refresh only, Test Connection reports real errors.
+            }
+        }.GetNewClosure())
+
+        # Mistral AI -- api.mistral.ai.
+        $mistralPanel = New-Object System.Windows.Forms.Panel
+        $mistralPanel.Location = New-Object System.Drawing.Point(0, 160)
+        $mistralPanel.Size = New-Object System.Drawing.Size(640, 140)
+        $mistralPanel.Controls.Add((New-StyledLabel -Text "Mistral API Key" -X 0 -Y 0))
+        $tbMistralKey = New-StyledTextBox -X 0 -Y 24 -W 300 -Password $true
+        $tbMistralKey.Text = $State.Settings.MistralApiKey
+        $mistralPanel.Controls.Add($tbMistralKey)
+        $lnkMistral = New-Object System.Windows.Forms.LinkLabel
+        $lnkMistral.Text = "console.mistral.ai/api-keys"
+        $lnkMistral.Location = New-Object System.Drawing.Point(0, 58)
+        $lnkMistral.Size = New-Object System.Drawing.Size(300, 20)
+        $lnkMistral.LinkColor = $AccentColor
+        $lnkMistral.Add_LinkClicked({ Start-Process "https://console.mistral.ai/api-keys" })
+        $mistralPanel.Controls.Add($lnkMistral)
+        $mistralPanel.Controls.Add((New-StyledLabel -Text "Model" -X 320 -Y 0))
+        $comboMistralModel = New-Object System.Windows.Forms.ComboBox
+        $comboMistralModel.Location = New-Object System.Drawing.Point(320, 24)
+        $comboMistralModel.Size = New-Object System.Drawing.Size(300, 26)
+        $comboMistralModel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+        $comboMistralModel.Font = $FontRegular
+        [void]$comboMistralModel.Items.AddRange(@("mistral-small-2506", "mistral-large-2411", "mistral-medium-2508", "codestral-2501"))
+        $comboMistralModel.Text = if ($State.Settings.MistralModelId) { $State.Settings.MistralModelId } else { "mistral-small-2506" }
+        $mistralPanel.Controls.Add($comboMistralModel)
+        Add-AiTestConnectionRow -Panel $mistralPanel -Y 90 -BackendId "mistral" `
+            -GetCredentials { @{ api_key = $tbMistralKey.Text.Trim() } }.GetNewClosure() `
+            -GetModel { $comboMistralModel.Text.Trim() }.GetNewClosure()
+        $tbMistralKey.Add_Leave({
+            $apiKey = $tbMistralKey.Text.Trim()
+            if (-not $apiKey) { return }
+            $token = Get-OrCreateWizardSession
+            if (-not $token) { return }
+            try {
+                $body = @{ credentials = @{ api_key = $apiKey } } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/mistral/models" `
+                    -Method Post -Body $body -ContentType "application/json" `
+                    -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 15
+                if ($resp.models -and $resp.models.Count -gt 0) {
+                    $current = $comboMistralModel.Text
+                    $comboMistralModel.Items.Clear()
+                    [void]$comboMistralModel.Items.AddRange(@($resp.models))
+                    $comboMistralModel.Text = if ($current) { $current } else { $resp.default }
+                }
+            } catch {
+                # Silent -- convenience refresh only, Test Connection reports real errors.
+            }
+        }.GetNewClosure())
+
+        # OpenRouter -- openrouter.ai, a meta-router across many underlying
+        # model providers. Model field defaults to a well-known stable id;
+        # the live refresh below filters to models that actually support
+        # tool_choice (see app/ai/openrouter_client.py's list_models()).
+        $openrouterPanel = New-Object System.Windows.Forms.Panel
+        $openrouterPanel.Location = New-Object System.Drawing.Point(0, 160)
+        $openrouterPanel.Size = New-Object System.Drawing.Size(640, 140)
+        $openrouterPanel.Controls.Add((New-StyledLabel -Text "OpenRouter API Key" -X 0 -Y 0))
+        $tbOpenRouterKey = New-StyledTextBox -X 0 -Y 24 -W 300 -Password $true
+        $tbOpenRouterKey.Text = $State.Settings.OpenRouterApiKey
+        $openrouterPanel.Controls.Add($tbOpenRouterKey)
+        $lnkOpenRouter = New-Object System.Windows.Forms.LinkLabel
+        $lnkOpenRouter.Text = "openrouter.ai/keys"
+        $lnkOpenRouter.Location = New-Object System.Drawing.Point(0, 58)
+        $lnkOpenRouter.Size = New-Object System.Drawing.Size(300, 20)
+        $lnkOpenRouter.LinkColor = $AccentColor
+        $lnkOpenRouter.Add_LinkClicked({ Start-Process "https://openrouter.ai/keys" })
+        $openrouterPanel.Controls.Add($lnkOpenRouter)
+        $openrouterPanel.Controls.Add((New-StyledLabel -Text "Model" -X 320 -Y 0))
+        $comboOpenRouterModel = New-Object System.Windows.Forms.ComboBox
+        $comboOpenRouterModel.Location = New-Object System.Drawing.Point(320, 24)
+        $comboOpenRouterModel.Size = New-Object System.Drawing.Size(300, 26)
+        $comboOpenRouterModel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+        $comboOpenRouterModel.Font = $FontRegular
+        [void]$comboOpenRouterModel.Items.AddRange(@("openai/gpt-4o", "anthropic/claude-sonnet-4.5", "google/gemini-2.5-pro", "deepseek/deepseek-chat", "meta-llama/llama-3.3-70b-instruct"))
+        $comboOpenRouterModel.Text = if ($State.Settings.OpenRouterModelId) { $State.Settings.OpenRouterModelId } else { "openai/gpt-4o" }
+        $openrouterPanel.Controls.Add($comboOpenRouterModel)
+        Add-AiTestConnectionRow -Panel $openrouterPanel -Y 90 -BackendId "openrouter" `
+            -GetCredentials { @{ api_key = $tbOpenRouterKey.Text.Trim() } }.GetNewClosure() `
+            -GetModel { $comboOpenRouterModel.Text.Trim() }.GetNewClosure()
+        $tbOpenRouterKey.Add_Leave({
+            $apiKey = $tbOpenRouterKey.Text.Trim()
+            if (-not $apiKey) { return }
+            $token = Get-OrCreateWizardSession
+            if (-not $token) { return }
+            try {
+                $body = @{ credentials = @{ api_key = $apiKey } } | ConvertTo-Json
+                $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/openrouter/models" `
+                    -Method Post -Body $body -ContentType "application/json" `
+                    -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 15
+                if ($resp.models -and $resp.models.Count -gt 0) {
+                    $current = $comboOpenRouterModel.Text
+                    $comboOpenRouterModel.Items.Clear()
+                    [void]$comboOpenRouterModel.Items.AddRange(@($resp.models))
+                    $comboOpenRouterModel.Text = if ($current) { $current } else { $resp.default }
+                }
+            } catch {
+                # Silent -- convenience refresh only, Test Connection reports real errors.
+            }
+        }.GetNewClosure())
+
+        $allPanels = @($ollamaPanel, $anthropicPanel, $bedrockPanel, $geminiPanel, $groqPanel, $openaiPanel, $kimiPanel, $deepseekPanel, $xaiPanel, $mistralPanel, $openrouterPanel)
         foreach ($sub in $allPanels) { $p.Controls.Add($sub); $sub.Visible = $false }
         $allPanels[$combo.SelectedIndex].Visible = $true
 
@@ -729,6 +985,11 @@ $Pages += @{
             BedrockKey = $tbBedrockKey; BedrockRegion = $tbBedrockRegion; GeminiKey = $tbGeminiKey
             GroqKey = $tbGroqKey; GroqModel = $comboGroqModel
             OpenAiKey = $tbOpenAiKey; OpenAiModel = $comboOpenAiModel
+            KimiKey = $tbKimiKey; KimiModel = $comboKimiModel
+            DeepSeekKey = $tbDeepSeekKey; DeepSeekModel = $comboDeepSeekModel
+            XaiKey = $tbXaiKey; XaiModel = $comboXaiModel
+            MistralKey = $tbMistralKey; MistralModel = $comboMistralModel
+            OpenRouterKey = $tbOpenRouterKey; OpenRouterModel = $comboOpenRouterModel
         }
         $script:AiPagePanel = $p
         return $p
@@ -745,6 +1006,16 @@ $Pages += @{
         $State.Settings.GroqModelId = $t.GroqModel.Text.Trim()
         $State.Settings.OpenAiApiKey = $t.OpenAiKey.Text.Trim()
         $State.Settings.OpenAiModelId = $t.OpenAiModel.Text.Trim()
+        $State.Settings.KimiApiKey = $t.KimiKey.Text.Trim()
+        $State.Settings.KimiModelId = $t.KimiModel.Text.Trim()
+        $State.Settings.DeepSeekApiKey = $t.DeepSeekKey.Text.Trim()
+        $State.Settings.DeepSeekModelId = $t.DeepSeekModel.Text.Trim()
+        $State.Settings.XaiApiKey = $t.XaiKey.Text.Trim()
+        $State.Settings.XaiModelId = $t.XaiModel.Text.Trim()
+        $State.Settings.MistralApiKey = $t.MistralKey.Text.Trim()
+        $State.Settings.MistralModelId = $t.MistralModel.Text.Trim()
+        $State.Settings.OpenRouterApiKey = $t.OpenRouterKey.Text.Trim()
+        $State.Settings.OpenRouterModelId = $t.OpenRouterModel.Text.Trim()
         return $true
     }
 }

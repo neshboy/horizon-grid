@@ -142,6 +142,310 @@ async def test_openai_network_timeout_is_reported_cleanly():
 
 
 @pytest.mark.asyncio
+async def test_kimi_no_key_fails_before_any_request():
+    result = await check_ai_connection("kimi", {})
+    assert result.ok is False
+    assert "No API key" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_kimi_200_is_success_and_reports_model():
+    respx.post("https://api.moonshot.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"model": "kimi-k2.5", "choices": [{"message": {"content": "pong"}}]},
+        )
+    )
+    result = await check_ai_connection("kimi", {"api_key": "mock-kimi-key"}, model="kimi-k2.5")
+    assert result.ok is True
+    assert result.model == "kimi-k2.5"
+    assert result.latency_ms is not None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_kimi_401_is_auth_failure():
+    respx.post("https://api.moonshot.ai/v1/chat/completions").mock(return_value=httpx.Response(401))
+    result = await check_ai_connection("kimi", {"api_key": "mock-invalid-key"})
+    assert result.ok is False
+    assert "Authentication failed" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_kimi_404_is_reported_as_model_not_found():
+    respx.post("https://api.moonshot.ai/v1/chat/completions").mock(return_value=httpx.Response(404))
+    result = await check_ai_connection("kimi", {"api_key": "mock-key"}, model="nonexistent-model-xyz")
+    assert result.ok is False
+    assert "not found" in result.message.lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_kimi_429_is_rate_limited():
+    respx.post("https://api.moonshot.ai/v1/chat/completions").mock(return_value=httpx.Response(429))
+    result = await check_ai_connection("kimi", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "Rate limited" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_kimi_400_thinking_conflict_is_reported_clearly():
+    respx.post("https://api.moonshot.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(400, text="tool_choice 'specified' is incompatible with thinking enabled")
+    )
+    result = await check_ai_connection("kimi", {"api_key": "mock-key"}, model="kimi-k3")
+    assert result.ok is False
+    assert "thinking" in result.message.lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_kimi_network_timeout_is_reported_cleanly():
+    respx.post("https://api.moonshot.ai/v1/chat/completions").mock(side_effect=httpx.TimeoutException("timed out"))
+    result = await check_ai_connection("kimi", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "timed out" in result.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_deepseek_no_key_fails_before_any_request():
+    result = await check_ai_connection("deepseek", {})
+    assert result.ok is False
+    assert "No API key" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_200_is_success_and_reports_model():
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"model": "deepseek-v4-flash", "choices": [{"message": {"content": "pong"}}]},
+        )
+    )
+    result = await check_ai_connection("deepseek", {"api_key": "mock-deepseek-key"}, model="deepseek-v4-flash")
+    assert result.ok is True
+    assert result.model == "deepseek-v4-flash"
+    assert result.latency_ms is not None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_401_is_auth_failure():
+    respx.post("https://api.deepseek.com/chat/completions").mock(return_value=httpx.Response(401))
+    result = await check_ai_connection("deepseek", {"api_key": "mock-invalid-key"})
+    assert result.ok is False
+    assert "Authentication failed" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_402_is_reported_as_insufficient_balance():
+    respx.post("https://api.deepseek.com/chat/completions").mock(return_value=httpx.Response(402))
+    result = await check_ai_connection("deepseek", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "balance" in result.message.lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_429_is_rate_limited():
+    respx.post("https://api.deepseek.com/chat/completions").mock(return_value=httpx.Response(429))
+    result = await check_ai_connection("deepseek", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "Rate limited" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_network_timeout_is_reported_cleanly():
+    respx.post("https://api.deepseek.com/chat/completions").mock(side_effect=httpx.TimeoutException("timed out"))
+    result = await check_ai_connection("deepseek", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "timed out" in result.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_xai_no_key_fails_before_any_request():
+    result = await check_ai_connection("xai", {})
+    assert result.ok is False
+    assert "No API key" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_xai_200_is_success_and_reports_model():
+    respx.post("https://api.x.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"model": "grok-4.6", "choices": [{"message": {"content": "pong"}}]},
+        )
+    )
+    result = await check_ai_connection("xai", {"api_key": "mock-xai-key"}, model="grok-4.6")
+    assert result.ok is True
+    assert result.model == "grok-4.6"
+    assert result.latency_ms is not None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_xai_401_is_auth_failure():
+    # xAI's real error body is flat ({"code","error"}), not OpenAI's nested
+    # shape -- this test only checks the status-code branch, not body parsing.
+    respx.post("https://api.x.ai/v1/chat/completions").mock(return_value=httpx.Response(401))
+    result = await check_ai_connection("xai", {"api_key": "mock-invalid-key"})
+    assert result.ok is False
+    assert "Authentication failed" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_xai_400_bad_key_is_reported_as_auth_failure():
+    # xAI returns 400 (not 401) for a malformed/incorrect key, confirmed live.
+    respx.post("https://api.x.ai/v1/chat/completions").mock(return_value=httpx.Response(400))
+    result = await check_ai_connection("xai", {"api_key": "mock-bad-key"})
+    assert result.ok is False
+    assert "Authentication failed" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_xai_429_is_rate_limited():
+    respx.post("https://api.x.ai/v1/chat/completions").mock(return_value=httpx.Response(429))
+    result = await check_ai_connection("xai", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "Rate limited" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_xai_network_timeout_is_reported_cleanly():
+    respx.post("https://api.x.ai/v1/chat/completions").mock(side_effect=httpx.TimeoutException("timed out"))
+    result = await check_ai_connection("xai", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "timed out" in result.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_mistral_no_key_fails_before_any_request():
+    result = await check_ai_connection("mistral", {})
+    assert result.ok is False
+    assert "No API key" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_200_is_success_and_reports_model():
+    respx.post("https://api.mistral.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"model": "mistral-small-2506", "choices": [{"message": {"content": "pong"}}]},
+        )
+    )
+    result = await check_ai_connection("mistral", {"api_key": "mock-mistral-key"}, model="mistral-small-2506")
+    assert result.ok is True
+    assert result.model == "mistral-small-2506"
+    assert result.latency_ms is not None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_401_is_auth_failure():
+    respx.post("https://api.mistral.ai/v1/chat/completions").mock(return_value=httpx.Response(401))
+    result = await check_ai_connection("mistral", {"api_key": "mock-invalid-key"})
+    assert result.ok is False
+    assert "Authentication failed" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_404_is_reported_as_model_not_found():
+    respx.post("https://api.mistral.ai/v1/chat/completions").mock(return_value=httpx.Response(404))
+    result = await check_ai_connection("mistral", {"api_key": "mock-key"}, model="nonexistent-model-xyz")
+    assert result.ok is False
+    assert "not found" in result.message.lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_429_is_rate_limited():
+    respx.post("https://api.mistral.ai/v1/chat/completions").mock(return_value=httpx.Response(429))
+    result = await check_ai_connection("mistral", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "Rate limited" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_network_timeout_is_reported_cleanly():
+    respx.post("https://api.mistral.ai/v1/chat/completions").mock(side_effect=httpx.TimeoutException("timed out"))
+    result = await check_ai_connection("mistral", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "timed out" in result.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_openrouter_no_key_fails_before_any_request():
+    result = await check_ai_connection("openrouter", {})
+    assert result.ok is False
+    assert "No API key" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_200_is_success_and_reports_model():
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"model": "openai/gpt-4o", "choices": [{"message": {"content": "pong"}}]},
+        )
+    )
+    result = await check_ai_connection("openrouter", {"api_key": "mock-openrouter-key"}, model="openai/gpt-4o")
+    assert result.ok is True
+    assert result.model == "openai/gpt-4o"
+    assert result.latency_ms is not None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_401_is_auth_failure():
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(return_value=httpx.Response(401))
+    result = await check_ai_connection("openrouter", {"api_key": "mock-invalid-key"})
+    assert result.ok is False
+    assert "Authentication failed" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_402_is_reported_as_insufficient_credits():
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(return_value=httpx.Response(402))
+    result = await check_ai_connection("openrouter", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "credits" in result.message.lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_429_is_rate_limited():
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(return_value=httpx.Response(429))
+    result = await check_ai_connection("openrouter", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "Rate limited" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_network_timeout_is_reported_cleanly():
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(side_effect=httpx.TimeoutException("timed out"))
+    result = await check_ai_connection("openrouter", {"api_key": "mock-key"})
+    assert result.ok is False
+    assert "timed out" in result.message.lower()
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_anthropic_200_is_success():
     respx.post("https://api.anthropic.com/v1/messages").mock(

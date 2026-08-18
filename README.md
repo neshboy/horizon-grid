@@ -108,10 +108,10 @@ keys you've added.
 
 ### AI analysis
 
-The AI layer is backend-agnostic — six backends implement the same interface
-so the platform can switch between them without any branching in the calling
-code, including a fully local/self-hosted option with no API key and no
-cloud cost:
+The AI layer is backend-agnostic — eleven backends implement the same
+interface so the platform can switch between them without any branching in
+the calling code, including a fully local/self-hosted option with no API
+key and no cloud cost:
 
 | Backend | Requires API key | Notes |
 |---|---|---|
@@ -121,6 +121,11 @@ cloud cost:
 | Google Gemini | Yes | Static fallback model list |
 | Groq | Yes | Live model discovery via Groq's models API; default `llama-3.3-70b-versatile` |
 | OpenAI | Yes | Live model discovery via OpenAI's models API; default `gpt-4o-mini` |
+| Kimi (Moonshot AI) | Yes | Live model discovery; default `kimi-k2.5` (deliberately not one of Moonshot's "thinking" models, which reject forced tool calls) |
+| DeepSeek | Yes | Live model discovery; default `deepseek-v4-flash` |
+| Grok (xAI) | Yes | Live model discovery; default `grok-4.6` |
+| Mistral AI | Yes | Live model discovery; default `mistral-small-2506` |
+| OpenRouter | Yes | Meta-router giving access to hundreds of underlying models from many providers through one API; live model discovery filtered to models that support forced tool calls; default `openai/gpt-4o` |
 
 Every backend supports a live connection test with candidate (unpersisted)
 credentials before you save them, and the active backend can be switched
@@ -178,7 +183,7 @@ severities as a floor on the risk score.
 | Code/package signing | Not code-signed — SmartScreen will warn; click "Run anyway" | Not signed (standard for `.deb` packages) |
 | Uninstall (keep data) | "Remove Application" — stops containers, no volume deletion | `apt remove horizon-grid` — stops containers, no volume deletion |
 | Uninstall (delete everything) | "Remove Everything" — requires typing `DELETE`; deletes volumes and all config/data | `apt purge horizon-grid` — force-removes containers/volumes and deletes all config/data |
-| Current version | 0.1.0 | 0.1.0 |
+| Current version | 0.2.0 | 0.2.0 |
 
 ## Architecture
 
@@ -221,8 +226,8 @@ administrator privileges; 64-bit Windows only.
 ### Linux package
 
 Built via `linux/build-deb.sh` (requires a Debian/Ubuntu host; produces
-`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.1.0_amd64.deb`).
-Install with `sudo dpkg -i horizon-grid_0.1.0_amd64.deb`, then run the
+`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.2.0_amd64.deb`).
+Install with `sudo dpkg -i horizon-grid_0.2.0_amd64.deb`, then run the
 terminal setup wizard as root to configure the admin account, AI backend,
 providers, and ports; the platform is then managed via the `horizon-grid`
 systemd-backed CLI (`start` / `stop` / `restart`).

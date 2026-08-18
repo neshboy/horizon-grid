@@ -2,16 +2,16 @@
 
 ## Supported Versions
 
-HORIZON GRID is currently a single rolling `0.1.0` release line — there is no
+HORIZON GRID is currently a single rolling `0.2.0` release line — there is no
 older major/minor version still receiving fixes, and no formal LTS or
-maintenance branch. Security fixes, when made, land on the current `0.1.0`
+maintenance branch. Security fixes, when made, land on the current `0.2.0`
 line. As the project matures past its first release, this section will be
 updated to reflect which versions are actively supported.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.1.0.x | Yes (current line) |
-| < 0.1.0 | N/A — no prior releases |
+| 0.2.0.x | Yes (current line) |
+| < 0.2.0 | N/A — no prior releases |
 
 ## Reporting a Vulnerability
 
@@ -118,7 +118,7 @@ inspection:
   "closed" dependency finding as time-stamped, not permanent — re-run
   `pip-audit`/`npm audit` regularly, not just once.
 - **Installers are not code-signed.** The Windows installer
-  (`HORIZON-GRID-Setup-0.1.0.exe`) is explicitly unsigned — this is
+  (`HORIZON-GRID-Setup-0.2.0.exe`) is explicitly unsigned — this is
   documented plainly in the release notes — so Windows SmartScreen will warn
   on first run and users must click through "Run anyway." The Linux `.deb`
   package is likewise not GPG-signed. Verify the provenance of any installer

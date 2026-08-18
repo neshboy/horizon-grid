@@ -85,6 +85,16 @@ AI_FIELDS = [
     ("GROQ_MODEL_ID", "GroqModelId", "Groq model ID", False),
     ("OPENAI_API_KEY", "OpenAiApiKey", "OpenAI API key", True),
     ("OPENAI_MODEL_ID", "OpenAiModelId", "OpenAI model ID", False),
+    ("KIMI_API_KEY", "KimiApiKey", "Kimi (Moonshot) API key", True),
+    ("KIMI_MODEL_ID", "KimiModelId", "Kimi model ID", False),
+    ("DEEPSEEK_API_KEY", "DeepSeekApiKey", "DeepSeek API key", True),
+    ("DEEPSEEK_MODEL_ID", "DeepSeekModelId", "DeepSeek model ID", False),
+    ("XAI_API_KEY", "XaiApiKey", "xAI (Grok) API key", True),
+    ("XAI_MODEL_ID", "XaiModelId", "xAI model ID", False),
+    ("MISTRAL_API_KEY", "MistralApiKey", "Mistral API key", True),
+    ("MISTRAL_MODEL_ID", "MistralModelId", "Mistral model ID", False),
+    ("OPENROUTER_API_KEY", "OpenRouterApiKey", "OpenRouter API key", True),
+    ("OPENROUTER_MODEL_ID", "OpenRouterModelId", "OpenRouter model ID", False),
 ]
 
 PROVIDER_FIELDS = [
@@ -185,6 +195,11 @@ def default_settings():
         "AnthropicModelId": "claude-sonnet-4-5-20250929",
         "GroqModelId": "llama-3.3-70b-versatile",
         "OpenAiModelId": "gpt-4o-mini",
+        "KimiModelId": "kimi-k2.5",
+        "DeepSeekModelId": "deepseek-v4-flash",
+        "XaiModelId": "grok-4.6",
+        "MistralModelId": "mistral-small-2506",
+        "OpenRouterModelId": "openai/gpt-4o",
     }
     for _, settings_key, *_ in [f[:2] for f in AI_FIELDS] + [(f[0], f[1]) for f in PROVIDER_FIELDS]:
         settings.setdefault(settings_key, "")
@@ -466,7 +481,7 @@ class Wizard:
 
     def page_ai_configuration(self):
         print("-- AI Configuration " + "-" * 49)
-        backends = ["ollama", "anthropic", "bedrock", "gemini", "groq", "openai"]
+        backends = ["ollama", "anthropic", "bedrock", "gemini", "groq", "openai", "kimi", "deepseek", "xai", "mistral", "openrouter"]
         current = self.settings.get("AiBackend", "ollama")
         print("AI backends: %s" % ", ".join(backends))
         backend = self.ask("ai_backend", "AI backend", default=current)
@@ -506,6 +521,26 @@ class Wizard:
             self.settings["OpenAiApiKey"] = self.ask("openai_api_key", "OpenAI API key", secret=True) or self.settings.get("OpenAiApiKey", "")
             self.settings["OpenAiModelId"] = self.ask("openai_model_id", "OpenAI model ID", default=self.settings.get("OpenAiModelId", "gpt-4o-mini"))
             creds = {"api_key": self.settings["OpenAiApiKey"]}
+        elif backend == "kimi":
+            self.settings["KimiApiKey"] = self.ask("kimi_api_key", "Kimi (Moonshot) API key", secret=True) or self.settings.get("KimiApiKey", "")
+            self.settings["KimiModelId"] = self.ask("kimi_model_id", "Kimi model ID", default=self.settings.get("KimiModelId", "kimi-k2.5"))
+            creds = {"api_key": self.settings["KimiApiKey"]}
+        elif backend == "deepseek":
+            self.settings["DeepSeekApiKey"] = self.ask("deepseek_api_key", "DeepSeek API key", secret=True) or self.settings.get("DeepSeekApiKey", "")
+            self.settings["DeepSeekModelId"] = self.ask("deepseek_model_id", "DeepSeek model ID", default=self.settings.get("DeepSeekModelId", "deepseek-v4-flash"))
+            creds = {"api_key": self.settings["DeepSeekApiKey"]}
+        elif backend == "xai":
+            self.settings["XaiApiKey"] = self.ask("xai_api_key", "xAI (Grok) API key", secret=True) or self.settings.get("XaiApiKey", "")
+            self.settings["XaiModelId"] = self.ask("xai_model_id", "xAI model ID", default=self.settings.get("XaiModelId", "grok-4.6"))
+            creds = {"api_key": self.settings["XaiApiKey"]}
+        elif backend == "mistral":
+            self.settings["MistralApiKey"] = self.ask("mistral_api_key", "Mistral API key", secret=True) or self.settings.get("MistralApiKey", "")
+            self.settings["MistralModelId"] = self.ask("mistral_model_id", "Mistral model ID", default=self.settings.get("MistralModelId", "mistral-small-2506"))
+            creds = {"api_key": self.settings["MistralApiKey"]}
+        elif backend == "openrouter":
+            self.settings["OpenRouterApiKey"] = self.ask("openrouter_api_key", "OpenRouter API key", secret=True) or self.settings.get("OpenRouterApiKey", "")
+            self.settings["OpenRouterModelId"] = self.ask("openrouter_model_id", "OpenRouter model ID", default=self.settings.get("OpenRouterModelId", "openai/gpt-4o"))
+            creds = {"api_key": self.settings["OpenRouterApiKey"]}
 
         if self.confirm("Test this connection now?", default=False):
             self.test_ai_connection(backend, creds)

@@ -108,6 +108,169 @@ async def _check_openai(api_key: str, model: str) -> AITestResult:
     return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
 
 
+async def _check_kimi(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.moonshot.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _MINIMAL_SYSTEM},
+                    {"role": "user", "content": _MINIMAL_USER},
+                ],
+                "max_tokens": 8,
+                "temperature": 0,
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code == 401:
+        return AITestResult(ok=False, message="Authentication failed -- check your Kimi (Moonshot) API key.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    if r.status_code == 400 and "thinking" in r.text.lower():
+        return AITestResult(
+            ok=False,
+            message=f"Model {model!r} requires disabling 'thinking' mode to use a forced tool call -- pick a non-reasoning model (e.g. kimi-k2.5) or a model where thinking can be disabled.",
+        )
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_deepseek(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _MINIMAL_SYSTEM},
+                    {"role": "user", "content": _MINIMAL_USER},
+                ],
+                "max_tokens": 8,
+                "temperature": 0,
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code == 401:
+        return AITestResult(ok=False, message="Authentication failed -- check your DeepSeek API key.")
+    if r.status_code == 402:
+        return AITestResult(ok=False, message="DeepSeek account balance is insufficient to make this request.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_xai(api_key: str, model: str) -> AITestResult:
+    """xAI's error body is FLAT ({"code","error"}), not OpenAI's nested
+    {"error":{"message"}} shape -- confirmed live against api.x.ai. The
+    generic fallback below already just surfaces r.text, so this only needs
+    special handling for the specific statuses worth a friendlier message."""
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _MINIMAL_SYSTEM},
+                    {"role": "user", "content": _MINIMAL_USER},
+                ],
+                "max_completion_tokens": 8,
+                "temperature": 0,
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code in (400, 401):
+        return AITestResult(ok=False, message="Authentication failed -- check your xAI (Grok) API key.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_mistral(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _MINIMAL_SYSTEM},
+                    {"role": "user", "content": _MINIMAL_USER},
+                ],
+                "max_tokens": 8,
+                "temperature": 0,
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code == 401:
+        return AITestResult(ok=False, message="Authentication failed -- check your Mistral API key.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available on this account.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
+async def _check_openrouter(api_key: str, model: str) -> AITestResult:
+    if not api_key:
+        return AITestResult(ok=False, message="No API key provided.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _MINIMAL_SYSTEM},
+                    {"role": "user", "content": _MINIMAL_USER},
+                ],
+                "max_tokens": 8,
+                "temperature": 0,
+            },
+        )
+    if r.status_code == 200:
+        payload = r.json()
+        reply = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=payload.get("model", model))
+    if r.status_code == 401:
+        return AITestResult(ok=False, message="Authentication failed -- check your OpenRouter API key.")
+    if r.status_code == 402:
+        return AITestResult(ok=False, message="OpenRouter account has insufficient credits for this request.")
+    if r.status_code == 404:
+        return AITestResult(ok=False, message=f"Model {model!r} was not found or is not available.")
+    if r.status_code == 429:
+        return AITestResult(ok=False, message="Rate limited -- key may be valid, but too many requests right now.")
+    return AITestResult(ok=False, message=f"Unexpected response (HTTP {r.status_code}): {r.text[:300]}")
+
+
 async def _check_anthropic(api_key: str, model: str) -> AITestResult:
     if not api_key:
         return AITestResult(ok=False, message="No API key provided.")
@@ -263,12 +426,22 @@ async def test_ai_connection(backend: str, credentials: dict[str, str], model: O
     - ollama: {"base_url": "..."}  (model passed separately)
     - bedrock: {"bedrock_api_key": "..."} OR {"aws_access_key_id": "...", "aws_secret_access_key": "...", "aws_region": "..."}
     """
+    from app.ai import deepseek_client as _deepseek_defaults
     from app.ai import groq_client as _groq_defaults
+    from app.ai import kimi_client as _kimi_defaults
+    from app.ai import mistral_client as _mistral_defaults
     from app.ai import openai_client as _openai_defaults
+    from app.ai import openrouter_client as _openrouter_defaults
+    from app.ai import xai_client as _xai_defaults
 
     handlers = {
         "groq": lambda: _check_groq(credentials.get("api_key", ""), model or _groq_defaults.DEFAULT_MODEL),
         "openai": lambda: _check_openai(credentials.get("api_key", ""), model or _openai_defaults.DEFAULT_MODEL),
+        "kimi": lambda: _check_kimi(credentials.get("api_key", ""), model or _kimi_defaults.DEFAULT_MODEL),
+        "deepseek": lambda: _check_deepseek(credentials.get("api_key", ""), model or _deepseek_defaults.DEFAULT_MODEL),
+        "xai": lambda: _check_xai(credentials.get("api_key", ""), model or _xai_defaults.DEFAULT_MODEL),
+        "mistral": lambda: _check_mistral(credentials.get("api_key", ""), model or _mistral_defaults.DEFAULT_MODEL),
+        "openrouter": lambda: _check_openrouter(credentials.get("api_key", ""), model or _openrouter_defaults.DEFAULT_MODEL),
         "anthropic": lambda: _check_anthropic(credentials.get("api_key", ""), model or "claude-sonnet-4-5-20250929"),
         "gemini": lambda: _check_gemini(credentials.get("api_key", ""), model or "gemini-2.0-flash"),
         "ollama": lambda: _check_ollama(credentials.get("base_url", ""), model or "llama3.2:3b"),

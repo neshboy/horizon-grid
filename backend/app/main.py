@@ -54,10 +54,10 @@ settings = get_settings()
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version="0.2.0",
     description="Unified threat intelligence workbench: single-search IOC lookup across "
     "dozens of providers, correlated and summarized by a local Ollama model "
-    "(or AWS Bedrock/Gemini/Anthropic/Groq/OpenAI, configurable via AI_BACKEND).",
+    "(or AWS Bedrock/Gemini/Anthropic/Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter, configurable via AI_BACKEND).",
     openapi_url=f"{settings.api_v1_prefix}/openapi.json",
     docs_url="/docs",
 )
