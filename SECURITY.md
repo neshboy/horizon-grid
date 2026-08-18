@@ -71,23 +71,28 @@ inspection:
   additional network-level controls.
 - **Dependency vulnerabilities exist; some have been fixed, some remain
   open by design.** A `pip-audit` run against `backend/requirements.txt`
-  originally found 32 known advisories across 7 packages. `python-jose`
-  (→3.4.0) and `python-multipart` (→0.0.31) have been upgraded in place,
-  closing those advisories. `cryptography` was first bumped to 49.0.0, but
-  a follow-up independent audit caught that 49.0.0 itself had a newly
+  originally found 32 known advisories across 7 packages. `python-multipart`
+  (→0.0.31) was upgraded cleanly. `cryptography` was first bumped to 49.0.0,
+  but a follow-up independent audit caught that 49.0.0 itself had a newly
   disclosed high-severity advisory (CVE-2026-69247, a PKCS7 Bleichenbacher
-  oracle) — it has since been bumped again to 50.0.0, which is clean. That
-  same follow-up audit also caught `pyasn1` (a transitive dependency pulled
-  in by `python-jose`, not previously tracked here at all) sitting on
-  0.4.8 with 4 high-severity DoS advisories; it's now pinned directly at
-  0.6.4. `python-jose==3.4.0` declares `pyasn1<0.5.0,>=0.4.1`, so this pin
-  is technically outside its declared range — verified safe anyway because
-  this app only signs/verifies JWTs with HS256 (a shared-secret scheme that
-  never touches pyasn1's ASN.1/DER code path at all; that path is only
-  reachable for RSA/EC-based JWT algorithms, which this app doesn't use),
-  confirmed via a direct `jose.jwt.encode`/`decode` round trip and the full
-  unit suite (282 passed) after the bump. `starlette` and `lxml` remain on
-  their original versions: `starlette` is a transitive dependency of
+  oracle) — bumped again to 50.0.0, which is clean. That same follow-up
+  audit also caught `pyasn1` (a transitive dependency pulled in by
+  `python-jose`, not previously tracked here at all) sitting on 0.4.8 with
+  4 high-severity DoS advisories. Pinning `pyasn1` to the fixed 0.6.4 first
+  looked safe in an incremental local upgrade, but a genuinely fresh
+  `pip install -r requirements.txt` (exactly what CI and any new clone
+  does) caught what the incremental test missed: `python-jose==3.4.0`
+  hard-requires `pyasn1<0.5.0`, so pip's resolver correctly refused to
+  install anything at all — a real `ResolutionImpossible` failure, caught
+  by CI on the very next push. Fixed properly by bumping `python-jose` to
+  3.5.0, which relaxed its own constraint to `pyasn1>=0.5.0` — verified via
+  a genuinely fresh install in a container matching the real
+  `python:3.12-slim` runtime (not an incremental upgrade), a direct
+  `jose.jwt.encode`/`decode` round trip, and the full unit suite
+  (282 passed), plus a re-run of `pip-audit` in that same fresh container
+  confirming `cryptography` and `pyasn1` no longer appear in the findings
+  at all. `starlette` and `lxml` remain on their original versions:
+  `starlette` is a transitive dependency of
   `fastapi==0.115.0` and cannot be bumped to a patched release without also
   bumping FastAPI itself (a coordinated framework upgrade, deliberately
   deferred pending its own regression pass rather than done blindly);
