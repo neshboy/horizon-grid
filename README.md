@@ -2,151 +2,274 @@
 
 *Every Signal. One Operational Picture.*
 
-Enterprise threat-intelligence workbench. A single IOC search fans out to every
-configured intelligence provider in parallel, results are correlated and
-deduplicated, an AI backend summarizes each provider and produces a final
-evidence-based assessment (verdict, risk score, MITRE ATT&CK mappings,
-detection rules, recommended actions), and everything streams live into one
-SOC dashboard over Server-Sent Events.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+![Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+![Linux](https://img.shields.io/badge/platform-Linux-FCC624)
 
-The AI backend defaults to a locally-hosted Ollama server (`AI_BACKEND=ollama`,
-no API key, no cloud cost) and can be switched to AWS Bedrock, Google Gemini,
-or Anthropic's direct API via `.env` — see `backend/app/ai/service.py`.
+## What it is
 
-## What's actually built
+HORIZON GRID is a self-hosted threat-intelligence workbench. A single IOC
+lookup (IP, domain, URL, file hash, CVE, or MITRE ATT&CK technique) fans out
+in parallel to every configured intelligence provider, the results are
+deduplicated and correlated into a relationship graph, an AI backend
+summarizes each provider's findings, and a deterministic scoring engine
+produces a final risk verdict — all streamed live to a SOC-style dashboard.
 
-- **One-search investigation pipeline.** `POST /api/v1/lookup/stream` detects
-  the IOC type, fans it out to every provider that supports that type
-  (concurrently, over a shared HTTP client, with Redis caching + retry/timeout
-  handling), streams each provider's result and AI summary as they arrive,
-  then runs a deterministic correlation pass and a final AI-generated
-  assessment. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
-  request lifecycle.
-- **15+ intelligence connectors**, one plugin interface: VirusTotal,
-  AbuseIPDB, AlienVault OTX, URLhaus, ThreatFox, MalwareBazaar, crt.sh, NVD,
-  CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Hybrid Analysis, Spamhaus, PhishTank,
-  Censys, plus an OSINT crawler-as-provider (GitHub, Reddit, RSS, Pastebin).
-  Providers without a configured API key report `not_configured` rather than
-  failing the lookup. Full detail in [docs/PROVIDERS.md](docs/PROVIDERS.md).
-- **Deterministic correlation + evidence ledger.** A pure, no-I/O correlation
-  engine builds a relationship graph (IP resolutions, related hashes/URLs,
-  certificates, ASN, malware families, threat actors, MITRE techniques, CVEs)
-  and a factual evidence ledger that every AI-generated explanation must cite
-  by ID — invented citations are stripped server-side. See
-  [docs/DATA_MODEL.md](docs/DATA_MODEL.md) and
-  [docs/THREAT_INTELLIGENCE_GUIDE.md](docs/THREAT_INTELLIGENCE_GUIDE.md).
-  Note: despite an internal model docstring describing edges as "mirrored
-  into Neo4j," Postgres is currently the sole store for the correlation graph
-  — Neo4j and OpenSearch are provisioned in `docker-compose.yml` but have no
-  code path calling into them today (**not implemented**).
-- **On-demand AI analysis and hunting.** Evidence-grounded endpoints for "why
-  is this malicious," "what is this," false-positive checks, verdict
-  challenges, next actions, intelligence gaps, score explanations, a
-  freeform copilot Q&A, and multi-format detection-rule generation (Sigma,
-  Splunk SPL, Sentinel KQL, Elastic, QRadar AQL, Chronicle YARA-L, Suricata,
-  Snort, Zeek). See [docs/AI_ENGINE.md](docs/AI_ENGINE.md) and
-  [docs/API_DOCUMENTATION.md](docs/API_DOCUMENTATION.md).
-- **Auth/RBAC, basket, and case management.** JWT-based auth with three
-  roles (`admin`, `analyst`, `viewer`); a per-analyst basket for scratch
-  comparisons; shared, team-wide case management with notes and IOC
-  attachment. Server-side PDF/CSV export, admin/user-management APIs, and MFA
-  are **not implemented** — see
-  [docs/DOCUMENTATION_GAPS.md](docs/DOCUMENTATION_GAPS.md) for the full,
-  audited list of what's stubbed, partial, or missing.
-- **Background OSINT refresh.** Celery beat runs an hourly job that
-  re-crawls OSINT sources for recently-looked-up IOCs and warms the shared
-  Redis provider cache — separate from, and not a substitute for, the
-  interactive lookup path.
+## What problem it solves
 
-## Quick start
+Investigating an indicator by hand normally means opening a dozen browser
+tabs (VirusTotal, AbuseIPDB, OTX, crt.sh, NVD, ...), manually reconciling
+conflicting verdicts, and writing up a judgment call under time pressure.
+HORIZON GRID collapses that into one search: it queries every provider you've
+configured at once, correlates what comes back, and hands you a scored,
+evidence-cited assessment instead of a pile of raw JSON to reconcile
+yourself.
+
+## Who it's for
+
+Security operations teams, threat-intel analysts, and incident responders who
+want a self-hosted (on-prem or lab) console for indicator triage — including
+teams that need to run entirely offline/air-gapped using a local Ollama model
+instead of a cloud AI API.
+
+## How it works, at a high level
+
+1. An analyst submits an indicator through the frontend or the API.
+2. The backend detects the IOC type and queries every registered provider
+   that supports that type, concurrently, with Redis-backed caching and
+   retry/timeout handling.
+3. A deterministic correlation engine links the returned data (shared
+   infrastructure, related hashes/URLs, malware families, threat actors,
+   MITRE techniques, CVEs) into a relationship graph.
+4. The configured AI backend summarizes each provider's raw result and, once
+   all providers have responded, produces a final narrative assessment.
+5. A separate deterministic scoring engine (not the AI) computes the
+   authoritative risk score, confidence score, and severity band from the
+   provider verdicts and correlation edges — the AI's narrative is displayed
+   alongside this score but never overrides it.
+6. Results stream to the dashboard over Server-Sent Events as each provider
+   and the correlation/scoring/AI steps complete.
+
+## Features
+
+### IOC investigation and threat scoring
+
+- One-search pipeline covering IPv4/IPv6, domains, URLs, file hashes,
+  hostnames, CVEs, ASNs, TLS certificates, and MITRE ATT&CK technique IDs,
+  routed to whichever providers support each type.
+- A deterministic scoring engine (`backend/app/scoring/engine.py`) computes
+  `overall_risk_score`, `confidence_score`, and `malicious_probability` from
+  provider-verdict consensus (weighted toward graduated multi-engine ratios
+  such as VirusTotal's detection ratio, with a corroboration multiplier so a
+  single provider can't swing the score alone) plus qualifying correlation
+  edges (`associated_with`, `attributed_to`, `part_of_campaign`, `exploits`,
+  `uses_technique`), each requiring corroboration from 2+ distinct providers
+  to count at full weight. `severity` is banded from `overall_risk_score` at
+  fixed thresholds (10/30/55/80 → none/low/medium/high/critical).
+- This scoring engine is wired into both the live investigation stream and
+  the reanalyze/rebuild path in `backend/app/api/routes/lookup.py`, and into
+  the Security Assessment Toolkit's refresh flow — the AI is given the score
+  as a fact in its prompt, and the backend mechanically overwrites the AI's
+  own risk numbers with the scoring engine's output before persisting, so the
+  score displayed is always the deterministic one.
+- Covered by a 37-test unit suite (`backend/app/tests/unit/test_scoring_engine.py`)
+  exercising corroboration weighting, conflicting-verdict confidence collapse,
+  and severity banding.
+
+### Provider intelligence
+
+Seventeen threat-intelligence providers are registered and queried through a
+single plugin interface, plus one OSINT crawler-as-provider:
+
+| Provider | Indicator types | API key required | What it queries |
+|---|---|---|---|
+| VirusTotal | IPv4, IPv6, Domain, URL, MD5/SHA1/SHA256/SHA512 | Yes | Reputation/detection stats per IOC type |
+| AbuseIPDB | IPv4, IPv6 | Yes | Abuse confidence score, report count, ISP/usage-type |
+| AlienVault OTX | IPv4, IPv6, Domain, Hostname, URL, hashes | Yes | Pulses, malware families, threat actors |
+| URLhaus | URL, Domain, IPv4 | Yes (abuse.ch Auth-Key) | Known malware-distribution URLs/hosts |
+| ThreatFox | IPv4, IPv6, Domain, URL, MD5, SHA256 | Yes (abuse.ch Auth-Key) | IOC-to-malware-family associations |
+| MalwareBazaar | MD5/SHA1/SHA256/SHA512 | Yes (abuse.ch Auth-Key) | Malware sample metadata by hash |
+| crt.sh | Domain, TLS certificate | No | Certificate transparency log entries + related subdomains |
+| NVD | CVE | No (optional key raises rate limit) | CVSS score/severity, CWEs, description |
+| CISA KEV | CVE | No | Known Exploited Vulnerabilities catalog — exploitation status, due date, ransomware use |
+| MITRE ATT&CK | MITRE technique ID | No | Technique name, tactics, platforms |
+| WHOIS/RDAP | Domain, IPv4, IPv6, ASN | No | Domain WHOIS and IP/ASN registration data |
+| urlscan.io | URL, Domain | Yes | Sandbox scan verdict, screenshots, resolved infrastructure |
+| Google Safe Browsing | URL, Domain | Yes | Malware/phishing/unwanted-software matches |
+| Hybrid Analysis | SHA256 only | Yes | Threat score, AV detection percentage |
+| Spamhaus | IPv4, Domain | No | ZEN/DBL blocklist status |
+| PhishTank | URL | No (optional key raises rate limit) | Community-verified phishing URL status |
+| Censys | IPv4, IPv6 | Yes (PAT + org ID) | Open services, ASN, geo (Censys Platform API) |
+| Internet Intelligence Collector | Domain, IPv4, malware family, threat actor, campaign, CVE, file name | No | Free-text OSINT hits from GitHub, Reddit, RSS security news, and paste-dump search |
+
+Providers without a configured key or credential report `not_configured`
+rather than failing the lookup, so a fresh install still works with whatever
+keys you've added.
+
+### AI analysis
+
+The AI layer is backend-agnostic — six backends implement the same interface
+so the platform can switch between them without any branching in the calling
+code, including a fully local/self-hosted option with no API key and no
+cloud cost:
+
+| Backend | Requires API key | Notes |
+|---|---|---|
+| Ollama (local/self-hosted) | No — needs a reachable Ollama server | Live model discovery from your locally-pulled models |
+| Anthropic (Claude direct API) | Yes | Static fallback model list |
+| AWS Bedrock | Yes (bearer token or AWS access key+secret) | Static fallback model list |
+| Google Gemini | Yes | Static fallback model list |
+| Groq | Yes | Live model discovery via Groq's models API; default `llama-3.3-70b-versatile` |
+| OpenAI | Yes | Live model discovery via OpenAI's models API; default `gpt-4o-mini` |
+
+Every backend supports a live connection test with candidate (unpersisted)
+credentials before you save them, and the active backend can be switched
+platform-wide at runtime without a restart.
+
+### Executive dashboard
+
+The dashboard renders real, live-queried data — no hardcoded or mocked
+figures:
+
+- Seven KPI tiles backed by real SQL aggregations against the lookup, case,
+  provider-result, and final-assessment tables (active investigations,
+  critical/high-risk IOC count, open cases, open critical cases, average
+  threat score, provider health percentage, AI success rate).
+- An AI-written executive summary layered on the same KPI numbers, with a
+  template fallback (clearly badged) if AI generation is unavailable.
+- A provider-health widget showing per-provider status, success rate,
+  latency, and consecutive-failure counts over 1h/24h/7d/30d windows.
+
+### Admin and RBAC
+
+Three roles — Admin, Analyst, Viewer — enforced server-side via a FastAPI
+dependency on every gated route (not just declared in the UI):
+
+- **Admin**: everything Analyst has, plus provider management and user
+  management.
+- **Analyst**: create/write access — lookups, cases, security assessments,
+  and more.
+- **Viewer**: read-only access to lookups, evidence, cases, security
+  assessments, and the dashboard.
+
+User-management routes (create user, update user, roles, stats) require the
+`user:manage` permission, which only Admin holds; launching a Security
+Assessment scan requires `security_assessment:create`, which Admin and
+Analyst hold but Viewer does not.
+
+### Security Assessment Toolkit
+
+An active-scanning module (`backend/app/security_assessment/`) that runs
+real technical checks against a target — port/service scanning, DNS, TLS,
+HTTP-header inspection, and hash lookups — gated by a mandatory explicit
+authorization/scope confirmation per run. Findings feed through the same
+evidence/correlation/AI pipeline used by ordinary provider lookups, and a
+refresh re-runs the deterministic scoring engine using the new finding
+severities as a floor on the risk score.
+
+## Platform support
+
+| | Windows | Linux |
+|---|---|---|
+| Package format | Inno Setup installer (`.exe`) | `.deb` (Debian/Ubuntu) |
+| Distros/versions | Windows, 64-bit only | Debian 12, Ubuntu 22.04, Ubuntu 24.04 |
+| Setup flow | GUI wizard (admin account, AI backend, providers, ports, live connection tests) | Terminal wizard, same flow; supports `--non-interactive --answers-file` and `--dry-run` |
+| Runtime | Docker Compose (built on first `docker compose up --build`) | Docker Compose, managed via a systemd unit wrapping the `horizon-grid` CLI |
+| Code/package signing | Not code-signed — SmartScreen will warn; click "Run anyway" | Not signed (standard for `.deb` packages) |
+| Uninstall (keep data) | "Remove Application" — stops containers, no volume deletion | `apt remove horizon-grid` — stops containers, no volume deletion |
+| Uninstall (delete everything) | "Remove Everything" — requires typing `DELETE`; deletes volumes and all config/data | `apt purge horizon-grid` — force-removes containers/volumes and deletes all config/data |
+| Current version | 0.1.0 | 0.1.0 |
+
+## Architecture
+
+- **Backend**: FastAPI (Python), served under the `/api/v1` prefix.
+- **Frontend**: Next.js.
+- **Datastores**: PostgreSQL (primary store, including the correlation
+  graph), Redis (caching, background job queue), Neo4j and OpenSearch
+  (provisioned in `docker-compose.yml` for future graph/search use).
+- **Background processing**: Celery worker + Celery beat for scheduled OSINT
+  refresh jobs.
+- **Orchestration**: Docker Compose (`docker-compose.yml` for development,
+  `docker-compose.prod.yml` for production).
+
+## Installation / quick start
+
+### Docker Compose (development)
 
 ```bash
-# install Ollama (https://ollama.com) and pull a model that fits your GPU's
-# VRAM, e.g.:
-ollama pull llama3.2:3b
-
 cp .env.example .env
-# edit .env: add provider API keys you have, and set OLLAMA_MODEL to match
-# whatever you pulled above (see `ollama list`)
+# edit .env: add whichever provider/AI API keys you have
 docker compose up --build
 ```
 
 Frontend: http://localhost:3000
 Backend API docs: http://localhost:8000/docs
 
-No seed admin account exists — the **first** user you register (via the
-frontend `/register` page or `POST /api/v1/auth/register`) automatically
-becomes `admin`; every registration attempt after that is rejected with
-`403 Forbidden` (ask that admin to create your account from the
-Administration page instead). For the full
-zero-to-first-lookup walkthrough (including the exact `curl` commands and
-what each dashboard panel does as it streams in), see
-[docs/QUICKSTART.md](docs/QUICKSTART.md).
+### Windows installer
+
+Built from `windows/installer.iss` (Inno Setup). The compiled installer
+copies the application (backend, frontend, Docker Compose files) under
+Program Files, then launches `windows/wizard/Setup-Wizard.ps1` to configure
+the admin account, AI backend, providers, and network ports, testing each
+credential against the running backend before it's saved. Requires
+administrator privileges; 64-bit Windows only.
+
+### Linux package
+
+Built via `linux/build-deb.sh` (requires a Debian/Ubuntu host; produces
+`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.1.0_amd64.deb`).
+Install with `sudo dpkg -i horizon-grid_0.1.0_amd64.deb`, then run the
+terminal setup wizard as root to configure the admin account, AI backend,
+providers, and ports; the platform is then managed via the `horizon-grid`
+systemd-backed CLI (`start` / `stop` / `restart`).
 
 ## Documentation
 
-Full index and known gaps: [docs/DOCUMENTATION_GAPS.md](docs/DOCUMENTATION_GAPS.md)
-is the honest counterpart to every guide below — read it alongside any of
-these to know what's real vs. aspirational.
+Full documentation source lives under
+[`documentation/DOCUMENTATION_SOURCE/`](documentation/DOCUMENTATION_SOURCE/)
+as individual Markdown files (architecture, backend reference, provider and
+AI integration detail, runtime configuration, security architecture,
+background processing, deployment/troubleshooting, the Security Assessment
+Toolkit, and standalone per-platform guides for Windows and Linux). Built,
+distributable copies (PDF and DOCX) of the same material are under
+[`documentation/`](documentation/) — see `documentation/DOCUMENTATION_INDEX.md`
+for the full index.
 
-Prefer one file? [docs/IOC-Intelligence-Platform-Documentation.pdf](docs/IOC-Intelligence-Platform-Documentation.pdf)
-compiles every guide below (except screenshots) into a single 130+ page PDF.
+## Security
 
-### New user
-- [docs/QUICKSTART.md](docs/QUICKSTART.md) — zero-to-first-lookup walkthrough.
-- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — every dashboard panel and what it does.
-- [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) — real captures of every page (login, live investigation, basket, cases).
-- [docs/FAQ.md](docs/FAQ.md) / [docs/GLOSSARY.md](docs/GLOSSARY.md) — common questions and terminology.
+See [`SECURITY.md`](SECURITY.md) for how to report a vulnerability and known
+security-relevant limitations, and
+[`documentation/DOCUMENTATION_SOURCE/standalone-security.md`](documentation/DOCUMENTATION_SOURCE/standalone-security.md)
+for the auth/JWT model, RBAC enforcement, and secrets handling in more detail.
 
-### SOC analyst
-- [docs/SOC_ANALYST_GUIDE.md](docs/SOC_ANALYST_GUIDE.md) — day-to-day investigation SOP: triage, pivoting, basket, cases, hunting.
-- [docs/THREAT_INTELLIGENCE_GUIDE.md](docs/THREAT_INTELLIGENCE_GUIDE.md) — evidence quality, confidence scoring, and trust calibration.
-- [docs/IOC_TYPES.md](docs/IOC_TYPES.md) — every supported IOC type, detection behavior, and which providers accept it.
+## Testing
 
-### Administrator
-- [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) — role assignment, enabling providers, provider health checks.
-- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every `.env` / settings variable explained.
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Docker Compose and Kubernetes deployment reference.
+Backend (282 unit tests pass standalone, no infra required; the integration
+suite additionally requires either a running Docker Compose stack or the
+host-published Postgres/Redis ports, and a subset is designed to run inside
+the backend container):
 
-### Developer
-- [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) — local dev setup, code layout, adding a provider or route.
-- [docs/API_DOCUMENTATION.md](docs/API_DOCUMENTATION.md) — full REST/SSE reference (canonical; supersedes the older `docs/API.md`).
-- [docs/DATA_MODEL.md](docs/DATA_MODEL.md) — schema, ERD, and migration history.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design, component and sequence diagrams.
-- [docs/PROVIDERS.md](docs/PROVIDERS.md) / [docs/AI_ENGINE.md](docs/AI_ENGINE.md) — connector-by-connector and AI-prompting detail.
-- [docs/TESTING.md](docs/TESTING.md) — how to run the test suite and known local-run gotchas.
+```bash
+cd backend
+pip install -r requirements.txt
+python -m pytest app/tests/unit -v      # 282 passed, no infra required
+python -m pytest app/tests -v           # full suite, requires DB/Redis
+```
 
-### Security
-- [docs/SECURITY.md](docs/SECURITY.md) — auth/JWT model, RBAC, rate limiting, secrets handling, and known gaps to close before production.
+Frontend:
 
-### Other references
-- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — symptom → cause → fix.
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) — snapshot of what's implemented as of the current source tree.
-- [docs/API.md](docs/API.md) / [docs/INSTALL.md](docs/INSTALL.md) — earlier drafts, kept for history; superseded by API_DOCUMENTATION.md / QUICKSTART.md + DEPLOYMENT.md respectively.
+```bash
+cd frontend
+npm ci
+npm run lint
+npm run build
+```
 
-## Scope of this build
+`npm test` (vitest) is wired up in `frontend/package.json`, but no test
+files exist yet under `frontend/app`, `frontend/components`, or
+`frontend/lib` — this is a placeholder, not a passing suite.
 
-This is a full vertical-slice scaffold:
+## License
 
-- **Every module exists**: frontend, backend, plugin-based provider connectors,
-  correlation engine, OSINT crawler, AI service, auth/RBAC, background workers,
-  Postgres/Redis/Neo4j/OpenSearch, Docker Compose, K8s manifests, tests.
-- **Real, working connectors** for free/no-key sources: VirusTotal (public API),
-  AbuseIPDB, AlienVault OTX, URLHaus, ThreatFox, MalwareBazaar, crt.sh, NVD,
-  CISA KEV, MITRE ATT&CK/CAPEC/CWE, WHOIS/RDAP.
-- **Stubbed plugins** (implement the same `BaseProvider` interface) for
-  Hybrid Analysis, Spamhaus, PhishTank, Censys. Spamhaus and PhishTank work
-  out of the box with no key (`configured = True` unconditionally; PhishTank
-  accepts an optional key for higher rate limits). Hybrid Analysis and Censys
-  compute `configured` from `.env` — add `HYBRID_ANALYSIS_API_KEY`, or both
-  `CENSYS_PERSONAL_ACCESS_TOKEN` and `CENSYS_ORGANIZATION_ID`, to activate
-  them. Adding a new provider is a two-line change in
-  `app/providers/registry.py`.
-- **End-to-end depth** on IPv4/IPv6, Domain, URL, and file-hash IOC types
-  (detection → parallel fetch → correlation → AI summaries → final verdict →
-  dashboard). Other IOC types in the enum route through the same pipeline;
-  they light up automatically as matching providers/plugins are added.
-- **Known, documented gaps**: server-side PDF/CSV export, admin/user-management
-  UI, MFA, password reset, and a Neo4j/OpenSearch graph/search mirror are all
-  provisioned or scaffolded but **not implemented** — see
-  [docs/DOCUMENTATION_GAPS.md](docs/DOCUMENTATION_GAPS.md) for the full audit.
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See
+[LICENSE](LICENSE) for the full text.

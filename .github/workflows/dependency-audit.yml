@@ -1,0 +1,39 @@
+name: Dependency Audit
+
+# Scheduled weekly dependency vulnerability scan (backend via pip-audit,
+# frontend via npm audit), plus manual trigger. Both audit steps are
+# continue-on-error so this reports findings without failing the workflow
+# over transitive advisories that may have no available fix.
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # every Monday at 03:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: pip-audit (backend)
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r backend/requirements.txt
+
+      - name: npm audit (frontend)
+        working-directory: frontend
+        continue-on-error: true
+        run: npm audit --audit-level=high

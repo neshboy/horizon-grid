@@ -1,0 +1,92 @@
+name: Backend Tests
+
+# Two jobs, split because the backend integration suite is designed to run
+# two different ways (per backend/app/tests/integration/*.py docstrings), not
+# uniformly:
+#   - app/tests/unit (282 passing): fully self-contained, no infra. Runs here
+#     directly on the bare runner -- this is the required, always-green check.
+#   - app/tests/integration/test_api_health.py: no DB needed either, runs here too.
+#   - 5 integration files: connect to DB host "postgres" directly (no skip
+#     guard) -- only resolvable inside the real docker-compose network, so
+#     they run via "docker compose exec backend pytest ..." in the second job,
+#     exactly as their own docstrings document.
+#   - 6 integration files: skipif-guarded on host-published localhost:5433/6379
+#     being reachable -- these will SKIP (not fail) in the second job too,
+#     since inside the backend container "localhost" is the container itself,
+#     not the compose host; that's an accepted, non-fatal skip, not a bug
+#     introduced by this workflow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/**"
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run unit tests
+        working-directory: backend
+        run: python -m pytest app/tests/unit app/tests/integration/test_api_health.py -v
+
+  integration-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Write throwaway .env for CI
+        # docker-compose.yml's backend/celery services use "env_file: .env"
+        # unconditionally -- Compose errors out if the file doesn't exist at
+        # all, even though every other setting has a ${VAR:-default}
+        # fallback. Real secrets are never used here; AI_BACKEND stays on
+        # ollama with an unreachable URL, which is fine since these tests
+        # don't exercise a real AI call.
+        run: |
+          cat > .env << 'EOF'
+          JWT_SECRET_KEY=ci-only-throwaway-secret-not-used-anywhere-real
+          POSTGRES_USER=ioc
+          POSTGRES_PASSWORD=ci-only-throwaway-password
+          POSTGRES_DB=ioc_intel
+          NEO4J_PASSWORD=ci-only-throwaway-password
+          AI_BACKEND=ollama
+          OLLAMA_BASE_URL=http://host.docker.internal:11434
+          OLLAMA_MODEL=llama3.2:3b
+          EOF
+
+      - name: Build and start the real stack
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo 000)
+            if [ "$code" = "200" ]; then echo "backend healthy"; exit 0; fi
+            sleep 5
+          done
+          echo "backend never became healthy" >&2
+          docker compose logs backend --tail=200
+          exit 1
+
+      - name: Run integration suite inside the backend container
+        run: docker compose exec -T backend python -m pytest app/tests/integration -v
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml down -v

@@ -1,0 +1,44 @@
+name: Frontend Build
+
+# Runs lint + build on changes under frontend/**.
+#
+# NOTE: there is no real frontend test suite yet. "test": "vitest run" is wired
+# up in frontend/package.json and vitest is a devDependency, but zero
+# *.test.ts(x)/*.spec.ts(x) files exist under frontend/app, frontend/components,
+# or frontend/lib, and there is no vitest.config.*. Running "npm test" today
+# would just fail/error with "No test files found", so it is deliberately not
+# invoked here. This job only does install + lint + build.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "frontend/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build

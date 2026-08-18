@@ -42,7 +42,7 @@ export function NetworkAccessPanel() {
         </div>
         <div>
           <p className="text-xs text-muted-foreground">
-            From another device on this network (detected during setup — re-run "Configuration" from the Start
+            From another device on this network (detected during setup — re-run &ldquo;Configuration&rdquo; from the Start
             Menu if your network has changed)
           </p>
           {lanUrl ? (
@@ -54,7 +54,7 @@ export function NetworkAccessPanel() {
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Not detected. Run "Configuration" from the Start Menu to detect it.
+              Not detected. Run &ldquo;Configuration&rdquo; from the Start Menu to detect it.
             </p>
           )}
         </div>
