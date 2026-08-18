@@ -75,11 +75,19 @@ IMPLEMENTED.**
 ## Running the backend tests
 
 Start the infra the integration tests need (skip this if you only want unit tests + the
-health-check integration test):
+health-check integration test), **then apply migrations** -- `postgres`/`redis` alone give you
+an empty schema; migrations normally only run automatically when the `backend` service itself
+starts, which you haven't started here:
 
 ```bash
 docker compose up -d postgres redis
+cd backend
+DATABASE_URL=postgresql+asyncpg://ioc:ioc@localhost:5433/ioc_intel .venv_test/Scripts/python -m alembic upgrade head
 ```
+
+Skipping the migration step doesn't make tests skip -- it makes several of them fail with
+`relation "users" does not exist` (or similar), which looks like an application bug but is just
+a missing setup step.
 
 Run the full suite from `backend/`:
 
@@ -125,23 +133,33 @@ suite.
 
 ## Things to know (Windows-specific gotchas)
 
-Two separate backend virtualenvs exist in this repo (`backend/.venv` and
-`backend/.venv_test`) with drifted dependency versions relative to what
-`backend/requirements.txt` pins. Which one is the "intended" environment for running tests is
-not documented anywhere in the repo; the drift itself is what causes gotcha 1 below.
+**Update (backend test root-cause investigation):** this repo used to have two divergent
+backend virtualenvs, `backend/.venv` and `backend/.venv_test`, with neither documented as "the"
+canonical one -- exactly the kind of ambient drift that made tests pass or fail depending on
+which one happened to be active, and made a full delete-and-reinstall look like a fix (a fresh
+install naturally created one venv correctly resolved from `requirements.txt`, sidestepping the
+inconsistency rather than fixing it). `backend/.venv` was the broken one (missing `cryptography`
+entirely, causing a deterministic `ModuleNotFoundError` on collection, on top of being drifted
+to unpinned, much newer package versions across the board -- e.g. `fastapi==0.141.1` instead of
+the pinned `0.115.0`) and has been deleted. **`backend/.venv_test` is the one canonical backend
+virtualenv for this repo.** Set it up with:
 
-| Venv | pytest | pytest-asyncio | bcrypt | asyncpg |
-|---|---|---|---|---|
-| `backend/requirements.txt` (pinned) | 8.3.3 | 0.24.0 | 4.0.1 | 0.29.0 |
-| `backend/.venv` | 9.1.1 | 1.4.0 | 4.0.1 | 0.31.0 |
-| `backend/.venv_test` | 8.3.3 | 0.24.0 | 5.0.0 | 0.30.0 |
+```bash
+cd backend
+python -m venv .venv_test
+.venv_test/Scripts/pip install -r requirements.txt   # Windows
+# .venv_test/bin/pip install -r requirements.txt     # macOS/Linux
+```
 
-### Gotcha 1: bcrypt/passlib version mismatch breaks password hashing
+See `BACKEND_TEST_ROOT_CAUSE_REPORT.md` at the repo root for the full investigation.
+
+### Historical: bcrypt/passlib version mismatch breaks password hashing
 
 `app/auth/security.py` builds its password context with
 `CryptContext(schemes=["bcrypt"], deprecated="auto")` via passlib 1.7.4. If your environment
-has `bcrypt>=4.1` (confirmed reproduced with `bcrypt==5.0.0` in `backend/.venv_test`), calling
-`ctx.hash()` fails:
+ever has `bcrypt>=4.1` (this was previously reproduced with a stray `bcrypt==5.0.0` in
+`backend/.venv_test`, since fixed by reinstalling exactly `requirements.txt`'s pinned
+`bcrypt==4.0.1`), calling `ctx.hash()` fails:
 
 - passlib's bcrypt handler reads `_bcrypt.__about__.__version__` to detect the bcrypt version.
   `bcrypt>=4.1` no longer exposes `__about__`, so this raises
@@ -151,10 +169,8 @@ has `bcrypt>=4.1` (confirmed reproduced with `bcrypt==5.0.0` in `backend/.venv_t
   check and fails with `ValueError: password cannot be longer than 72 bytes, truncate
   manually if necessary`.
 
-This was reproduced by directly invoking passlib's `CryptContext.hash()` inside
-`.venv_test`'s Python -- it does **not** reproduce in `backend/.venv`, which pins
-`bcrypt==4.0.1`. If any test in your environment starts failing with either error above,
-check `pip show bcrypt` and pin it to `4.0.1` to match `requirements.txt`.
+If any test in your environment starts failing with either error above, check `pip show bcrypt`
+and pin it to `4.0.1` to match `requirements.txt`.
 
 ### Gotcha 2: "Event loop is closed" from Postgres/Redis connection pools
 
