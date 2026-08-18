@@ -1,5 +1,9 @@
 name: Frontend Build
 
+# Least-privilege: read-only, this job never pushes or modifies the repo.
+permissions:
+  contents: read
+
 # Runs lint + build on changes under frontend/**.
 #
 # NOTE: there is no real frontend test suite yet. "test": "vitest run" is wired

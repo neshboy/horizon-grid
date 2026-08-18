@@ -131,6 +131,27 @@ app.include_router(security_assessment.router, prefix=settings.api_v1_prefix)
 app.include_router(dashboard.router, prefix=settings.api_v1_prefix)
 
 
+_KNOWN_PLACEHOLDER_JWT_SECRETS = {"change-me-in-production", "replace-with-a-long-random-string"}
+
+
+@app.on_event("startup")
+async def _warn_if_jwt_secret_is_a_placeholder() -> None:
+    """.env.example ships a literal placeholder (not the Settings field's own
+    Python-level default -- the two strings differ, so a check against only
+    one would miss someone who copies .env.example verbatim, which the
+    README's quick-start does not explicitly warn against). Every JWT this
+    process issues is only as strong as this value, so a fresh install that
+    never got past copy-pasting the example file should say so loudly rather
+    than silently issue forgeable tokens."""
+    if settings.jwt_secret_key in _KNOWN_PLACEHOLDER_JWT_SECRETS:
+        logging.getLogger(__name__).warning(
+            "JWT_SECRET_KEY is still set to the placeholder value from .env.example. "
+            "Every access/refresh token this server issues can be forged by anyone who "
+            "knows this default. Generate a real random secret and set it in .env before "
+            "exposing this instance to anything but localhost."
+        )
+
+
 @app.on_event("startup")
 async def _seed_runtime_config() -> None:
     """Populates provider_runtime_configs from the current .env-derived

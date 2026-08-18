@@ -3,11 +3,18 @@
 # configured in the running container's own environment -- the value is
 # read via docker exec into a shell variable and never typed, echoed, or
 # logged by this script.
+#
+# Requires TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD in the environment,
+# matching an existing account on the instance you're pointing this at --
+# no credential is hardcoded here.
 set -u
+
+: "${TEST_ADMIN_EMAIL:?Set TEST_ADMIN_EMAIL to an existing account's email first}"
+: "${TEST_ADMIN_PASSWORD:?Set TEST_ADMIN_PASSWORD to that account's password first}"
 
 TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"final-admin@example.com","password":"FinalTestPass123!"}' \
+  -d "{\"email\":\"$TEST_ADMIN_EMAIL\",\"password\":\"$TEST_ADMIN_PASSWORD\"}" \
   | node -e "process.stdin.on('data', d => console.log(JSON.parse(d).access_token))")
 echo "Token acquired: ${#TOKEN} chars"
 

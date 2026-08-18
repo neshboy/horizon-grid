@@ -1,5 +1,10 @@
 name: Dependency Audit
 
+# Least-privilege: read-only, this job only runs audit tools and prints
+# their output to the log -- it never opens issues/PRs or writes to the repo.
+permissions:
+  contents: read
+
 # Scheduled weekly dependency vulnerability scan (backend via pip-audit,
 # frontend via npm audit), plus manual trigger. Both audit steps are
 # continue-on-error so this reports findings without failing the workflow

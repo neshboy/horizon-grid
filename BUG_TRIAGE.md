@@ -43,7 +43,7 @@ BUG-055 through BUG-060 come from a final, unscripted adversarial red-team round
 | [BUG-029](#bug-029-qatest-disposable-email-domain-is-rejected-by-authlogin-and-authregister-with-http-422) | P4 | @qa.test disposable email domain is rejected by /auth/login and /auth/register with HTTP 422 | OPEN (disclosed, not fixed) |
 | [BUG-030](#bug-030-weak-hardcoded-default-datastore-credentials-are-actually-in-effect-on-the-live-postgres-container) | P2 | Weak, hardcoded default datastore credentials are actually in effect on the live Postgres container | OPEN (disclosed, not fixed) |
 | [BUG-031](#bug-031-insecure-hardcoded-fallback-jwt-signing-secret-ships-in-source-secret-scan-finding) | P3 | Insecure hardcoded fallback JWT signing secret ships in source (secret-scan finding) | OPEN (disclosed, not fixed) |
-| [BUG-032](#bug-032-hardcoded-plaintext-adminanalyst-passwords-committed-in-documentation-walkthrough-scripts) | P3 | Hardcoded plaintext admin/analyst passwords committed in documentation walkthrough scripts | OPEN (disclosed, not fixed) |
+| [BUG-032](#bug-032-hardcoded-plaintext-adminanalyst-passwords-committed-in-documentation-walkthrough-scripts) | P3 | Hardcoded plaintext admin/analyst passwords committed in documentation walkthrough scripts | FIXED (see Update note) |
 | [BUG-033](#bug-033-frontend-pins-next14215-which-has-30-confirmed-advisories-including-a-critical-middleware-auth-bypass) | P2 | Frontend pins next==14.2.15, which has 30 confirmed advisories including a critical middleware auth-bypass | OPEN (disclosed, not fixed) |
 | [BUG-034](#bug-034-backend-pins-cryptography4301-which-has-11-advisories-in-certificate-validation-logic) | P2 | Backend pins cryptography==43.0.1, which has 11 advisories in certificate-validation logic | OPEN (disclosed, not fixed) |
 | [BUG-035](#bug-035-fastapi-pulls-in-starlette-0386-unpinned-transitive-which-has-14-advisories) | P3 | fastapi pulls in starlette 0.38.6 (unpinned, transitive), which has 14 advisories | OPEN (disclosed, not fixed) |
@@ -486,12 +486,19 @@ BUG-055 through BUG-060 come from a final, unscripted adversarial red-team round
 - **Component:** `documentation/build/walkthrough.js` lines 16-17; `documentation/build/walkthrough-admin.js` lines 14-15; `documentation/build/walkthrough-secassess.js` lines 13-14
 - **Reproduction:** Read the three files at the line numbers above. Cross-check current DB state with `docker exec app-postgres-1 psql -U ioc -d ioc_intel -c "SELECT email FROM users;"` to confirm no matching live account exists today.
 - **Expected:** Documentation/automation scripts should not commit real plaintext passwords for accounts that were ever created against the live application.
-- **Actual:** `walkthrough.js` hardcodes `ADMIN_EMAIL = 'final-admin@example.com'` / `ADMIN_PASSWORD = 'FinalTestPass123!'`; `walkthrough-admin.js` hardcodes `ADMIN_EMAIL = 'docs-walkthrough-admin@example.com'` / `ADMIN_PASSWORD = 'WalkthroughQA-2026!'`; `walkthrough-secassess.js` hardcodes `ANALYST_EMAIL = 'secassess-walkthrough@example.com'` / `ANALYST_PASSWORD = 'WalkthroughQA-2026!'`. These scripts only type credentials into the live login form (no self-registration), meaning the accounts were manually created against the real running app at some point with these exact plaintext passwords.
+- **Actual:** `walkthrough.js` hardcodes `ADMIN_EMAIL = 'final-admin@example.com'` / `ADMIN_PASSWORD = '[REDACTED-test-password]'`; `walkthrough-admin.js` hardcodes `ADMIN_EMAIL = 'docs-walkthrough-admin@example.com'` / `ADMIN_PASSWORD = '[REDACTED-test-password]'`; `walkthrough-secassess.js` hardcodes `ANALYST_EMAIL = 'secassess-walkthrough@example.com'` / `ANALYST_PASSWORD = '[REDACTED-test-password]'`. These scripts only type credentials into the live login form (no self-registration), meaning the accounts were manually created against the real running app at some point with these exact plaintext passwords.
 - **Root Cause:** None of the three emails currently exist in the users table (18 total users, none matching), so there is no immediately exploitable live account right now, but the plaintext passwords remain permanently readable in the dev tree and would become live credentials again the moment any of these accounts is recreated with a matching password.
-- **Evidence:** `walkthrough.js:17`: `const ADMIN_PASSWORD = 'FinalTestPass123!';`. `walkthrough-admin.js:15` / `walkthrough-secassess.js:14`: `const ...PASSWORD = 'WalkthroughQA-2026!';`. `SELECT email,role FROM users;` lists 18 users, none matching the three emails above.
+- **Evidence:** `walkthrough.js:17`: `const ADMIN_PASSWORD = '[REDACTED-test-password]';`. `walkthrough-admin.js:15` / `walkthrough-secassess.js:14`: `const ...PASSWORD = '[REDACTED-test-password]';`. `SELECT email,role FROM users;` lists 18 users, none matching the three emails above.
 - **Fix:** Not fixed — no remediation performed in this QA cycle; disclosed for remediation.
 - **Regression Test:** None added.
 - **Status:** OPEN (disclosed, not fixed)
+- **Update (GitHub repo hardening pass):** Fixed. All three scripts now read
+  `WALKTHROUGH_ADMIN_EMAIL`/`WALKTHROUGH_ADMIN_PASSWORD` (or
+  `WALKTHROUGH_ANALYST_EMAIL`/`WALKTHROUGH_ANALYST_PASSWORD`) from the
+  environment and refuse to run if unset, instead of hardcoding a literal
+  account/password. The specific password values quoted above have also
+  been redacted from this file, since a real (if never-since-recreated)
+  account was created against the live app with them.
 
 ### BUG-033: Frontend pins next==14.2.15, which has 30 confirmed advisories including a critical middleware auth-bypass
 

@@ -72,12 +72,24 @@ inspection:
 - **Dependency vulnerabilities exist; some have been fixed, some remain
   open by design.** A `pip-audit` run against `backend/requirements.txt`
   originally found 32 known advisories across 7 packages. `python-jose`
-  (→3.4.0), `cryptography` (→49.0.0), and `python-multipart` (→0.0.31) have
-  since been upgraded in place, closing those advisories with the full unit
-  suite re-verified green (282 passed) afterward. `starlette` and `lxml`
-  remain on their original versions: `starlette` is a transitive dependency
-  of `fastapi==0.115.0` and cannot be bumped to a patched release without
-  also bumping FastAPI itself (a coordinated framework upgrade, deliberately
+  (→3.4.0) and `python-multipart` (→0.0.31) have been upgraded in place,
+  closing those advisories. `cryptography` was first bumped to 49.0.0, but
+  a follow-up independent audit caught that 49.0.0 itself had a newly
+  disclosed high-severity advisory (CVE-2026-69247, a PKCS7 Bleichenbacher
+  oracle) — it has since been bumped again to 50.0.0, which is clean. That
+  same follow-up audit also caught `pyasn1` (a transitive dependency pulled
+  in by `python-jose`, not previously tracked here at all) sitting on
+  0.4.8 with 4 high-severity DoS advisories; it's now pinned directly at
+  0.6.4. `python-jose==3.4.0` declares `pyasn1<0.5.0,>=0.4.1`, so this pin
+  is technically outside its declared range — verified safe anyway because
+  this app only signs/verifies JWTs with HS256 (a shared-secret scheme that
+  never touches pyasn1's ASN.1/DER code path at all; that path is only
+  reachable for RSA/EC-based JWT algorithms, which this app doesn't use),
+  confirmed via a direct `jose.jwt.encode`/`decode` round trip and the full
+  unit suite (282 passed) after the bump. `starlette` and `lxml` remain on
+  their original versions: `starlette` is a transitive dependency of
+  `fastapi==0.115.0` and cannot be bumped to a patched release without also
+  bumping FastAPI itself (a coordinated framework upgrade, deliberately
   deferred pending its own regression pass rather than done blindly);
   `pytest`'s patched release is a major-version bump for a dev-only tool,
   also deferred pending a dedicated pass; `ecdsa` has no fix published
@@ -91,8 +103,15 @@ inspection:
   14→16 major-version bump, which is a real breaking-change risk for a
   production Next.js app with no existing frontend test suite to catch
   regressions — deliberately deferred to its own tested upgrade pass rather
-  than done blindly. These are dependency-level findings, not confirmed
-  exploitable paths in this application's own code.
+  than done blindly. (`next`'s own advisory severity has since escalated to
+  critical in npm's scoring as newer Next.js CVEs were published — the
+  deferral reasoning is unchanged, but this is a real, growing risk, not a
+  static one; re-audit before treating "deferred" as "fine indefinitely.")
+  These are dependency-level findings, not confirmed exploitable paths in
+  this application's own code. Because a brand-new advisory against a
+  package we'd just called "fixed" surfaced within the same day, treat any
+  "closed" dependency finding as time-stamped, not permanent — re-run
+  `pip-audit`/`npm audit` regularly, not just once.
 - **Installers are not code-signed.** The Windows installer
   (`HORIZON-GRID-Setup-0.1.0.exe`) is explicitly unsigned — this is
   documented plainly in the release notes — so Windows SmartScreen will warn

@@ -72,7 +72,7 @@ instead of a cloud AI API.
   as a fact in its prompt, and the backend mechanically overwrites the AI's
   own risk numbers with the scoring engine's output before persisting, so the
   score displayed is always the deterministic one.
-- Covered by a 37-test unit suite (`backend/app/tests/unit/test_scoring_engine.py`)
+- Covered by a 22-test unit suite (`backend/app/tests/unit/test_scoring_engine.py`)
   exercising corroboration weighting, conflicting-verdict confidence collapse,
   and severity banding.
 
@@ -198,7 +198,11 @@ severities as a floor on the risk score.
 
 ```bash
 cp .env.example .env
-# edit .env: add whichever provider/AI API keys you have
+# edit .env:
+#  - REQUIRED: replace JWT_SECRET_KEY with a real random value, e.g.
+#    `openssl rand -hex 32` -- the app will boot and log a warning if you
+#    skip this, but every token it issues is forgeable until you don't.
+#  - add whichever provider/AI API keys you have
 docker compose up --build
 ```
 

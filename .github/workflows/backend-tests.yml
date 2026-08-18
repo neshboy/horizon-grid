@@ -1,5 +1,11 @@
 name: Backend Tests
 
+# Least-privilege: this workflow only reads code and runs tests -- it never
+# pushes, comments, or touches releases/packages, so it gets nothing beyond
+# read access to repo contents.
+permissions:
+  contents: read
+
 # Two jobs, split because the backend integration suite is designed to run
 # two different ways (per backend/app/tests/integration/*.py docstrings), not
 # uniformly:
