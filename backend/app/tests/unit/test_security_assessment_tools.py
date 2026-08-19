@@ -55,8 +55,16 @@ async def test_nmap_adds_the_dash_6_flag_for_an_ipv6_target():
     warning to stderr, and exits 0 having scanned 0 hosts -- confirmed live
     to be silently reported as a normal "completed, 0 findings" result,
     indistinguishable from a genuine clean scan, even though
-    NmapTool.supported_types has always claimed IPv6 support."""
-    with patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
+    NmapTool.supported_types has always claimed IPv6 support.
+
+    is_available() is mocked too (not just create_subprocess_exec): this
+    test must not depend on the real environment actually having the nmap
+    binary installed -- confirmed live to fail exactly this way in CI's
+    bare "unit" job runner (no Docker image, no apt-installed nmap), where
+    is_available() genuinely returns False and the code returns before ever
+    reaching create_subprocess_exec, leaving the mock uncalled."""
+    with patch("app.security_assessment.nmap_tool.NmapTool.is_available", new=AsyncMock(return_value=True)), \
+         patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
         await nmap_tool.run("::1", IOCType.IPV6, "quick")
     argv = mock_exec.call_args.args
     assert "-6" in argv, f"expected -6 in argv for an IPv6 target, got: {argv}"
@@ -64,7 +72,8 @@ async def test_nmap_adds_the_dash_6_flag_for_an_ipv6_target():
 
 @pytest.mark.asyncio
 async def test_nmap_does_not_add_the_dash_6_flag_for_an_ipv4_target():
-    with patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
+    with patch("app.security_assessment.nmap_tool.NmapTool.is_available", new=AsyncMock(return_value=True)), \
+         patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
         await nmap_tool.run("127.0.0.1", IOCType.IPV4, "quick")
     argv = mock_exec.call_args.args
     assert "-6" not in argv, f"-6 should never be added for a non-IPv6 target, got: {argv}"
