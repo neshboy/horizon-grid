@@ -104,12 +104,23 @@ async def cancel_run(run_id: uuid.UUID, actor_user_id: Optional[uuid.UUID], acto
 
     task = _run_tasks.get(run_id)
     if task is not None and not task.done():
+        logger.info("Security assessment run %s cancellation requested by %r (target=%r)", run_id, actor_email, target)
         task.cancel()
         # Deliberately not awaited here -- the task's own cancellation
         # handling (in _execute_run's except branch below) does the actual
-        # DB status update and subprocess cleanup asynchronously. Awaiting it
-        # here would block this HTTP response on that cleanup completing,
-        # which defeats the point of cancel being an immediate action.
+        # DB status update, subprocess cleanup, and audit write
+        # asynchronously. Awaiting it here would block this HTTP response on
+        # that cleanup completing, which defeats the point of cancel being an
+        # immediate action -- and NOT writing a second audit event here
+        # avoids double-logging a single cancellation: two concurrent cancel
+        # requests for the same run can both reach this branch (the read
+        # above and task.cancel() below aren't atomic), and task.cancel() on
+        # an already-cancelling task is a harmless no-op, but each caller
+        # writing its own "requested" audit row made one real cancellation
+        # look like two in the log -- confirmed live via a genuine race test.
+        # _execute_run's handler runs exactly once per task no matter how
+        # many times cancel() is called on it, so it's the single source of
+        # truth for "this run was actually cancelled."
     else:
         # The task isn't tracked in THIS process -- most likely the backend
         # restarted after the run was spawned (see Phase 15 of the port-
@@ -117,22 +128,26 @@ async def cancel_run(run_id: uuid.UUID, actor_user_id: Optional[uuid.UUID], acto
         # "running"-forever row with no way to ever resolve it). Mark it
         # cancelled directly rather than leaving it stuck; there is no live
         # process to kill since this process never spawned one for this run.
+        # Nothing else will ever run _execute_run's cleanup for this run in
+        # this scenario, so this branch is the one and only place that must
+        # write the audit record.
         async with new_session() as db:
-            await db.execute(
+            result = await db.execute(
                 update(SecurityAssessmentRun)
                 .where(SecurityAssessmentRun.id == run_id)
                 .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
                 .values(status=SecurityAssessmentRunStatus.CANCELLED, completed_at=datetime.now(timezone.utc))
             )
             await db.commit()
+        if result.rowcount:
+            logger.info("Security assessment run %s cancelled directly (no live task in this process, target=%r)", run_id, target)
+            await record_audit(
+                "security_assessment.run_cancelled",
+                f"Cancelled a security assessment run against '{target}'.",
+                actor_user_id,
+                actor_email,
+            )
 
-    logger.info("Security assessment run %s cancellation requested by %r (target=%r)", run_id, actor_email, target)
-    await record_audit(
-        "security_assessment.run_cancelled",
-        f"Cancelled a security assessment run against '{target}'.",
-        actor_user_id,
-        actor_email,
-    )
     return {"run_id": str(run_id), "status": "cancelling"}
 
 

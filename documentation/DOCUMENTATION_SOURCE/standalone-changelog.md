@@ -11,6 +11,7 @@ All notable changes for the HORIZON GRID release are listed below, grouped by ar
 - A real database-migration bug was caught by a genuinely failing test before release, not assumed correct: the new `CANCELLED` status value was initially added to the database enum in lowercase, not matching the existing uppercase convention already used by every other status in that column — corrected and re-verified against a real Postgres instance.
 - Cancellation follows the same team-shared-resource permission model as starting a scan (`security_assessment:create` — any admin or analyst, not only the run's original requester); a VIEWER-role account is correctly blocked with `403`.
 - 5 new integration tests cover in-flight cancellation (using a deliberately slow scan so the cancellation genuinely lands mid-flight, not after the scan has already finished), the backend-restart-orphan case, rejecting a cancel on an already-finished run, an unknown run id, and RBAC enforcement.
+- A follow-up adversarial pass (racing two concurrent cancel requests for the same run) found a real, low-severity issue: both requests could each write their own `run_cancelled` audit-log entry for what was really one cancellation. Fixed by making the run's own background task the single source of truth for that audit record; a request that arrives after the run is already resolving no longer writes a redundant one. Confirmed live, before and after, by directly querying the audit table during a real concurrent-cancel race.
 
 ## v0.2.0 — AI provider ecosystem expansion
 

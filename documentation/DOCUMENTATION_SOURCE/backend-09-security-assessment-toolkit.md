@@ -173,6 +173,20 @@ It loads the run, rejects with `RunNotCancellableError` if it's already `COMPLET
   directly. Without this branch, a run orphaned by a restart could never be cancelled at all, since
   there would be no live task to `.cancel()`.
 
+**Exactly one audit record per cancellation, even under a real race.** `cancel_run()`'s initial
+status check and its `task.cancel()` call are not atomic, so two concurrent cancel requests for the
+same run can both read `RUNNING` and both proceed — confirmed live via a genuine concurrent-request
+test. This is harmless on the `asyncio.Task` side (`.cancel()` on an already-cancelling task is a
+no-op), but the live-task branch deliberately does **not** write its own `record_audit()` call for
+this reason: only `_execute_run()`'s `except asyncio.CancelledError` handler does, and that handler
+runs exactly once per task no matter how many times `.cancel()` was called on it, making it the
+single source of truth. The direct-DB-write branch (no live task, e.g. post-restart) is the only
+place that *does* write its own audit record — nothing else will ever run for that run — and even
+there the `UPDATE ... WHERE status IN (...)` is checked via `result.rowcount` before writing, so two
+concurrent requests hitting that branch for the same run still produce only one audit entry, not
+two. Verified live, before and after, by querying `config_audit_log` directly during a real
+concurrent-cancel race.
+
 **Why a dedicated `except asyncio.CancelledError` branch is mandatory, not stylistic.** Since Python
 3.8, `asyncio.CancelledError` inherits from `BaseException`, not `Exception` — the pre-existing
 generic `except Exception as exc:` branch in `_execute_run()` silently does not catch it. Without an
