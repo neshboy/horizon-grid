@@ -445,7 +445,7 @@ export interface RolePermissions {
 // --- Security Assessment Toolkit (mirrors backend/app/schemas/security_assessment.py) ---
 
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
-export type SecurityAssessmentRunStatus = "pending" | "running" | "completed" | "failed";
+export type SecurityAssessmentRunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export interface ToolProfile {
   tool_id: string;

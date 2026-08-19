@@ -113,6 +113,16 @@ class NmapTool(SecurityAssessmentTool):
                 return self._error(
                     target, ioc_type, ProviderStatus.TIMEOUT, f"Scan exceeded {_TIMEOUT_SECONDS}s and was stopped."
                 )
+            except asyncio.CancelledError:
+                # A user-initiated cancel (app/core/security_assessment.py's
+                # cancel_run()) cancels the asyncio.Task awaiting this
+                # coroutine, which surfaces here as CancelledError at this
+                # exact await point. Without killing the real OS process
+                # explicitly, it would keep running as an orphan -- nmap
+                # itself has no idea its caller stopped waiting on it.
+                proc.kill()
+                await proc.wait()
+                raise
         except FileNotFoundError:
             return self._error(target, ioc_type, ProviderStatus.ERROR, "nmap is not installed on this host.")
 

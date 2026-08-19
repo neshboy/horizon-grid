@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
+  cancelSecurityAssessmentRun,
   getCurrentUser,
   getSecurityAssessmentProfiles,
   getSecurityAssessmentToolHealth,
@@ -68,6 +69,7 @@ export function SecurityAssessmentPanel({ lookupId, iocValue, iocType }: Securit
   const [targetConfirmation, setTargetConfirmation] = React.useState("");
   const [authorizationConfirmed, setAuthorizationConfirmed] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
+  const [cancellingRunId, setCancellingRunId] = React.useState<string | null>(null);
   const [activeFinding, setActiveFinding] = React.useState<SecurityAssessmentFinding | null>(null);
 
   const refreshRuns = React.useCallback(() => {
@@ -150,6 +152,19 @@ export function SecurityAssessmentPanel({ lookupId, iocValue, iocType }: Securit
       setError(err instanceof Error ? err.message : "Failed to start security assessment");
     } finally {
       setStarting(false);
+    }
+  };
+
+  const handleCancel = async (runId: string) => {
+    setCancellingRunId(runId);
+    setError(null);
+    try {
+      await cancelSecurityAssessmentRun(runId);
+      refreshRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel security assessment run");
+    } finally {
+      setCancellingRunId(null);
     }
   };
 
@@ -246,11 +261,36 @@ export function SecurityAssessmentPanel({ lookupId, iocValue, iocType }: Securit
                 <span className="text-xs text-muted-foreground">
                   {new Date(run.authorization_confirmed_at).toLocaleString()} -- {run.tool_ids.join(", ")} ({run.profile})
                 </span>
-                <Badge variant={run.status === "completed" ? "success" : run.status === "failed" ? "destructive" : "muted"}>
-                  {run.status}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={
+                      run.status === "completed"
+                        ? "success"
+                        : run.status === "failed"
+                          ? "destructive"
+                          : run.status === "cancelled"
+                            ? "warning"
+                            : "muted"
+                    }
+                  >
+                    {run.status}
+                  </Badge>
+                  {(run.status === "pending" || run.status === "running") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={cancellingRunId === run.id}
+                      onClick={() => handleCancel(run.id)}
+                    >
+                      {cancellingRunId === run.id ? "Cancelling..." : "Cancel Scan"}
+                    </Button>
+                  )}
+                </div>
               </div>
               {run.error_message && <p className="text-xs text-destructive">{run.error_message}</p>}
+              {run.status === "cancelled" && (
+                <p className="text-xs text-muted-foreground">This scan was cancelled before it finished.</p>
+              )}
               {run.findings.length > 0 && (
                 <table className="w-full text-left text-xs">
                   <thead>

@@ -134,7 +134,92 @@ added after a real test-isolation bug surfaced during development, where a test 
 step runs) and returned while that refresh step was still executing in the background, corrupting
 whichever test ran next by disposing the shared DB engine out from under it.
 
-## 7. Installer / Deployment
+## 7. Cancellation
+
+Cancellation was added after a forensic audit of the port-scanning pipeline found no way to stop a
+run once started — the run tracking in §6 only prevented Python from garbage-collecting an
+in-flight task; nothing let a caller reach in and stop one.
+
+**Run-id-keyed task tracking.** `_spawn_background()` now takes the `run_id` as well as the
+coroutine, and populates a second module-level map, `_run_tasks: dict[uuid.UUID, asyncio.Task]`,
+alongside the existing GC-prevention set — the same `done_callback` clears both on completion:
+
+```python
+def _spawn_background(coro, run_id: uuid.UUID) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    _run_tasks[run_id] = task
+
+    def _discard(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        if _run_tasks.get(run_id) is t:
+            del _run_tasks[run_id]
+
+    task.add_done_callback(_discard)
+    return task
+```
+
+**`cancel_run(run_id, actor_user_id, actor_email)`** is the new entry point (called from
+`POST /api/v1/security-assessment/runs/{run_id}/cancel`, gated by the same
+`security_assessment:create` permission as starting a run — this is a shared-team resource, per §5's
+existing no-per-user-ownership model, so any analyst/admin can cancel any run, not only their own).
+It loads the run, rejects with `RunNotCancellableError` if it's already `COMPLETED`/`FAILED`/
+`CANCELLED`, and then branches on whether this *process* has a live task for it:
+
+- If `_run_tasks` has a live entry, it calls `task.cancel()` — this raises `asyncio.CancelledError`
+  inside `_execute_run()` at its next `await` point, which is handled as described below.
+- If not — the run exists and is `PENDING`/`RUNNING` in the database, but this process has no task
+  for it, which is exactly what happens after a backend restart — it writes the `CANCELLED` status
+  directly. Without this branch, a run orphaned by a restart could never be cancelled at all, since
+  there would be no live task to `.cancel()`.
+
+**Why a dedicated `except asyncio.CancelledError` branch is mandatory, not stylistic.** Since Python
+3.8, `asyncio.CancelledError` inherits from `BaseException`, not `Exception` — the pre-existing
+generic `except Exception as exc:` branch in `_execute_run()` silently does not catch it. Without an
+explicit branch, a cancelled task's DB row would simply stay `RUNNING` forever (the task dies, but no
+code ever runs to update the row), which is worse than doing nothing: a stuck `RUNNING` row with no
+way to distinguish it from a genuinely slow scan. The fix adds a branch *before* the generic
+`except Exception`, which updates the row to `CANCELLED`, records the audit event
+`security_assessment.run_cancelled`, and then re-`raise`s — re-raising matters so the `Task` object's
+own `.cancelled()` bookkeeping inside asyncio stays accurate, rather than being silently swallowed
+into a normal return.
+
+**Subprocess cleanup.** The same `BaseException` distinction applies one layer down, inside
+`nmap_tool.py`: the existing `await asyncio.wait_for(proc.communicate(), timeout=...)` already had an
+`except asyncio.TimeoutError` branch to kill a hung process, but a *cancelled* run reaches the same
+`await` point via `CancelledError`, not `TimeoutError` — a second, explicit
+`except asyncio.CancelledError: proc.kill(); await proc.wait(); raise` branch was added alongside it.
+Without this, cancelling a run mid-scan would stop the Python-side bookkeeping but leave the real
+`nmap` OS process running untouched — an orphaned subprocess that would keep consuming CPU/network
+resources and, if it later happened to write to a since-closed pipe, could error unpredictably.
+
+**Testing.** `test_security_assessment_api.py` adds a `_SlowFakeTool` (an `await asyncio.sleep(30)`
+stand-in) specifically so the in-flight-cancellation test (`test_cancelling_an_in_flight_run_kills_it
+_cleanly`) exercises a genuine mid-flight `task.cancel()` — the pre-existing `_FakeTool` resolves
+before a cancel request could ever reach it, which would only prove the already-completed-run
+rejection path, not real cancellation. A second test constructs a `SecurityAssessmentRun` row
+directly at `RUNNING` status with no corresponding task in `_run_tasks`, simulating exactly what a
+post-restart process sees, and confirms it still resolves to `CANCELLED` via the direct-DB-write
+branch above. Beyond the mocked suite, this was also verified against a real, live `nmap` "standard"
+profile scan through the actual HTTP API in a running Docker container: cancellation completed in
+~1.6s (against a natural completion time of ~12s for that profile/target), confirmed via manual
+`/proc/[0-9]*/cmdline` inspection (the container's minimal `python:3.12-slim` image has no `ps`
+binary) that no orphaned `nmap` process remained.
+
+**A schema lesson surfaced while adding the `CANCELLED` enum value.** The migration
+(`8f4a1c2d9e6b_add_cancelled_security_assessment_status.py`) originally added the value as lowercase
+`'cancelled'`, matching `SecurityAssessmentRunStatus.CANCELLED`'s Python `.value`. Two tests then
+failed against a real Postgres container with `invalid input value for enum
+securityassessmentrunstatus: "CANCELLED"`. Querying `pg_enum` directly showed the four pre-existing
+labels are `PENDING`/`RUNNING`/`COMPLETED`/`FAILED` — uppercase, matching the Python enum members'
+*names*, not their lowercase `.value` strings — because a plain `sa.Enum(SomeEnum)` column with no
+`values_callable` override serializes `.name` on the wire, not `.value`. The migration was corrected
+to `ADD VALUE IF NOT EXISTS 'CANCELLED'` (uppercase); since Postgres has no `ALTER TYPE ... DROP
+VALUE`, the throwaway test database had to be torn down and recreated rather than patched in place.
+The Python-side `.value = "cancelled"` string is unaffected and correct as-is — it's what
+`_serialize_run()` returns to the API/frontend; it was never what gets sent to Postgres.
+
+## 8. Installer / Deployment
 
 `backend/Dockerfile` installs `nmap` via `apt-get` alongside the pre-existing `gcc libpq-dev curl`.
 `GET /api/v1/security-assessment/tool-health` calls `shutil.which("nmap")` at request time rather

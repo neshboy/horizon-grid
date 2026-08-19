@@ -762,3 +762,14 @@ export async function getSecurityAssessmentRun(runId: string): Promise<SecurityA
   if (!res.ok) throw new Error("Failed to fetch security assessment run");
   return res.json();
 }
+
+export async function cancelSecurityAssessmentRun(runId: string): Promise<{ run_id: string; status: string }> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/security-assessment/runs/${runId}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Failed to cancel security assessment run");
+  }
+  return res.json();
+}

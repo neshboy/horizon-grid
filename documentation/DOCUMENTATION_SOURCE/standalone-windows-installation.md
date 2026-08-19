@@ -31,7 +31,7 @@ The compiled installer follows a fixed naming pattern set by `installer.iss`'s `
 HORIZON-GRID-Setup-<version>.exe
 ```
 
-For example, the current build produces `HORIZON-GRID-Setup-0.2.0.exe`. The visible product name throughout the installer's own UI (title bar, publisher field, Start Menu group) is "HORIZON GRID" — but the installer deliberately does **not** derive the on-disk installation folder name from that branding. It installs to:
+For example, the current build produces `HORIZON-GRID-Setup-0.2.1.exe`. The visible product name throughout the installer's own UI (title bar, publisher field, Start Menu group) is "HORIZON GRID" — but the installer deliberately does **not** derive the on-disk installation folder name from that branding. It installs to:
 
 ```
 %ProgramFiles%\IOC Intelligence Platform\

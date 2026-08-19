@@ -151,6 +151,23 @@ class _FakeTool(SecurityAssessmentTool):
         )
 
 
+class _SlowFakeTool(SecurityAssessmentTool):
+    """Deliberately awaits something long enough to cancel mid-flight,
+    exercising the real asyncio.CancelledError path through
+    _execute_run -- unlike _FakeTool, which finishes before a cancel
+    request could ever reach it."""
+
+    tool_id = "slow_fake_tool"
+    tool_name = "Slow Fake Test Tool"
+    supported_types = {IOCType.IPV4}
+
+    async def run(self, target, ioc_type, profile_id):
+        import asyncio
+
+        await asyncio.sleep(30)
+        return ToolRunResult(provider_result=self._result(target, ioc_type, ProviderStatus.OK, data={}), findings=[])
+
+
 @pytest_asyncio.fixture
 async def _stub_ai_and_background(monkeypatch):
     async def _fake_summarize(ioc_value, ioc_type, result, backend_override=None):
@@ -164,7 +181,11 @@ async def _stub_ai_and_background(monkeypatch):
 
     monkeypatch.setattr(sa_service, "summarize_provider", _fake_summarize)
     monkeypatch.setattr(sa_service, "generate_final_assessment", _fake_generate)
-    monkeypatch.setattr(sa_service, "get_tool", lambda tool_id: _FakeTool() if tool_id == "fake_tool" else None)
+    monkeypatch.setattr(
+        sa_service,
+        "get_tool",
+        lambda tool_id: {"fake_tool": _FakeTool(), "slow_fake_tool": _SlowFakeTool()}.get(tool_id),
+    )
     yield
 
 
@@ -300,3 +321,138 @@ async def test_completed_run_persists_findings_and_updates_the_lookup(client, _s
     finally:
         await _cleanup_lookup(lookup_id)
         await _delete_user(analyst_id)
+
+
+# --- Cancellation ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_in_flight_run_kills_it_cleanly(client, _stub_ai_and_background):
+    """Real end-to-end proof that cancel_run() actually stops a genuinely
+    in-flight run: starts a run whose tool sleeps for 30s, cancels it almost
+    immediately, and confirms the run resolves to CANCELLED (not left stuck
+    at RUNNING, and not misreported as FAILED) well before that 30s would
+    naturally elapse."""
+    import asyncio
+
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-cancel")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        result = await sa_service.start_run(
+            lookup_id, ["slow_fake_tool"], "quick", "127.0.0.1", True, analyst_id, "analyst@qa.test"
+        )
+        run_id = uuid.UUID(result["run_id"])
+
+        await asyncio.sleep(0.05)  # let _execute_run actually start and reach the sleep
+        cancel_result = await sa_service.cancel_run(run_id, analyst_id, "analyst@qa.test")
+        assert cancel_result["status"] == "cancelling"
+
+        await sa_service.wait_for_background_runs()
+
+        from app.core.db import new_session
+
+        async with new_session() as db:
+            run = await db.get(SecurityAssessmentRun, run_id)
+            assert run.status == SecurityAssessmentRunStatus.CANCELLED
+            assert run.completed_at is not None
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_run_not_tracked_in_process_still_resolves_it(client, _stub_ai_and_background):
+    """Simulates a backend restart: the run's asyncio.Task genuinely doesn't
+    exist in this process (never started one), matching what a fresh
+    process would see for a run some prior process left at PENDING/RUNNING.
+    cancel_run() must still resolve it to CANCELLED directly rather than
+    leaving it stuck forever with no live task to cancel."""
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-cancel-orphan")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        from datetime import datetime, timezone
+
+        from app.core.db import new_session
+
+        run = SecurityAssessmentRun(
+            lookup_id=lookup_id, requested_by=analyst_id, target="127.0.0.1", tool_ids=["slow_fake_tool"],
+            profile="quick", status=SecurityAssessmentRunStatus.RUNNING,
+            authorization_confirmed_at=datetime.now(timezone.utc),
+        )
+        async with new_session() as db:
+            db.add(run)
+            await db.commit()
+            await db.refresh(run)
+            run_id = run.id
+
+        cancel_result = await sa_service.cancel_run(run_id, analyst_id, "analyst@qa.test")
+        assert cancel_result["status"] == "cancelling"
+
+        async with new_session() as db:
+            refreshed = await db.get(SecurityAssessmentRun, run_id)
+            assert refreshed.status == SecurityAssessmentRunStatus.CANCELLED
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_already_completed_run_is_rejected(client, _stub_ai_and_background):
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-cancel-done")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        result = await sa_service.start_run(
+            lookup_id, ["fake_tool"], "quick", "127.0.0.1", True, analyst_id, "analyst@qa.test"
+        )
+        run_id = uuid.UUID(result["run_id"])
+        await sa_service.wait_for_background_runs()
+
+        response = await client.post(
+            f"{API}/security-assessment/runs/{run_id}/cancel",
+            headers=_auth(analyst_token),
+        )
+        assert response.status_code == 400
+        assert "already" in response.json()["detail"].lower()
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_unknown_run_id_returns_404(client):
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-cancel-404")
+    try:
+        response = await client.post(
+            f"{API}/security-assessment/runs/{uuid.uuid4()}/cancel",
+            headers=_auth(analyst_token),
+        )
+        assert response.status_code == 404
+    finally:
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_viewer_cannot_cancel_a_run(client, _stub_ai_and_background):
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-cancel-rbac-analyst")
+    viewer_id, _, viewer_token = await _make_user(Role.VIEWER, "qa-sec-cancel-rbac-viewer")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        result = await sa_service.start_run(
+            lookup_id, ["slow_fake_tool"], "quick", "127.0.0.1", True, analyst_id, "analyst@qa.test"
+        )
+        run_id = result["run_id"]
+
+        response = await client.post(
+            f"{API}/security-assessment/runs/{run_id}/cancel",
+            headers=_auth(viewer_token),
+        )
+        assert response.status_code == 403
+
+        # Clean up the still-running background task ourselves since the
+        # cancel attempt above was correctly rejected before reaching it.
+        await sa_service.cancel_run(uuid.UUID(run_id), analyst_id, "analyst@qa.test")
+        await sa_service.wait_for_background_runs()
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+        await _delete_user(viewer_id)

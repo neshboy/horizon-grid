@@ -1,6 +1,12 @@
 # HORIZON GRID — Release Notes
 
-## What's new in this release
+## v0.2.1 — Port scanning: cancellation added
+
+This is a small, targeted release. A forensic audit was requested of the Security Assessment Toolkit's Nmap port scanner after a report that it wasn't working correctly. The audit traced the entire pipeline — frontend, API, validation, scanner, subprocess execution, result parsing, UI — and found every stage already working correctly against real local targets. The one real, confirmed gap: **there was no way to cancel a scan once started.** That's now fixed — a "Cancel Scan" button genuinely stops the underlying scan process (not just its displayed status), survives a backend restart without getting stuck, and is covered by 5 new tests including a live in-flight cancellation. See the Backend Documentation's Security Assessment Toolkit chapter for the full technical detail, and the User Manual's Security Assessment section for what you'll actually see on screen.
+
+No other behavior changed in this release; nothing about upgrading from v0.2.0 requires any extra step.
+
+## What's new in v0.2.0
 
 HORIZON GRID is the renamed, significantly extended release of this platform (previously "IOC Intelligence Platform"). If you're deciding whether this release matters to you, here's the short version:
 

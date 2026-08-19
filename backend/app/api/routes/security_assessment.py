@@ -97,6 +97,25 @@ async def run_assessment(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/runs/{run_id}/cancel", response_model=dict)
+async def cancel_run(
+    run_id: uuid.UUID,
+    user: CurrentUser = Depends(require_permission("security_assessment:create")),
+):
+    """Cancels a pending/running scan. Gated on security_assessment:create
+    (the same permission required to start one) rather than a per-resource
+    ownership check -- this app treats investigations and their security
+    assessment runs as a shared operational picture (any analyst/admin can
+    already read any other user's runs via GET /runs), so any analyst/admin
+    can cancel any in-flight scan, not only their own."""
+    try:
+        return await svc.cancel_run(run_id, user.id, user.email)
+    except svc.LookupNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except svc.RunNotCancellableError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/{lookup_id}/runs", response_model=list[RunResponse])
 async def list_runs(
     lookup_id: uuid.UUID,

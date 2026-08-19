@@ -109,3 +109,33 @@ Once you start a run, results appear in a findings table with a severity badge o
 [FIGURE: 47-security-assessment-finding-drilldown.png | Clicking a finding opens its full detail: the matched CVEs and the raw evidence the severity was based on.]
 
 A completed run's findings feed back into the same investigation — the AI-generated assessment, risk score, and verdict at the top of the page are refreshed to account for what the security assessment found, exactly as if a new provider had reported in.
+
+### What a port scan actually does
+
+The Nmap port/service scan is the only one of the four checks that has more than one option — a **profile** you pick before running it:
+
+- **Quick scan** — the 100 most common ports, no service/version detection. Fastest, lowest footprint.
+- **Standard scan** (the default) — the 1,000 most common ports, *with* service/version detection (identifying what software is actually answering on an open port, e.g. "Uvicorn" or "nginx"). Slower than Quick, but far more informative — a service/version match is what lets the platform cross-reference known CVEs against it.
+- **Web service scan** — only the common web ports (80, 443, 8080, 8443), with service/version detection. The fastest way to check specifically web-facing exposure.
+
+A port only ever shows up in the findings table if it's genuinely **open**. Closed and filtered ports are not reported as findings at all — they're the expected, uninteresting majority of any scan, not evidence of anything. **If a scan completes and the findings table is empty, that means every port it checked came back closed or filtered — a real, successful result, not a failure.** A failed scan looks different: the run's status badge itself shows "failed" (in red) with an explanatory error message underneath, not an empty table with no explanation.
+
+### Scan statuses
+
+A run moves through a small set of statuses, shown as a colored badge:
+
+| Status | Meaning |
+|---|---|
+| Pending | Accepted, waiting to start. Usually only visible for a moment. |
+| Running | Actively in progress. The page checks for updates automatically every 2 seconds — no need to refresh. |
+| Completed | Finished normally. Check the findings table (which may legitimately be empty — see above). |
+| Failed | Something went wrong before a result could be produced (e.g. the scanner isn't installed on this deployment, or the target couldn't be reached). The specific reason is shown under the badge. |
+| Cancelled | You (or another analyst — findings and runs are visible to your whole team, not private to whoever started them) stopped the scan before it finished. |
+
+### Cancelling a scan
+
+A **Cancel Scan** button appears next to any run that's still Pending or Running. Clicking it stops the scan immediately — including the real underlying scan process, not just the page's display of it — and the run's status changes to Cancelled. This is useful if you started the wrong profile by mistake, or a scan against a large/slow target is taking longer than you want to wait. A cancelled scan can simply be started again with different settings; nothing about the investigation itself is affected.
+
+### If a tool shows as "unavailable"
+
+Each tool button in the panel is disabled with an "(unavailable)" label if that specific check isn't currently usable on this deployment — hovering over it explains why. For the Nmap port scanner specifically, this means the `nmap` program isn't present on the machine actually running the backend. On the standard Windows and Linux installations of this platform, `nmap` is installed automatically as part of the backend container and should never need any manual setup; seeing "unavailable" on a standard install is itself worth reporting, not something to work around.

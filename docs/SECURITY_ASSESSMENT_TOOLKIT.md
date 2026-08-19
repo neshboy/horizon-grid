@@ -163,7 +163,19 @@ normally; this tool's only value is the format/algorithm identification itself.
 **Severity:** always `info` — format identification is never itself a finding of
 concern.
 
-## 5. Provenance in the Correlation Graph
+## 5. Cancellation
+
+`POST /api/v1/security-assessment/runs/{run_id}/cancel` stops a `pending` or `running` run —
+requires the same `security_assessment:create` permission as starting one (any analyst/admin can
+cancel any run; this is a shared-team resource, not per-user private data, matching the rest of this
+module's RBAC model). Cancelling genuinely terminates the underlying work, not just the database
+row: for the Nmap tool this means the real OS subprocess is killed (`SIGKILL`, then the process is
+reaped) rather than left running detached from a run the UI now shows as stopped. A run already
+`completed`/`failed`/`cancelled` cannot be cancelled again (`400`); an unknown `run_id` returns `404`.
+Cancellation also survives a backend restart — a run left `pending`/`running` by a process that no
+longer exists still resolves to `cancelled` rather than staying stuck forever with no way to clear it.
+
+## 6. Provenance in the Correlation Graph
 
 `CorrelationEdgeRecord` and `EvidenceItem` both carry a `provenance_category` column
 (`app/core/provenance.py`), distinguishing **what kind of source** asserted a fact —
@@ -173,23 +185,24 @@ plus two reserved-but-currently-unpopulated categories, `local_observation` and
 omitted. This is a different axis from `CorrelationEdgeRecord.provenance`, which
 names *which* provider/tool asserted a fact (e.g. `"virustotal"` or `"nmap"`).
 
-## 6. Audit Logging
+## 7. Audit Logging
 
 Every run writes to the same shared audit sink every other configuration/account
 action uses (`app/core/audit.py`): `security_assessment.run_requested`,
-`.run_completed`, `.run_failed`. Detail strings name the target, tool set, and
-profile — never raw scan output, and there are no credentials involved in any of
-these tools to log in the first place.
+`.run_completed`, `.run_failed`, `.run_cancelled`. Detail strings name the target,
+tool set, and profile — never raw scan output, and there are no credentials involved
+in any of these tools to log in the first place.
 
-## 7. Permissions
+## 8. Permissions
 
 Two new permission strings (`app/models/user.py`): `security_assessment:create`
 (`ADMIN`, `ANALYST` — the same tier as `lookup:create`, since this sends real traffic
 to a real target) and `security_assessment:read` (`ADMIN`, `ANALYST`, `VIEWER` — the
 same tier as `lookup:read`). Both are enforced server-side on every route; the
 frontend's own role check (hiding the run form from a `VIEWER`) is UX only.
+Cancellation is gated on `security_assessment:create`, not a separate permission.
 
-## 8. Result Integration
+## 9. Result Integration
 
 A completed run's `ProviderResult`s are persisted as ordinary `ProviderResultRecord`
 rows (`category="security_assessment"`) and fed through the same evidence/

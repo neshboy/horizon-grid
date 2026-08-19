@@ -30,17 +30,17 @@ These are the only distributions currently supported. HORIZON GRID does not rely
 1. **A 64-bit (amd64) machine** running one of the distributions above.
 2. **A user account with `sudo` access.** Every HORIZON GRID command that changes system state needs to be run with `sudo`.
 3. **An internet connection**, at least for the initial install — Docker will need to download the platform's container images the first time you set it up.
-4. **The HORIZON GRID package itself**: `horizon-grid_0.2.0_amd64.deb` (approximately 6.1 MB / 5.8 MiB). This package does not contain any application dependencies or pre-built container images — those are downloaded and built inside Docker the first time you run setup, which is exactly why the package itself is so small despite the platform being substantial.
+4. **The HORIZON GRID package itself**: `horizon-grid_0.2.1_amd64.deb` (approximately 6.1 MB / 5.8 MiB). This package does not contain any application dependencies or pre-built container images — those are downloaded and built inside Docker the first time you run setup, which is exactly why the package itself is so small despite the platform being substantial.
 5. **Docker**, installed the correct way — see the critical note below before you do anything else.
 
 # Step 1: Download and Verify the Installer
 
-Download `horizon-grid_0.2.0_amd64.deb` from wherever it was provided to you (for example, a release page or a link shared by your administrator), and save it somewhere convenient, such as your home folder or `~/Downloads`.
+Download `horizon-grid_0.2.1_amd64.deb` from wherever it was provided to you (for example, a release page or a link shared by your administrator), and save it somewhere convenient, such as your home folder or `~/Downloads`.
 
 Before installing anything, it is good practice to verify that the file you downloaded is genuine and was not corrupted or tampered with in transit. Open a terminal, go to the folder where you saved the file, and run:
 
 ```bash
-sha256sum horizon-grid_0.2.0_amd64.deb
+sha256sum horizon-grid_0.2.1_amd64.deb
 ```
 
 Compare the long string of letters and numbers this prints against the official checksum below. They must match **exactly**:
@@ -87,7 +87,7 @@ With Docker working, install the `.deb` package itself. From the folder where yo
 
 ```bash
 sudo apt update
-sudo apt install ./horizon-grid_0.2.0_amd64.deb
+sudo apt install ./horizon-grid_0.2.1_amd64.deb
 ```
 
 (The `./` in front of the filename is important — it tells `apt` to install this specific local file rather than searching for a package by that name in a repository.)
@@ -358,10 +358,10 @@ If you have any data you might want later, run `sudo horizon-grid backup` first,
 | Item | Value |
 |---|---|
 | Supported distributions | Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, Debian 12 (bookworm) |
-| Package | `horizon-grid_0.2.0_amd64.deb` (~6.1 MB / 5.8 MiB) |
+| Package | `horizon-grid_0.2.1_amd64.deb` (~6.1 MB / 5.8 MiB) |
 | Package SHA256 | `57d0db31d4e67dfd8ccad9f0c9dfbbf6e501382e3972f0a538f8cc4b7b912812` |
 | Install Docker (required first) | `curl -fsSL https://get.docker.com \| sh` |
-| Install the package | `sudo apt install ./horizon-grid_0.2.0_amd64.deb` |
+| Install the package | `sudo apt install ./horizon-grid_0.2.1_amd64.deb` |
 | Check prerequisites | `sudo horizon-grid check` |
 | Run setup / reconfigure | `sudo horizon-grid configure` |
 | Open in browser | `sudo horizon-grid open` |

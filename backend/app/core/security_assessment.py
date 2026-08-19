@@ -50,12 +50,90 @@ _MAX_CIDR_ADDRESSES = 16  # /28 or smaller
 # every in-flight run's task alive for as long as it's actually running.
 _background_tasks: set[asyncio.Task] = set()
 
+# Separate, run-id-keyed index onto the same tasks, so a cancel request can
+# find and cancel the specific in-flight task for one run without touching
+# any other concurrently-running scan. Populated/cleared alongside
+# _background_tasks; a run_id present here is exactly a run that is still
+# genuinely in flight in THIS process (a run "pending"/"running" in the
+# database after a backend restart has no entry here at all -- see
+# cancel_run()'s handling of that case).
+_run_tasks: dict[uuid.UUID, asyncio.Task] = {}
 
-def _spawn_background(coro) -> asyncio.Task:
+
+def _spawn_background(coro, run_id: uuid.UUID) -> asyncio.Task:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _run_tasks[run_id] = task
+
+    def _discard(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        if _run_tasks.get(run_id) is t:
+            del _run_tasks[run_id]
+
+    task.add_done_callback(_discard)
     return task
+
+
+async def cancel_run(run_id: uuid.UUID, actor_user_id: Optional[uuid.UUID], actor_email: str) -> dict:
+    """Cancels an in-flight run. Team-shared, like every other security-
+    assessment read/write in this module (GET /runs already lets any holder
+    of security_assessment:read see any other user's results) -- any caller
+    with security_assessment:create can cancel any pending/running scan, not
+    only their own, matching this app's existing "investigations are a
+    shared operational picture" model rather than introducing a new
+    per-resource ownership check found nowhere else in this codebase.
+
+    Cancelling the asyncio.Task alone would only stop the *Python* side --
+    the real nmap subprocess it's awaiting on would be silently orphaned,
+    still running, until it exits on its own. Each tool that spawns a real
+    subprocess is responsible for catching asyncio.CancelledError and
+    actually killing that process before letting the cancellation propagate
+    (see app/security_assessment/nmap_tool.py's run()) -- this function only
+    triggers that, it doesn't itself know how to clean up a specific tool's
+    resources.
+    """
+    async with new_session() as db:
+        run = await db.get(SecurityAssessmentRun, run_id)
+        if run is None:
+            raise LookupNotFoundError(f"No such security assessment run: {run_id}")
+        if run.status not in (SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING):
+            raise RunNotCancellableError(
+                f"Run is already {run.status.value} -- only a pending or running scan can be cancelled."
+            )
+        target = run.target
+
+    task = _run_tasks.get(run_id)
+    if task is not None and not task.done():
+        task.cancel()
+        # Deliberately not awaited here -- the task's own cancellation
+        # handling (in _execute_run's except branch below) does the actual
+        # DB status update and subprocess cleanup asynchronously. Awaiting it
+        # here would block this HTTP response on that cleanup completing,
+        # which defeats the point of cancel being an immediate action.
+    else:
+        # The task isn't tracked in THIS process -- most likely the backend
+        # restarted after the run was spawned (see Phase 15 of the port-
+        # scanning investigation: a restart must not leave a permanently
+        # "running"-forever row with no way to ever resolve it). Mark it
+        # cancelled directly rather than leaving it stuck; there is no live
+        # process to kill since this process never spawned one for this run.
+        async with new_session() as db:
+            await db.execute(
+                update(SecurityAssessmentRun)
+                .where(SecurityAssessmentRun.id == run_id)
+                .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
+                .values(status=SecurityAssessmentRunStatus.CANCELLED, completed_at=datetime.now(timezone.utc))
+            )
+            await db.commit()
+
+    logger.info("Security assessment run %s cancellation requested by %r (target=%r)", run_id, actor_email, target)
+    await record_audit(
+        "security_assessment.run_cancelled",
+        f"Cancelled a security assessment run against '{target}'.",
+        actor_user_id,
+        actor_email,
+    )
+    return {"run_id": str(run_id), "status": "cancelling"}
 
 
 async def wait_for_background_runs() -> None:
@@ -99,6 +177,10 @@ class UnsupportedToolForTargetError(SecurityAssessmentError):
 
 
 class LookupNotFoundError(SecurityAssessmentError):
+    pass
+
+
+class RunNotCancellableError(SecurityAssessmentError):
     pass
 
 
@@ -194,7 +276,8 @@ async def start_run(
     )
 
     _spawn_background(
-        _execute_run(run_id, lookup_id, tool_ids, profile_id, target_confirmation, ioc_type, actor_user_id, actor_email)
+        _execute_run(run_id, lookup_id, tool_ids, profile_id, target_confirmation, ioc_type, actor_user_id, actor_email),
+        run_id,
     )
     return {"run_id": str(run_id), "status": SecurityAssessmentRunStatus.PENDING.value}
 
@@ -222,6 +305,32 @@ async def _execute_run(
         for tool_id in tool_ids:
             tool = get_tool(tool_id)
             tool_results.append(await tool.run(target, ioc_type, profile_id))
+    except asyncio.CancelledError:
+        # asyncio.CancelledError has inherited from BaseException (not
+        # Exception) since Python 3.8, specifically so a generic `except
+        # Exception` below would NOT catch it -- without this dedicated
+        # branch, cancel_run()'s task.cancel() would propagate straight
+        # through _execute_run uncaught, and this run's row would stay
+        # "running" in the database forever with no way to ever resolve it,
+        # even though the asyncio Task itself correctly shows as cancelled.
+        # Each tool that spawns a real subprocess (nmap_tool.py) is
+        # responsible for actually killing it on this same exception before
+        # it propagates here -- this branch only persists the outcome.
+        logger.info("Security assessment run %s was cancelled", run_id)
+        async with new_session() as db:
+            await db.execute(
+                update(SecurityAssessmentRun)
+                .where(SecurityAssessmentRun.id == run_id)
+                .values(status=SecurityAssessmentRunStatus.CANCELLED, completed_at=datetime.now(timezone.utc))
+            )
+            await db.commit()
+        await record_audit(
+            "security_assessment.run_cancelled",
+            f"Security assessment run against '{target}' was cancelled while in progress.",
+            actor_user_id,
+            actor_email,
+        )
+        raise  # re-raise so this Task's own .cancelled() is still accurate to asyncio
     except Exception as exc:  # noqa: BLE001 -- a tool bug must fail the run cleanly, not crash the background task
         logger.exception("Security assessment run %s failed", run_id)
         async with new_session() as db:
