@@ -246,3 +246,36 @@ class FinalAssessment(BaseModel):
                 f"{prob} (expected a low probability for a benign verdict)"
             )
         return self
+
+    @model_validator(mode="after")
+    def _substantive_threat_assessment_must_cite_supporting_evidence(self) -> "FinalAssessment":
+        """supporting_evidence's own field description already tells the
+        model 'if threat_assessment cites specific findings, this list must
+        NOT be left empty' -- but nothing previously enforced that. Confirmed
+        live (Ollama): a real assessment's threat_assessment cited specific
+        findings ('the high malicious probability and severity scores...
+        support this conclusion') while supporting_evidence was an empty
+        list, the exact violation the prompt calls out, surfaced to the UI
+        uncorrected. supporting_evidence is free-text paraphrased excerpts,
+        not structured evidence_ids, so there's no safe backfill (unlike
+        app/ai/analysis_service.py's evidence_ids backfill for a different,
+        ID-based field) -- fabricating a plausible-looking quote here would
+        itself be the kind of fabrication this platform's evidence-
+        traceability model exists to prevent. Instead this reuses the
+        existing retry-on-ValidationError mechanism (service.py's
+        generate_final_assessment already retries once on any validator
+        failure, then falls back to a genuine ai_outcome="failed" rather
+        than persisting an incomplete assessment) -- giving the model a
+        second, real chance to either supply the citations it implied, or
+        write a shorter threat_assessment that doesn't imply them.
+        Deliberately length-gated rather than checking every non-empty
+        threat_assessment: a short, formulaic disclaimer (e.g. "Insufficient
+        data to assess.") makes no specific claim to back up in the first
+        place.
+        """
+        if len(self.threat_assessment.strip()) > 80 and not self.supporting_evidence:
+            raise ValueError(
+                "threat_assessment makes a substantive claim but supporting_evidence is empty -- "
+                "either cite concrete excerpts or shorten threat_assessment to not imply specific findings"
+            )
+        return self

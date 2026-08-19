@@ -76,6 +76,8 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** If running a local Ollama model, make sure the host has enough RAM/VRAM for the configured model and that Ollama itself is set to start automatically with Windows, so it's already warm before the first investigation of the day.
 
+**Linux-specific note:** `host.docker.internal` (the address the platform uses to reach a host-native Ollama) is a Docker Desktop convenience that native Linux Docker Engine does not provide automatically. `docker-compose.yml` maps it explicitly (`extra_hosts: host.docker.internal:host-gateway`, supported since Docker Engine 20.10) so this resolves correctly on a real Linux install too — confirmed live on a fresh Ubuntu 24.04 install. If you're running an older Docker Engine that predates this feature, point `OLLAMA_BASE_URL` at the host's real LAN IP instead of `host.docker.internal` as a workaround.
+
 ## Database unavailable
 
 **Symptom:** The page shows a clear error, or an investigation won't load at all.

@@ -23,7 +23,7 @@ from app.models.lookup import IOCLookup, LookupStatus
 from app.models.security_assessment import SecurityAssessmentRun, SecurityAssessmentRunStatus
 from app.models.user import Role
 from app.providers.base import ProviderStatus
-from app.security_assessment.base import Finding, SecurityAssessmentTool, ToolRunResult
+from app.security_assessment.base import Finding, ScanProfile, SecurityAssessmentTool, ToolRunResult
 
 API = get_settings().api_v1_prefix
 
@@ -134,10 +134,20 @@ def _fallback_final_assessment(ioc_value: str, ioc_type: str) -> FinalAssessment
     )
 
 
+# Every real tool defines its own `profiles` dict (see app/core/
+# security_assessment.py::start_run's up-front `profile_id not in
+# tool.profiles` check, added after a real bug was found where an unknown
+# profile id silently produced a fake "completed, 0 findings" run) -- these
+# fake test tools need one too, or that same check would reject every test
+# below that passes "quick" (the only profile id any of them ever use).
+_FAKE_PROFILES = {"quick": ScanProfile(id="quick", name="Quick", description="test profile")}
+
+
 class _FakeTool(SecurityAssessmentTool):
     tool_id = "fake_tool"
     tool_name = "Fake Test Tool"
     supported_types = {IOCType.IPV4}
+    profiles = _FAKE_PROFILES
 
     async def run(self, target, ioc_type, profile_id):
         return ToolRunResult(
@@ -160,12 +170,39 @@ class _SlowFakeTool(SecurityAssessmentTool):
     tool_id = "slow_fake_tool"
     tool_name = "Slow Fake Test Tool"
     supported_types = {IOCType.IPV4}
+    profiles = _FAKE_PROFILES
 
     async def run(self, target, ioc_type, profile_id):
         import asyncio
 
         await asyncio.sleep(30)
         return ToolRunResult(provider_result=self._result(target, ioc_type, ProviderStatus.OK, data={}), findings=[])
+
+
+class _BrieflySlowFakeTool(SecurityAssessmentTool):
+    """Sleeps just long enough (not 30s like _SlowFakeTool) for a test to
+    inject a race -- externally finalizing the run's row to a terminal
+    state WHILE this tool is still "running" -- then observe whether
+    _execute_run's own completion write respects or clobbers that."""
+
+    tool_id = "briefly_slow_fake_tool"
+    tool_name = "Briefly Slow Fake Test Tool"
+    supported_types = {IOCType.IPV4}
+    profiles = _FAKE_PROFILES
+
+    async def run(self, target, ioc_type, profile_id):
+        import asyncio
+
+        await asyncio.sleep(0.3)
+        return ToolRunResult(
+            provider_result=self._result(target, ioc_type, ProviderStatus.OK, data={}),
+            findings=[
+                Finding(
+                    tool_id=self.tool_id, finding_type="fake_finding", severity="info",
+                    title="Fake finding for the terminal-state-guard race test", description="test",
+                )
+            ],
+        )
 
 
 @pytest_asyncio.fixture
@@ -184,7 +221,11 @@ async def _stub_ai_and_background(monkeypatch):
     monkeypatch.setattr(
         sa_service,
         "get_tool",
-        lambda tool_id: {"fake_tool": _FakeTool(), "slow_fake_tool": _SlowFakeTool()}.get(tool_id),
+        lambda tool_id: {
+            "fake_tool": _FakeTool(),
+            "slow_fake_tool": _SlowFakeTool(),
+            "briefly_slow_fake_tool": _BrieflySlowFakeTool(),
+        }.get(tool_id),
     )
     yield
 
@@ -277,6 +318,75 @@ async def test_run_rejects_unconfirmed_authorization(client):
             headers=_auth(analyst_token),
         )
         assert response.status_code == 400
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_unknown_profile_id_and_creates_no_run_row(client):
+    """Previously, an unrecognized profile id for an otherwise-valid tool
+    was silently accepted (200), and the resulting run reached status
+    COMPLETED with error_message=null and an empty findings list -- visually
+    and programmatically indistinguishable from a real scan that legitimately
+    found nothing. Confirmed live before this fix. profile_id must now be
+    validated against the tool's own real profile set up front, same as
+    tool_id already was, before any run row is created."""
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-badprofile")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        response = await client.post(
+            f"{API}/security-assessment/{lookup_id}/run",
+            json={"tool_ids": ["nmap"], "profile": "not_a_real_profile", "target_confirmation": "127.0.0.1", "authorization_confirmed": True},
+            headers=_auth(analyst_token),
+        )
+        assert response.status_code == 400
+        assert "profile" in response.json()["detail"].lower()
+
+        from sqlalchemy import select
+
+        from app.core.db import new_session
+
+        async with new_session() as db:
+            runs = (await db.execute(select(SecurityAssessmentRun).where(SecurityAssessmentRun.lookup_id == lookup_id))).scalars().all()
+            assert runs == [], "a rejected request must never create a run row"
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_a_cidr_lookup_with_a_malformed_ioc_value(client):
+    """A lookup can only reach ioc_type=cidr with a malformed ioc_value via
+    the lookup-creation ioc_type_hint override -- confirmed live to
+    otherwise raise an uncaught ValueError inside _validate_scope, surfacing
+    as a raw 500 instead of the clean 400 every other validation failure in
+    this module produces."""
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-badcidr")
+    lookup_id = await _make_lookup("not-a-real-network", "cidr")
+    try:
+        response = await client.post(
+            f"{API}/security-assessment/{lookup_id}/run",
+            json={"tool_ids": ["nmap"], "profile": "quick", "target_confirmation": "not-a-real-network", "authorization_confirmed": True},
+            headers=_auth(analyst_token),
+        )
+        assert response.status_code == 400
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_an_empty_tool_ids_list(client):
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-emptytools")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        response = await client.post(
+            f"{API}/security-assessment/{lookup_id}/run",
+            json={"tool_ids": [], "profile": "quick", "target_confirmation": "127.0.0.1", "authorization_confirmed": True},
+            headers=_auth(analyst_token),
+        )
+        assert response.status_code == 422
     finally:
         await _cleanup_lookup(lookup_id)
         await _delete_user(analyst_id)
@@ -456,3 +566,77 @@ async def test_viewer_cannot_cancel_a_run(client, _stub_ai_and_background):
         await _cleanup_lookup(lookup_id)
         await _delete_user(analyst_id)
         await _delete_user(viewer_id)
+
+
+# --- Terminal-state write guard --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_completion_does_not_clobber_a_status_another_writer_already_finalized(client, _stub_ai_and_background):
+    """Real, confirmed bug: _execute_run's terminal-state UPDATEs had no
+    status guard, so if something else (e.g. the startup orphan-recovery
+    sweep, or any other writer) finalized a run's row to a terminal state
+    WHILE the run's own background task was still executing, the task's
+    later success path would silently overwrite that back to COMPLETED --
+    losing whatever the other writer recorded and leaving a self-
+    contradictory row (confirmed live: status=completed with a
+    FAILED-only error_message still attached). This test starts a run
+    against a tool that sleeps briefly, externally finalizes the row to
+    FAILED with a specific message while the tool is still "running"
+    (simulating exactly that race), then confirms the run's own completion
+    write respects the already-terminal state rather than clobbering it --
+    while still persisting the real findings the tool produced, since
+    those remain valid data regardless of the race."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select, update
+
+    from app.core.db import new_session
+
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-terminal-guard")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        result = await sa_service.start_run(
+            lookup_id, ["briefly_slow_fake_tool"], "quick", "127.0.0.1", True, analyst_id, "analyst@qa.test"
+        )
+        run_id = uuid.UUID(result["run_id"])
+
+        # Race window: the tool is sleeping (0.3s); finalize the row to
+        # FAILED out-of-band, exactly like an unrelated writer would.
+        import asyncio
+
+        await asyncio.sleep(0.1)
+        async with new_session() as db:
+            await db.execute(
+                update(SecurityAssessmentRun)
+                .where(SecurityAssessmentRun.id == run_id)
+                .values(
+                    status=SecurityAssessmentRunStatus.FAILED,
+                    error_message="Orphaned by an unclean shutdown; recovered at startup.",
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+            await db.commit()
+
+        await sa_service.wait_for_background_runs()
+
+        async with new_session() as db:
+            from sqlalchemy.orm import selectinload
+
+            run = (
+                await db.execute(
+                    select(SecurityAssessmentRun)
+                    .where(SecurityAssessmentRun.id == run_id)
+                    .options(selectinload(SecurityAssessmentRun.findings))
+                )
+            ).scalar_one()
+            assert run.status == SecurityAssessmentRunStatus.FAILED, (
+                "the already-finalized FAILED status must survive the tool's later completion, not get clobbered"
+            )
+            assert run.error_message == "Orphaned by an unclean shutdown; recovered at startup.", (
+                "the externally-written error_message must not be overwritten"
+            )
+            assert len(run.findings) == 1, "the real finding the tool produced is still persisted regardless of the race"
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)

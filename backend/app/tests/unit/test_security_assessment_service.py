@@ -10,6 +10,7 @@ import pytest
 from app.core.security_assessment import (
     AuthorizationNotConfirmedError,
     CIDRTooLargeError,
+    InvalidTargetError,
     TargetMismatchError,
     UnscannableIOCTypeError,
     _validate_scope,
@@ -61,3 +62,14 @@ def test_authorization_is_checked_before_target_mismatch():
     lookup = _lookup("1.2.3.4", "ipv4")
     with pytest.raises(AuthorizationNotConfirmedError):
         _validate_scope(lookup, "wrong-target", False)
+
+
+def test_malformed_cidr_value_raises_a_clean_error_not_a_raw_valueerror():
+    """A lookup can only reach ioc_type=cidr with a malformed ioc_value via
+    the pre-existing lookup-creation ioc_type_hint override (which doesn't
+    itself validate value-matches-hint) -- confirmed live to otherwise raise
+    an uncaught ValueError here, surfacing as a raw 500 instead of the clean
+    400 every other validation failure in this function produces."""
+    lookup = _lookup("not-a-real-network; touch /tmp/pwned", "cidr")
+    with pytest.raises(InvalidTargetError):
+        _validate_scope(lookup, "not-a-real-network; touch /tmp/pwned", True)

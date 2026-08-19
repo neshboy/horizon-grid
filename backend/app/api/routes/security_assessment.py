@@ -93,6 +93,8 @@ async def run_assessment(
         svc.CIDRTooLargeError,
         svc.UnknownToolError,
         svc.UnsupportedToolForTargetError,
+        svc.UnknownProfileError,
+        svc.InvalidTargetError,
     ) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -191,6 +191,14 @@ class UnsupportedToolForTargetError(SecurityAssessmentError):
     pass
 
 
+class UnknownProfileError(SecurityAssessmentError):
+    pass
+
+
+class InvalidTargetError(SecurityAssessmentError):
+    pass
+
+
 class LookupNotFoundError(SecurityAssessmentError):
     pass
 
@@ -232,7 +240,16 @@ def _validate_scope(lookup: IOCLookup, target_confirmation: str, authorization_c
         )
     ioc_type = IOCType(lookup.ioc_type)
     if ioc_type == IOCType.CIDR:
-        network = ipaddress.ip_network(lookup.ioc_value, strict=False)
+        try:
+            network = ipaddress.ip_network(lookup.ioc_value, strict=False)
+        except ValueError as exc:
+            # A lookup can only reach ioc_type=CIDR with a malformed
+            # ioc_value via the pre-existing lookup-creation ioc_type_hint
+            # override, which doesn't itself validate value-matches-hint --
+            # confirmed live to otherwise raise an uncaught ValueError here,
+            # returning a raw 500 instead of a clean rejection like every
+            # other validation failure in this function.
+            raise InvalidTargetError(f"'{lookup.ioc_value}' is not a valid IP network: {exc}") from exc
         if network.num_addresses > _MAX_CIDR_ADDRESSES:
             raise CIDRTooLargeError(
                 f"Active scanning is limited to {_MAX_CIDR_ADDRESSES} addresses (/28) or smaller "
@@ -263,6 +280,22 @@ async def start_run(
             if not tool.supports(ioc_type):
                 raise UnsupportedToolForTargetError(
                     f"Tool '{tool_id}' does not support IOC type '{ioc_type.value}'."
+                )
+            if profile_id not in tool.profiles:
+                # Previously unchecked here -- each tool's own run() (e.g.
+                # nmap_tool.py's "if profile_id not in _PROFILE_ARGS") caught
+                # this deep inside itself and returned an ERROR-status
+                # ProviderResult rather than raising, which _execute_run
+                # doesn't treat as exceptional -- so a bad profile id
+                # produced a run that reached status COMPLETED with
+                # error_message=null and an empty findings list, visually
+                # and programmatically indistinguishable from a real scan
+                # that legitimately found nothing. Confirmed live. Checking
+                # it up front, before any run row exists, gives the same
+                # clean 400 every other invalid request in this function
+                # already gets.
+                raise UnknownProfileError(
+                    f"Unknown scan profile '{profile_id}' for tool '{tool_id}'."
                 )
 
         run = SecurityAssessmentRun(
@@ -333,25 +366,28 @@ async def _execute_run(
         # it propagates here -- this branch only persists the outcome.
         logger.info("Security assessment run %s was cancelled", run_id)
         async with new_session() as db:
-            await db.execute(
+            result = await db.execute(
                 update(SecurityAssessmentRun)
                 .where(SecurityAssessmentRun.id == run_id)
+                .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
                 .values(status=SecurityAssessmentRunStatus.CANCELLED, completed_at=datetime.now(timezone.utc))
             )
             await db.commit()
-        await record_audit(
-            "security_assessment.run_cancelled",
-            f"Security assessment run against '{target}' was cancelled while in progress.",
-            actor_user_id,
-            actor_email,
-        )
+        if result.rowcount:
+            await record_audit(
+                "security_assessment.run_cancelled",
+                f"Security assessment run against '{target}' was cancelled while in progress.",
+                actor_user_id,
+                actor_email,
+            )
         raise  # re-raise so this Task's own .cancelled() is still accurate to asyncio
     except Exception as exc:  # noqa: BLE001 -- a tool bug must fail the run cleanly, not crash the background task
         logger.exception("Security assessment run %s failed", run_id)
         async with new_session() as db:
-            await db.execute(
+            result = await db.execute(
                 update(SecurityAssessmentRun)
                 .where(SecurityAssessmentRun.id == run_id)
+                .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
                 .values(
                     status=SecurityAssessmentRunStatus.FAILED,
                     error_message=str(exc)[:2000],
@@ -359,12 +395,13 @@ async def _execute_run(
                 )
             )
             await db.commit()
-        await record_audit(
-            "security_assessment.run_failed",
-            f"Security assessment run against '{target}' failed: {exc}",
-            actor_user_id,
-            actor_email,
-        )
+        if result.rowcount:
+            await record_audit(
+                "security_assessment.run_failed",
+                f"Security assessment run against '{target}' failed: {exc}",
+                actor_user_id,
+                actor_email,
+            )
         return
 
     async with new_session() as db:
@@ -396,12 +433,30 @@ async def _execute_run(
                     latency_ms=result.provider_result.latency_ms,
                 )
             )
-        await db.execute(
+        # Findings/ProviderResultRecords above are always persisted regardless
+        # of this guard -- they're real scan data and stay valid even if the
+        # run's own status was already finalized by something else. The
+        # status/completed_at write itself IS guarded: without this,
+        # completion can silently clobber a status another writer already
+        # set (e.g. cancel_run()'s direct-DB-write path, or the startup
+        # orphan-recovery sweep) -- confirmed live via a genuine race, where
+        # a run that had been marked FAILED out-of-band was overwritten back
+        # to COMPLETED with the stale FAILED error_message left behind,
+        # producing a self-contradictory row. Same pattern cancel_run()'s
+        # own direct-write branch already uses.
+        update_result = await db.execute(
             update(SecurityAssessmentRun)
             .where(SecurityAssessmentRun.id == run_id)
+            .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
             .values(status=SecurityAssessmentRunStatus.COMPLETED, completed_at=datetime.now(timezone.utc))
         )
         await db.commit()
+    if not update_result.rowcount:
+        logger.warning(
+            "Security assessment run %s finished but its row was already in a terminal state -- "
+            "findings were still persisted, but this run's own status was left untouched.",
+            run_id,
+        )
 
     finding_count = sum(len(r.findings) for r in tool_results)
     # Previously the ONLY trace of a successful run (including a real nmap

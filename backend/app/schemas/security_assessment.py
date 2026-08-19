@@ -2,11 +2,11 @@
 (app/api/routes/security_assessment.py)."""
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RunAssessmentRequest(BaseModel):
-    tool_ids: list[str]
+    tool_ids: list[str] = Field(min_length=1)
     profile: str
     # Caller must retype the exact target value being assessed -- the
     # mandatory, explicit scope-confirmation step. Checked against the

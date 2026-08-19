@@ -100,7 +100,15 @@ class NmapTool(SecurityAssessmentTool):
         if profile_id not in _PROFILE_ARGS:
             return self._error(target, ioc_type, ProviderStatus.ERROR, f"Unknown scan profile: {profile_id!r}")
 
-        argv = ["nmap", "-oX", "-", *_PROFILE_ARGS[profile_id], target]
+        # nmap requires an explicit "-6" flag for any IPv6 literal target --
+        # without it, nmap treats the argument as malformed, prints a
+        # warning to stderr, and exits 0 having scanned 0 hosts. Confirmed
+        # live: this was previously silently reported as a normal
+        # "completed, 0 findings" result, indistinguishable from a real
+        # clean scan, even though supported_types above has always claimed
+        # IPv6 support and no scan of any kind ever actually ran.
+        ipv6_flag = ["-6"] if ioc_type == IOCType.IPV6 else []
+        argv = ["nmap", "-oX", "-", *ipv6_flag, *_PROFILE_ARGS[profile_id], target]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE

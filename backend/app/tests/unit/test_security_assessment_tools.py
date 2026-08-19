@@ -4,6 +4,8 @@ a real nmap invocation, severity is assigned deterministically (never by
 asking the AI), and every tool degrades to a normal ERROR/TIMEOUT result
 rather than raising.
 """
+from unittest.mock import AsyncMock, patch
+
 import httpx
 import pytest
 import respx
@@ -36,6 +38,36 @@ async def test_nmap_unknown_profile_is_rejected_before_any_subprocess():
     result = await nmap_tool.run("127.0.0.1", IOCType.IPV4, "totally-made-up-profile")
     assert result.provider_result.status == ProviderStatus.ERROR
     assert result.findings == []
+
+
+def _fake_completed_process():
+    """A mock asyncio.subprocess.Process reporting a clean, empty scan --
+    only argv construction is under test here, not XML parsing."""
+    proc = AsyncMock()
+    proc.communicate = AsyncMock(return_value=(b"<nmaprun></nmaprun>", b""))
+    proc.returncode = 0
+    return proc
+
+
+@pytest.mark.asyncio
+async def test_nmap_adds_the_dash_6_flag_for_an_ipv6_target():
+    """Without "-6", nmap treats an IPv6 literal as malformed, prints a
+    warning to stderr, and exits 0 having scanned 0 hosts -- confirmed live
+    to be silently reported as a normal "completed, 0 findings" result,
+    indistinguishable from a genuine clean scan, even though
+    NmapTool.supported_types has always claimed IPv6 support."""
+    with patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
+        await nmap_tool.run("::1", IOCType.IPV6, "quick")
+    argv = mock_exec.call_args.args
+    assert "-6" in argv, f"expected -6 in argv for an IPv6 target, got: {argv}"
+
+
+@pytest.mark.asyncio
+async def test_nmap_does_not_add_the_dash_6_flag_for_an_ipv4_target():
+    with patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
+        await nmap_tool.run("127.0.0.1", IOCType.IPV4, "quick")
+    argv = mock_exec.call_args.args
+    assert "-6" not in argv, f"-6 should never be added for a non-IPv6 target, got: {argv}"
 
 
 def test_severity_for_cves_empty_is_low():

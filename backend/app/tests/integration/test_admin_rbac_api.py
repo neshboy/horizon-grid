@@ -168,7 +168,14 @@ async def test_disabling_a_user_immediately_revokes_access_with_their_existing_t
         await set_user_active(user_id, False, None, "actor@qa.test")
 
         after = await client.get(f"{API}/auth/me", headers=_auth(token))
-        assert after.status_code == 401
+        # 403 "Account disabled" (not the generic 401 "Could not validate
+        # credentials") -- a real, confirmed concurrency finding showed the
+        # generic 401 here reads as a broken session/credentials rather than
+        # what actually happened (the account was deactivated), which
+        # mattered concretely for a concurrent last-admin-protection race
+        # where the losing caller's own account is what gets deactivated.
+        assert after.status_code == 403
+        assert after.json()["detail"] == "Account disabled"
     finally:
         await _delete_user(user_id)
 

@@ -233,7 +233,64 @@ VALUE`, the throwaway test database had to be torn down and recreated rather tha
 The Python-side `.value = "cancelled"` string is unaffected and correct as-is — it's what
 `_serialize_run()` returns to the API/frontend; it was never what gets sent to Postgres.
 
-## 8. Installer / Deployment
+## 8. Bugs Found by Independent Re-verification (v0.2.2)
+
+An independent re-verification pass (nine parallel reviewers, each reading the real code fresh
+rather than trusting §7's own claims) re-proved the cancellation fix correct, then found four new,
+real defects — all fixed and covered by new tests.
+
+**IPv6 scans never actually ran.** `nmap` requires a literal `-6` flag for an IPv6 target
+specification; without it, nmap logs `"<target> looks like an IPv6 target specification -- you have
+to use the -6 option"` to stderr and exits `0` having scanned 0 hosts. Since `run()`'s only failure
+check is `proc.returncode != 0`, this was indistinguishable from, and reported identically to, a
+genuine clean scan (`completed`, 0 findings, `error_message: null`) — despite `supported_types`
+having always included `IOCType.IPV6`. Fixed: `_PROFILE_ARGS`'s argv now gets `-6` prepended whenever
+`ioc_type == IOCType.IPV6`. Live-reproduced: manually replaying the exact quick-profile command
+against `::1` with and without `-6` confirmed the root cause and the fix (with `-6`, nmap correctly
+reports the host up with all common ports closed — a real, current answer, not a skipped scan).
+
+**Profile id was never validated before spawning a run.** `start_run()` validated `tool_id` (existence
+and IOC-type support) up front but never checked `profile_id` against the selected tool's own
+`profiles` dict. The only check lived deep inside each tool's `run()` (e.g. `nmap_tool.py`: `if
+profile_id not in _PROFILE_ARGS: return self._error(...)`), which returns an ordinary
+`ProviderStatus.ERROR` result rather than raising — `_execute_run()` doesn't treat that as
+exceptional, so the run reached `COMPLETED` with `error_message: null` and empty findings, exactly
+the fake-clean-result failure mode this module's own design principles rule out. Fixed with a new
+`UnknownProfileError`, raised in `start_run()`'s existing per-tool validation loop (`if profile_id not
+in tool.profiles: raise UnknownProfileError(...)`), mapped to a `400` in the route layer alongside the
+existing `UnknownToolError`. This check is tool-agnostic — it applies uniformly to every tool in
+`tool_ids`, not just Nmap, since the underlying gap was in the shared service-layer validation, not
+any one tool adapter.
+
+**A malformed CIDR lookup value crashed the endpoint.** `_validate_scope()`'s
+`ipaddress.ip_network(lookup.ioc_value, strict=False)` call for `IOCType.CIDR` had no error handling;
+a lookup reaching this code with a value that isn't a valid network string (only reachable via the
+pre-existing, unrelated lookup-creation `ioc_type_hint` override, which doesn't itself validate
+value-matches-hint) raised an uncaught `ValueError`, surfacing as a raw `500` — the only validation
+failure in this function that didn't produce a clean `400`. Fixed with a new `InvalidTargetError`,
+raised from a `try/except ValueError` around the `ip_network()` call, mapped to `400` in the route
+layer. Not an injection/RCE vector either way — the crash happens before any run row exists and
+before Nmap is ever invoked.
+
+**Completion could clobber another writer's terminal state.** `_execute_run()`'s three terminal
+UPDATEs (CANCELLED/FAILED/COMPLETED) had no `WHERE status IN (...)` guard, unlike `cancel_run()`'s own
+direct-DB-write fallback branch (§7), which already had one. Confirmed live via a genuine race: the
+startup orphan-recovery sweep (`_recover_orphaned_running_lookups()`) marked a run FAILED while its
+task was still genuinely executing (triggered out-of-band by a concurrent test process calling that
+same recovery function against the same live database — not a normal in-process restart); when the
+task's own success path ran moments later, its unguarded UPDATE unconditionally overwrote the row
+back to COMPLETED, but never touched the (COMPLETED-path UPDATE doesn't set) `error_message` column,
+leaving the stale FAILED-only message attached to a COMPLETED row — a self-contradictory result.
+Fixed: all three terminal UPDATEs now carry the same `.where(status.in_([PENDING, RUNNING]))` guard
+`cancel_run()` already used, each gated on `result.rowcount` before writing its own audit record.
+Findings/`ProviderResultRecord`s are still always persisted regardless of the guard's outcome — only
+the run's own `status`/`completed_at` write is guarded, since real scan data stays valid evidence
+even if an unrelated writer already finalized the row.
+
+Also fixed in the same pass: an empty `tool_ids` array is now rejected at the Pydantic layer
+(`Field(min_length=1)`) instead of silently producing a no-op `COMPLETED` run.
+
+## 9. Installer / Deployment
 
 `backend/Dockerfile` installs `nmap` via `apt-get` alongside the pre-existing `gcc libpq-dev curl`.
 `GET /api/v1/security-assessment/tool-health` calls `shutil.which("nmap")` at request time rather

@@ -104,6 +104,15 @@ services:
       # Ollama at a different host/port (e.g. a machine other than
       # localhost) had that setting written correctly but never honored.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    # host.docker.internal is a Docker Desktop (Windows/Mac) special DNS
+    # entry -- it does NOT resolve on native Linux Docker Engine (confirmed
+    # live: a real install on Ubuntu 24.04 via linux/build-deb.sh's own
+    # package, with a native host Ollama, failed to reach it) unless the
+    # daemon is explicitly told to map it, which Compose has supported since
+    # Docker Engine 20.10 via the special "host-gateway" value. Harmless and
+    # redundant on Docker Desktop, where it already resolves natively.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${HOST_PORT_BACKEND:-8000}:8000"
     depends_on:
@@ -126,6 +135,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+    # See the backend service's own comment above -- same native-Linux
+    # host.docker.internal gap, added here too since this process can also
+    # run AI-calling background jobs (scheduled OSINT/reanalysis).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,6 +158,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy

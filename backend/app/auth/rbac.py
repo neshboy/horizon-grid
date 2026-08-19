@@ -43,8 +43,23 @@ async def get_current_user(
 
     result = await db.execute(select(User).where(User.email == payload["sub"]))
     user = result.scalar_one_or_none()
-    if not user or not user.is_active:
+    if not user:
         raise credentials_error
+    if not user.is_active:
+        # Distinct from a genuinely bad/missing token -- this token is
+        # otherwise completely valid, but the account behind it was
+        # deactivated after it was issued. A real, confirmed race
+        # (two admins concurrently trying to disable each other, gated by
+        # the "never zero active admins" invariant in app/core/users.py)
+        # showed the previous generic 401 here is misleading in exactly
+        # this case: the losing caller's OWN account is what got
+        # deactivated by the other request that won the race, so their
+        # request never even reaches the business-rule check that would
+        # have told them a clearer story. A 403 with the same message
+        # POST /auth/login already uses for a disabled account at least
+        # tells them accurately what happened, instead of looking like a
+        # broken session/credentials.
+        raise HTTPException(status_code=403, detail="Account disabled")
     # A token issued before an administrator-initiated password reset (see
     # app/core/users.py's reset_password()) embeds the OLD token_version --
     # reject it immediately rather than letting it keep working until it

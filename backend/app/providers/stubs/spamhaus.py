@@ -47,7 +47,28 @@ _DBL_CODES = {
     "127.0.1.105": "abused legit malware",
     "127.0.1.106": "abused legit botnet C&C",
     "127.0.1.255": "query error - IP queries prohibited (misconfigured resolver)",
+    # Real, confirmed live: Spamhaus returns these SAME two shared
+    # query-error codes for DBL (domain) lookups too, not only ZEN (IP)
+    # lookups -- previously only documented in _ZEN_CODES. A container
+    # behind NAT/cloud/Docker default DNS (a common, unremarkable
+    # deployment shape, not unique to any one environment) gets this for
+    # every single domain lookup.
+    "127.255.255.254": "query error - public/open resolver not permitted to query Spamhaus",
+    "127.255.255.255": "query error - excessive number of queries, temporarily blocked",
 }
+
+# A response in this set means Spamhaus rejected/rate-limited the QUERY
+# ITSELF -- it is not asserting anything about the IP/domain being asked
+# about. Confirmed live: this was previously not distinguished from a real
+# listing at all (both DBL_CODES/ZEN_CODES entries and this set below were
+# only ever used to build a human-readable string; the actual verdict logic
+# below classified ANY non-empty DNS answer as "malicious"), so every
+# domain lookup made from an environment Spamhaus treats as a shared/public
+# resolver -- a common condition, reproduced live via a real Docker
+# container's default DNS -- was reported as "malicious" regardless of the
+# domain's real reputation. A universally-benign domain (example.org) was
+# confirmed live to be misclassified this way before this fix.
+_QUERY_ERROR_CODES = {"127.255.255.254", "127.255.255.255", "127.0.1.255"}
 
 
 class SpamhausProvider(BaseProvider):
@@ -95,7 +116,37 @@ class SpamhausProvider(BaseProvider):
                 source_url="https://www.spamhaus.org/lookup/",
             )
 
-        reasons = [codes.get(addr, f"listed ({addr}) -- reason not in local code table") for addr in addresses]
+        # A query-error code means Spamhaus rejected/rate-limited the QUERY
+        # ITSELF -- it asserts nothing about the IOC. Previously every
+        # non-empty answer (including these) was classified "malicious",
+        # confirmed live to falsely flag a universally-benign domain
+        # (example.org) as malicious from an environment (a real Docker
+        # container using default DNS) Spamhaus treats as a shared/public
+        # resolver.
+        real_listings = [addr for addr in addresses if addr not in _QUERY_ERROR_CODES]
+        error_codes = [addr for addr in addresses if addr in _QUERY_ERROR_CODES]
+
+        if not real_listings:
+            reasons = [codes.get(addr, f"query error ({addr})") for addr in error_codes]
+            return ProviderResult(
+                provider_id=self.provider_id,
+                provider_name=self.provider_name,
+                category=self.category,
+                status=ProviderStatus.ERROR,
+                ioc_value=ioc_value,
+                ioc_type=ioc_type,
+                data={
+                    "verdict": "unknown",
+                    "listed": False,
+                    "list": list_name,
+                    "query": query_name,
+                },
+                error_message=f"Spamhaus rejected the query itself ({'; '.join(reasons)}) -- this says nothing about whether '{ioc_value}' is actually listed.",
+                raw={"query": query_name, "answers": addresses},
+                source_url="https://www.spamhaus.org/lookup/",
+            )
+
+        reasons = [codes.get(addr, f"listed ({addr}) -- reason not in local code table") for addr in real_listings]
 
         return ProviderResult(
             provider_id=self.provider_id,
@@ -109,7 +160,7 @@ class SpamhausProvider(BaseProvider):
                 "listed": True,
                 "list": list_name,
                 "query": query_name,
-                "return_codes": addresses,
+                "return_codes": real_listings,
                 "listing_reason": "; ".join(reasons),
             },
             raw={"query": query_name, "answers": addresses},

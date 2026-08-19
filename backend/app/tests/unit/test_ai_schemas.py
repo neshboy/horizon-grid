@@ -200,3 +200,46 @@ class TestGroundFinalAssessment:
         )
         grounded = _ground_final_assessment(assessment, correlation, known_provider_ids={"spamhaus"})
         assert grounded.agreeing_providers == ["spamhaus"]
+
+
+# --- supporting_evidence must not be empty for a substantive threat_assessment ---
+
+
+def test_short_threat_assessment_does_not_require_supporting_evidence():
+    # A short, formulaic disclaimer ("Insufficient data to assess.", 29
+    # chars) makes no specific claim to back up -- must not be rejected.
+    assessment = FinalAssessment.model_validate(
+        _final_assessment(threat_assessment="Insufficient data to assess.", supporting_evidence=[])
+    )
+    assert assessment.supporting_evidence == []
+
+
+def test_substantive_threat_assessment_with_empty_supporting_evidence_is_rejected():
+    """Real, confirmed bug: supporting_evidence's own field description
+    already says 'if threat_assessment cites specific findings, this list
+    must NOT be left empty', but nothing enforced it -- confirmed live
+    (Ollama) that a substantive threat_assessment shipped with an empty
+    supporting_evidence list, uncorrected, to the UI."""
+    with pytest.raises(ValidationError):
+        FinalAssessment.model_validate(
+            _final_assessment(
+                threat_assessment=(
+                    "The high malicious probability and severity scores reported by multiple "
+                    "providers support this conclusion, indicating active exploitation."
+                ),
+                supporting_evidence=[],
+            )
+        )
+
+
+def test_substantive_threat_assessment_with_supporting_evidence_is_accepted():
+    assessment = FinalAssessment.model_validate(
+        _final_assessment(
+            threat_assessment=(
+                "The high malicious probability and severity scores reported by multiple "
+                "providers support this conclusion, indicating active exploitation."
+            ),
+            supporting_evidence=["VirusTotal: 45/70 engines flagged this hash as malicious."],
+        )
+    )
+    assert assessment.supporting_evidence == ["VirusTotal: 45/70 engines flagged this hash as malicious."]
