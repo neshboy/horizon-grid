@@ -22,10 +22,37 @@ Both are fixed by a single check inside OllamaClient.__init__ itself (the
 one real choke point both paths construct through), rather than duplicating
 the check at each call site.
 """
+import socket
+
 import pytest
 
 from app.ai.ollama_client import OllamaClient
 from app.ai.service import _build_client
+
+
+def _mock_getaddrinfo(ip_address: str):
+    """Build a fake, synchronous socket.getaddrinfo() that always resolves
+    to a single fixed, non-link-local address, regardless of hostname.
+
+    url_safety.assert_safe_outbound_url() calls the SYNCHRONOUS
+    socket.getaddrinfo(host, None) (unlike test_spamhaus_provider.py's
+    async loop.getaddrinfo mock, which isn't reusable here). Mocking only
+    this DNS-resolution step -- not assert_safe_outbound_url() itself --
+    means the real link-local check still runs for real; we're just making
+    "does this hostname resolve, and to what" deterministic and
+    environment-independent, instead of depending on whether
+    'host.docker.internal' happens to resolve on whatever machine runs the
+    test (it does inside a real Docker Desktop network, as in the
+    integration-docker CI job, but not on a bare GitHub Actions runner or a
+    plain dev laptop, which is exactly what broke this unit job).
+
+    ip_address is expected to be a real, safe, non-link-local address (e.g.
+    an RFC 5737 TEST-NET-3 documentation address) so the mocked resolution
+    is guaranteed to pass the link-local check on its own merits.
+    """
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip_address, 0))]
+    return _fake_getaddrinfo
 
 
 def test_link_local_base_url_is_rejected_via_the_runtime_config_override_path():
@@ -60,19 +87,47 @@ def test_loopback_base_url_is_still_allowed():
     assert client._base_url == "http://127.0.0.1:11434"
 
 
-def test_no_credentials_override_uses_the_settings_default_and_it_passes_validation():
+def test_no_credentials_override_uses_the_settings_default_and_it_passes_validation(monkeypatch):
     # credentials=None means "use the frozen .env-derived Settings client" --
     # this environment's real default (OLLAMA_BASE_URL, resolved via
     # host.docker.internal) is expected to be a genuinely safe address, so
-    # this must construct without raising.
+    # this must construct without raising. host.docker.internal itself only
+    # resolves inside a real Docker Desktop network (see this file's
+    # integration-docker vs. bare-runner split); DNS resolution is mocked
+    # here to a fixed, non-link-local TEST-NET-3 address (RFC 5737) so this
+    # test verifies "the real assert_safe_outbound_url() logic doesn't
+    # reject a resolvable, non-link-local host" deterministically, without
+    # depending on -- or weakening the real check against -- whatever
+    # host.docker.internal happens to resolve to on the machine running it.
+    import app.ai.ollama_client as ollama_client_module
+    import app.core.url_safety as url_safety_module
+
+    # This falls back to the settings-only singleton path (get_ollama_client()).
+    # Force a fresh construction so this test actually re-invokes
+    # OllamaClient.__init__ (and therefore the mocked DNS resolution + real
+    # link-local check below), rather than potentially passing vacuously on
+    # a singleton some earlier-run test in this process already cached.
+    monkeypatch.setattr(ollama_client_module, "_singleton", None)
+    monkeypatch.setattr(url_safety_module.socket, "getaddrinfo", _mock_getaddrinfo("203.0.113.5"))
+
     client = _build_client("ollama", None, None)
     assert client is not None
 
 
-def test_missing_base_url_in_credentials_does_not_raise():
+def test_missing_base_url_in_credentials_does_not_raise(monkeypatch):
     # An empty/partial credentials dict (e.g. a save that only changes
     # model_id) must not crash just because base_url wasn't supplied --
     # falls back to the settings default, which passes validation same as
-    # the test above.
+    # the test above. Same DNS mock, same reason: host.docker.internal
+    # isn't resolvable outside a real Docker Desktop network, so pin
+    # resolution to a fixed, safe address rather than depending on the
+    # environment running the test.
+    import app.core.url_safety as url_safety_module
+
+    # Unlike the test above, credentials={} (not None) here, so _build_client
+    # takes the direct-construction branch (a fresh OllamaClient every call),
+    # never the get_ollama_client() singleton -- no singleton reset needed.
+    monkeypatch.setattr(url_safety_module.socket, "getaddrinfo", _mock_getaddrinfo("203.0.113.5"))
+
     client = _build_client("ollama", {}, "llama3.2:3b")
     assert client is not None
