@@ -1,0 +1,18 @@
+[Unit]
+Description=HORIZON GRID -- run the daily database backup
+Documentation=https://github.com/
+
+[Timer]
+# 02:00 local time -- mirrors Windows's equivalent Scheduled Task
+# (Common.ps1's Register-BootAndWatchdogTasks), outside normal
+# investigation hours for most deployments. Persistent=true means a run
+# missed because the machine was off/asleep at 02:00 fires as soon as it's
+# next up instead of silently waiting a full day -- important for the
+# "unattended, no dev access, remote site" deployment this exists for,
+# where a backup silently not happening for days could go unnoticed.
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+Unit=horizon-grid-backup.service
+
+[Install]
+WantedBy=timers.target

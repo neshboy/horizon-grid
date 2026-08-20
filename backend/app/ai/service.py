@@ -141,6 +141,12 @@ def _build_client(backend: str, credentials: Optional[dict], model_id: Optional[
 
     if credentials is None:
         return get_ollama_client()
+    # SSRF validation (app/core/url_safety.py's assert_safe_outbound_url)
+    # happens inside OllamaClient.__init__ itself -- centralized there so it
+    # covers this override path AND get_ollama_client()'s settings-only
+    # singleton path by construction. A ValueError raised here surfaces as
+    # an ordinary AI-generation failure to callers (see _get_ai_client's
+    # `except Exception` callers below), not a raw crash.
     return OllamaClient(base_url=credentials.get("base_url"), model=model_id)
 
 

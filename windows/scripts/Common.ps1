@@ -291,9 +291,15 @@ function Sync-ComposeEnvFile {
 }
 
 function Test-BackendHealth {
+    <# Hits /health/detailed, not the plain /health -- confirmed live that
+       plain /health returns 200 unconditionally even with Postgres fully
+       stopped, so it can never tell an operator/watchdog whether the
+       backend can actually serve a real request. /health/detailed
+       genuinely pings Postgres and Redis and returns 503 if the database
+       is unreachable. #>
     param([string]$BaseUrl = "http://localhost:8000")
     try {
-        $resp = Invoke-WebRequest -Uri "$BaseUrl/health" -UseBasicParsing -TimeoutSec 5
+        $resp = Invoke-WebRequest -Uri "$BaseUrl/health/detailed" -UseBasicParsing -TimeoutSec 5
         return $resp.StatusCode -eq 200
     } catch {
         return $false
@@ -367,4 +373,69 @@ function New-AppFirewallRule {
 function Remove-AppFirewallRule {
     Get-NetFirewallRule -DisplayName $script:AppDisplayName -ErrorAction SilentlyContinue |
         Remove-NetFirewallRule -ErrorAction SilentlyContinue
+}
+
+$script:StartupTaskName = "$($script:AppDisplayName) Startup"
+$script:WatchdogTaskName = "$($script:AppDisplayName) Watchdog"
+$script:BackupTaskName = "$($script:AppDisplayName) Daily Backup"
+
+function Register-BootAndWatchdogTasks {
+    <#
+    .SYNOPSIS
+        Real mission-critical gap this closes: before this existed, NOTHING
+        on Windows restarted the platform after a host reboot -- only a
+        human clicking the "Start Platform" Start Menu shortcut. For a
+        remote, physically-inaccessible site, a power-loss-induced reboot
+        left the platform down indefinitely. Three Scheduled Tasks, all
+        running as SYSTEM (so they work with nobody ever logged on):
+        one fires once at boot (Service-Start.ps1, idempotent if already
+        running), one fires every 5 minutes indefinitely (Watchdog.ps1, a
+        no-op unless the backend is genuinely unhealthy), and one fires
+        once a day (Backup-Database.ps1 -Quiet, a no-op if not yet
+        configured or not running -- see that script's own early-exit
+        checks). Before this, the ONLY backup mechanism was the manual
+        "Backup Now" Start Menu shortcut and the wizard's own pre-upgrade
+        call -- a remote, unattended site with nobody ever clicking that
+        button had literally zero backups of its own investigation data.
+        Re-registering (calling this again, e.g. on a reconfigure) replaces
+        any existing task of the same name rather than erroring or
+        duplicating it.
+    #>
+    param([Parameter(Mandatory)][string]$ScriptsDir)
+
+    $action1 = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptsDir\Service-Start.ps1`""
+    $trigger1 = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+
+    Unregister-ScheduledTask -TaskName $script:StartupTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $script:StartupTaskName -Action $action1 -Trigger $trigger1 `
+        -Principal $principal -Settings $settings -Force | Out-Null
+
+    $action2 = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptsDir\Watchdog.ps1`""
+    $trigger2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
+
+    Unregister-ScheduledTask -TaskName $script:WatchdogTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $script:WatchdogTaskName -Action $action2 -Trigger $trigger2 `
+        -Principal $principal -Settings $settings -Force | Out-Null
+
+    $action3 = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptsDir\Backup-Database.ps1`" -Quiet"
+    # 02:00 local time -- outside normal investigation hours for most
+    # deployments, and well clear of the 5-minute watchdog's own activity.
+    $trigger3 = New-ScheduledTaskTrigger -Daily -At "02:00"
+
+    Unregister-ScheduledTask -TaskName $script:BackupTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $script:BackupTaskName -Action $action3 -Trigger $trigger3 `
+        -Principal $principal -Settings $settings -Force | Out-Null
+
+    Write-SetupLog "Registered Scheduled Tasks '$script:StartupTaskName' (at boot), '$script:WatchdogTaskName' (every 5 min), and '$script:BackupTaskName' (daily at 02:00)."
+}
+
+function Remove-BootAndWatchdogTasks {
+    Unregister-ScheduledTask -TaskName $script:StartupTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $script:WatchdogTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $script:BackupTaskName -Confirm:$false -ErrorAction SilentlyContinue
 }

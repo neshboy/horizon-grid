@@ -1,0 +1,11 @@
+[Unit]
+Description=HORIZON GRID -- run the health watchdog every 5 minutes
+Documentation=https://github.com/
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=horizon-grid-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -248,6 +248,20 @@ async def upsert_ai_provider(
                     row = ProviderRuntimeConfig(kind=ProviderKind.AI, provider_id=backend, provider_name=backend, enabled=True)
                     db.add(row)
                 merged = _merge_credentials(row, credentials)
+                if backend == "ollama" and merged.get("base_url"):
+                    # Real gap fixed: this save path persisted an operator-
+                    # supplied Ollama base_url with no validation at all --
+                    # assert_safe_outbound_url() was previously only called
+                    # from the separate Test-Connection convenience path
+                    # (app/api/routes/ai_config.py), which nothing stops an
+                    # operator from skipping entirely before hitting Save.
+                    # Checked post-merge (not against the raw `credentials`
+                    # argument) since a partial save that omits base_url
+                    # still ends up persisting whatever value is already
+                    # merged in from the stored row.
+                    from app.core.url_safety import assert_safe_outbound_url
+
+                    assert_safe_outbound_url(merged["base_url"])
                 row.encrypted_credentials = encrypt_secret(json.dumps(merged)) if merged else ""
                 if model_id is not None:
                     row.model_id = model_id

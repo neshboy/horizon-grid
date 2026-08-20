@@ -18,12 +18,16 @@ from app.core.config import get_settings
 from app.core.runtime_config import get_ioc_provider_snapshot
 from app.core.runtime_context import set_provider_overrides
 from app.ioc.types import IOCType
-from app.providers.base import BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
+from app.providers.base import RETRYABLE_EXCEPTIONS, BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
 from app.providers.registry import get_all_providers
 
 logger = logging.getLogger(__name__)
 
-_RETRYABLE_EXC = (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout)
+# Imported from base.py, not redefined here -- base.py's BaseProvider.run()
+# must re-raise exactly this set (not catch it in its own generic
+# except Exception) for the retry loop below to ever actually fire. See
+# base.py's own comment on RETRYABLE_EXCEPTIONS for the real bug this fixes.
+_RETRYABLE_EXC = RETRYABLE_EXCEPTIONS
 
 
 async def _run_with_policy(

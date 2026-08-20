@@ -1,0 +1,16 @@
+[Unit]
+Description=HORIZON GRID -- periodic health watchdog (one-shot check, fires on the .timer's schedule)
+# Deliberately does NOT declare Requires=/After=horizon-grid.service: this
+# unit's own script (watchdog.sh) already handles "not configured yet" and
+# "backend unreachable" as normal, quiet no-ops, so it doesn't need systemd
+# ordering to behave correctly, and ordering it after horizon-grid.service
+# would be meaningless anyway (that unit is oneshot/RemainAfterExit -- it's
+# always "active" once it has ever started once, whether or not the real
+# containers are currently healthy, which is exactly the gap this watchdog
+# exists to catch).
+Documentation=https://github.com/
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/horizon-grid watchdog
+TimeoutStartSec=120

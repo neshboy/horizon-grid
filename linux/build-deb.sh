@@ -85,6 +85,10 @@ cp "$REPO_ROOT/linux/bin/horizon-grid" "$STAGE/usr/bin/horizon-grid"
 chmod 0755 "$STAGE/usr/bin/horizon-grid"
 
 cp "$REPO_ROOT/linux/systemd/horizon-grid.service" "$STAGE/lib/systemd/system/horizon-grid.service"
+cp "$REPO_ROOT/linux/systemd/horizon-grid-watchdog.service" "$STAGE/lib/systemd/system/horizon-grid-watchdog.service"
+cp "$REPO_ROOT/linux/systemd/horizon-grid-watchdog.timer" "$STAGE/lib/systemd/system/horizon-grid-watchdog.timer"
+cp "$REPO_ROOT/linux/systemd/horizon-grid-backup.service" "$STAGE/lib/systemd/system/horizon-grid-backup.service"
+cp "$REPO_ROOT/linux/systemd/horizon-grid-backup.timer" "$STAGE/lib/systemd/system/horizon-grid-backup.timer"
 cp "$REPO_ROOT/linux/horizon-grid.desktop" "$STAGE/usr/share/applications/horizon-grid.desktop"
 
 cp "$REPO_ROOT/README.md" "$STAGE/usr/share/doc/horizon-grid/README.md" 2>/dev/null || true

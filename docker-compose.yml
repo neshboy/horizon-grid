@@ -1,6 +1,45 @@
+# Shared log-rotation config, referenced by every service below via YAML
+# anchor. Real gap this closes: the app previously logged only to stdout
+# with no rotation anywhere, and Docker's default json-file driver applies
+# with NO size cap unless a service explicitly sets one -- confirmed live
+# via `docker inspect ... --format '{{.HostConfig.LogConfig}}'` showing an
+# empty options map on every service. Left unbounded, months of steady
+# investigation volume (each one emits 10+ structured log lines) grows the
+# per-container *-json.log file on the host without limit, up to and
+# including filling the same disk Postgres's own data directory lives on --
+# a silent way to take down the whole stack that has nothing to do with the
+# application's own behavior. 10MB x 3 files = 30MB max per container,
+# comfortably enough history for troubleshooting without being unbounded.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
+    logging: *default-logging
+    # Resource limits: real gap this closes -- no CPU/memory limit existed
+    # on any service, so a runaway task, a memory leak, or a burst of
+    # concurrent investigations could consume unbounded host RAM/CPU and
+    # starve or crash sibling containers with no backstop. These are
+    # reasonable starting defaults for a single-site deployment, not a
+    # precisely-tuned ceiling -- an administrator with real headroom to
+    # spare, or a genuinely resource-constrained remote site, should adjust
+    # them for their own hardware rather than treat these numbers as fixed.
+    mem_limit: 1g
+    # Mission-critical requirement: a crashed/OOM-killed datastore must come
+    # back on its own, not stay down until a human notices. Confirmed live
+    # this is real (not automatic): a plain `docker run` container with no
+    # restart policy stayed Exited(137) indefinitely after a kill, while the
+    # SAME container with restart:unless-stopped correctly self-restarted
+    # after a genuine OOM-kill (RestartCount incremented, verified via
+    # `docker inspect`). "unless-stopped" (not "always") deliberately still
+    # respects an explicit `docker stop`/`docker compose stop` -- an operator
+    # who intentionally stops the stack for maintenance should not have it
+    # silently come back underneath them.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ioc}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ioc}
@@ -25,6 +64,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
     ports:
       # Loopback-only -- see the postgres service's port comment above for
       # why (same LAN-exposure issue, same fix, same reasoning).
@@ -37,6 +79,9 @@ services:
 
   neo4j:
     image: neo4j:5-community
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 1g
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-changeme-neo4j}
       NEO4J_PLUGINS: '["apoc"]'
@@ -54,6 +99,13 @@ services:
 
   opensearch:
     image: opensearchproject/opensearch:2.17.0
+    restart: unless-stopped
+    logging: *default-logging
+    # 1g container ceiling against a 512m JVM heap -- gives the JVM's own
+    # off-heap/native overhead (direct buffers, thread stacks, mmap'd
+    # segments) real room; a container limit equal to -Xmx alone routinely
+    # OOM-kills a JVM under normal operation.
+    mem_limit: 1g
     environment:
       discovery.type: single-node
       DISABLE_SECURITY_PLUGIN: "true"
@@ -71,6 +123,16 @@ services:
   backend:
     build:
       context: ./backend
+    logging: *default-logging
+    # Highest of any service on purpose: this process also spawns real
+    # nmap subprocesses (backend/app/security_assessment/nmap_tool.py) on
+    # top of its own normal Python/AI-client footprint, and a burst of
+    # concurrent security-assessment runs is exactly the scenario this
+    # limit exists to contain (paired with the new concurrency cap on
+    # concurrent scans in security_assessment.py, a belt-and-suspenders
+    # pair -- the cap bounds how many can run at once, this limits the
+    # damage if that cap is ever raised or a single run is unusually heavy).
+    mem_limit: 2g
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ioc}:${POSTGRES_PASSWORD:-ioc}@postgres:5432/${POSTGRES_DB:-ioc_intel}
@@ -120,15 +182,28 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Hits /health/detailed (real Postgres/Redis check), not plain /health
+    # (which is deliberately dependency-free -- see main.py's own comment).
+    # start_period gives alembic upgrade head + uvicorn startup real time
+    # before the first failure counts against retries.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/detailed"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       - ./backend:/app
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    restart: unless-stopped
 
   celery_worker:
     build:
       context: ./backend
+    logging: *default-logging
+    mem_limit: 1g
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ioc}:${POSTGRES_PASSWORD:-ioc}@postgres:5432/${POSTGRES_DB:-ioc_intel}
@@ -153,6 +228,8 @@ services:
   celery_beat:
     build:
       context: ./backend
+    logging: *default-logging
+    mem_limit: 512m
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379/0
@@ -171,6 +248,8 @@ services:
   frontend:
     build:
       context: ./frontend
+    logging: *default-logging
+    mem_limit: 1g
     environment:
       # Left empty by default so the frontend auto-detects its own origin
       # (see frontend/lib/api.ts's getApiUrl()) -- only set PUBLIC_API_URL
@@ -182,12 +261,14 @@ services:
     ports:
       - "${HOST_PORT_FRONTEND:-3000}:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     volumes:
       - ./frontend:/app
       - /app/node_modules
       - /app/.next
     command: npm run dev
+    restart: unless-stopped
 
 volumes:
   postgres_data:

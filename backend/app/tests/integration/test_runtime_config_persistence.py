@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import new_session
-from app.core.runtime_config import upsert_ai_provider, upsert_ioc_provider
+from app.core.runtime_config import get_ai_config, upsert_ai_provider, upsert_ioc_provider
 from app.models.runtime_config import ProviderKind, ProviderRuntimeConfig
 
 
@@ -212,3 +212,34 @@ async def test_first_time_save_recovers_from_a_concurrent_insert_collision():
     # same call chain.
     assert call_count["value"] >= 2, "must retry after the simulated collision, not propagate it"
     assert result["configured"] is True
+
+
+@pytest.mark.asyncio
+async def test_upsert_ai_provider_rejects_a_link_local_ollama_base_url():
+    """Regression test for a real SSRF gap found during a mission-critical-
+    readiness review: this save path (the one every real Ollama config
+    change actually goes through -- app/api/routes/runtime.py's
+    configure_ai_provider) previously persisted an operator-supplied
+    base_url with zero validation, even though app/core/url_safety.py's
+    assert_safe_outbound_url() already existed -- it was just never called
+    from here, only from the separate Test-Connection convenience path.
+
+    Deliberately targets the real "ollama" backend id, since the new guard
+    is gated on that literal string, not an arbitrary test-only provider_id
+    -- but the whole point of the guard is to raise BEFORE any DB write
+    happens, so this must leave whatever was already configured untouched.
+    The pre-existing config is snapshotted and restored regardless, as a
+    second line of defense against that assumption ever being wrong."""
+    before = await get_ai_config("ollama")
+
+    try:
+        with pytest.raises(ValueError, match="link-local"):
+            await upsert_ai_provider("ollama", {"base_url": "http://169.254.169.254:11434"}, None)
+
+        after = await get_ai_config("ollama")
+        assert after == before, "a rejected save must not mutate the already-stored Ollama config"
+    finally:
+        if before is not None:
+            await upsert_ai_provider("ollama", before["credentials"], before["model_id"])
+        else:
+            await _cleanup("ollama", ProviderKind.AI)

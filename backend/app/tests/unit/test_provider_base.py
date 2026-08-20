@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from app.ioc.types import IOCType
-from app.providers.base import BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
+from app.providers.base import RETRYABLE_EXCEPTIONS, BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
 
 
 class _StubProvider(BaseProvider):
@@ -139,6 +139,34 @@ async def test_successful_fetch_returns_ok_with_latency(client):
     assert result.status == ProviderStatus.OK
     assert result.latency_ms is not None
     assert result.latency_ms >= 0
+
+
+@pytest.mark.parametrize("exc_cls", [httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout])
+@pytest.mark.asyncio
+async def test_retryable_exceptions_propagate_out_of_run_instead_of_being_normalized(client, exc_cls):
+    """Real bug fixed: run() previously caught these in its own generic
+    except Exception, silently normalizing them into ProviderStatus.ERROR
+    BEFORE orchestrator.py's retry wrapper (which wraps run(), not fetch())
+    ever saw them -- so provider_max_retries had no effect for any provider
+    that didn't catch its own httpx errors. These must propagate as real
+    exceptions out of run() so the orchestrator's tenacity loop can retry."""
+
+    async def fetch_impl(ioc_value, ioc_type, http_client):
+        request = httpx.Request("GET", "https://example.test")
+        raise exc_cls("transient network failure", request=request)
+
+    provider = _StubProvider(fetch_impl=fetch_impl)
+    with pytest.raises(exc_cls):
+        await provider.run("1.2.3.4", IOCType.IPV4, client)
+
+
+@pytest.mark.asyncio
+async def test_retryable_exceptions_tuple_matches_what_run_reraises(client):
+    """Guards against base.py and orchestrator.py's copies of this tuple
+    drifting apart -- orchestrator.py imports RETRYABLE_EXCEPTIONS from here
+    rather than redefining it, but a future edit to either side re-adding a
+    local tuple would silently break that sharing without this assertion."""
+    assert RETRYABLE_EXCEPTIONS == (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout)
 
 
 @pytest.mark.asyncio

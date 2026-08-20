@@ -1,0 +1,13 @@
+[Unit]
+Description=HORIZON GRID -- daily database backup (one-shot, fires on the .timer's schedule)
+# Deliberately does NOT declare Requires=/After=horizon-grid.service, same
+# reasoning as horizon-grid-watchdog.service: backup-database.sh already
+# handles "not configured yet" and "Postgres container not running" as
+# normal, quiet no-ops (see that script's own early-exit checks), so it
+# doesn't need systemd ordering to behave correctly.
+Documentation=https://github.com/
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/horizon-grid backup --quiet
+TimeoutStartSec=120

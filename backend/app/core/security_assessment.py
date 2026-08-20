@@ -59,6 +59,20 @@ _background_tasks: set[asyncio.Task] = set()
 # cancel_run()'s handling of that case).
 _run_tasks: dict[uuid.UUID, asyncio.Task] = {}
 
+# Real gap found and fixed during a mission-critical-readiness review: there
+# was no platform-wide cap on concurrent security-assessment executions --
+# every POST /run immediately spawned a new background task and, for nmap,
+# a new real OS subprocess, with no semaphore/queue anywhere in the call
+# path. A burst of simultaneous run requests (malicious or merely
+# enthusiastic concurrent usage) could spawn an unbounded number of
+# simultaneous nmap subprocesses. This bounds actual TOOL EXECUTION, not
+# how many runs can be pending -- a burst of requests still all get accepted
+# and queued (status stays PENDING/RUNNING as normal), they just execute
+# their tools N at a time rather than all at once. 4 is a starting default
+# for a single-site deployment, not a precisely-tuned ceiling.
+_MAX_CONCURRENT_SCANS = 4
+_scan_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SCANS)
+
 
 def _spawn_background(coro, run_id: uuid.UUID) -> asyncio.Task:
     task = asyncio.create_task(coro)
@@ -350,9 +364,10 @@ async def _execute_run(
 
     try:
         tool_results = []
-        for tool_id in tool_ids:
-            tool = get_tool(tool_id)
-            tool_results.append(await tool.run(target, ioc_type, profile_id))
+        async with _scan_semaphore:
+            for tool_id in tool_ids:
+                tool = get_tool(tool_id)
+                tool_results.append(await tool.run(target, ioc_type, profile_id))
     except asyncio.CancelledError:
         # asyncio.CancelledError has inherited from BaseException (not
         # Exception) since Python 3.8, specifically so a generic `except

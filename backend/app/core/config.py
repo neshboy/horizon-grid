@@ -169,6 +169,17 @@ class Settings(BaseSettings):
     lookup_rate_limit_max_calls: int = 10
     lookup_rate_limit_window_seconds: int = 60
 
+    # --- Rate limiting (per attempted email, on login) -- real gap found
+    # and fixed during a mission-critical-readiness review: failed logins
+    # were logged/audited but never throttled at all, so nothing stopped an
+    # unlimited-speed credential-stuffing/brute-force attempt against any
+    # known email address. A fixed-window rate limit (not a hard account
+    # lockout, which would itself let an attacker lock out a real admin by
+    # deliberately failing their login) slows this down to a fixed ceiling
+    # per window without permanently blocking anyone.
+    login_rate_limit_max_attempts: int = 10
+    login_rate_limit_window_seconds: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:

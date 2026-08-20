@@ -379,6 +379,20 @@ begin
     'Get-NetFirewallRule -DisplayName ''HORIZON GRID'' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
+  // The boot-startup and health-watchdog Scheduled Tasks (Common.ps1's
+  // Register-BootAndWatchdogTasks) aren't user data either -- remove them
+  // unconditionally, same reasoning as the firewall rule above. Named
+  // literally rather than reusing $script:AppDisplayName (Pascal Script has
+  // no access to that PowerShell variable) -- must stay in sync with
+  // Common.ps1's $script:StartupTaskName/$script:WatchdogTaskName/
+  // $script:BackupTaskName if the display name ever changes.
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    'Unregister-ScheduledTask -TaskName ''HORIZON GRID Startup'' -Confirm:$false -ErrorAction SilentlyContinue; ' +
+    'Unregister-ScheduledTask -TaskName ''HORIZON GRID Watchdog'' -Confirm:$false -ErrorAction SilentlyContinue; ' +
+    'Unregister-ScheduledTask -TaskName ''HORIZON GRID Daily Backup'' -Confirm:$false -ErrorAction SilentlyContinue"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
   // {app}\app\.env (Sync-ComposeEnvFile's mirror of the real config, kept
   // there because docker-compose.yml's env_file: .env directive resolves
   // relative to the compose project directory -- see Common.ps1's own

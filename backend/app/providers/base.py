@@ -17,6 +17,22 @@ import httpx
 
 from app.ioc.types import IOCType
 
+# Shared with app/providers/orchestrator.py's retry wrapper (imported from
+# here, not redefined there) -- these are the exception types the
+# orchestrator's tenacity retry loop is configured to retry. Real bug fixed
+# here: run() below previously caught these via its own generic
+# `except Exception`, normalizing them into an ordinary ProviderResult
+# BEFORE they could ever propagate up to the orchestrator's retry wrapper
+# (which wraps run(), not fetch()) -- confirmed live with a fake provider
+# whose fetch() always raised httpx.ConnectError: fetch() was invoked
+# exactly once despite provider_max_retries=2 being configured, i.e. the
+# retry never actually fired. run()'s own docstring already documented the
+# INTENDED design ("retries/timeouts are enforced by the orchestrator...
+# individual providers should not implement their own retry loop") -- the
+# bug was that the generic catch-all didn't carve out an exception for
+# these specific types to let that intended design actually work.
+RETRYABLE_EXCEPTIONS = (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout)
+
 
 class ProviderCategory(str, Enum):
     THREAT_INTEL = "threat_intel"
@@ -181,6 +197,14 @@ class BaseProvider(abc.ABC):
                 ioc_type=ioc_type,
                 error_message=f"HTTP {exc.response.status_code}: {exc}",
             )
+        except RETRYABLE_EXCEPTIONS:
+            # Deliberately NOT normalized into a ProviderResult here --
+            # re-raising lets the orchestrator's tenacity retry loop
+            # actually see it and retry, per this method's own docstring.
+            # A transient connection blip on the LAST retry attempt still
+            # ends up normalized to a ProviderResult, just one level up in
+            # _run_with_policy's own except _RETRYABLE_EXC branch, not here.
+            raise
         except Exception as exc:  # noqa: BLE001 -- normalize any connector failure
             result = ProviderResult(
                 provider_id=self.provider_id,

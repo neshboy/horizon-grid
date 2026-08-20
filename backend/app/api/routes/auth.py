@@ -11,6 +11,8 @@ from app.auth.security import (
     verify_password,
 )
 from app.core import users as user_svc
+from app.core.cache import RateLimiter
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.user import Role, User
 from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserResponse
@@ -48,6 +50,30 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    # Real gap fixed: failed logins were logged/audited but never throttled
+    # at all -- nothing previously stopped an unlimited-speed brute-force
+    # attempt against any known email. Checked before the password is even
+    # verified, keyed on the ATTEMPTED email (case-normalized the same way
+    # registration/login lookups already are) rather than source IP, since
+    # this app has no reverse-proxy-aware trusted-IP configuration to safely
+    # extract a real client IP from -- an attacker-controlled IP is
+    # trivially fake at either FastAPI or a naive X-Forwarded-For read, so
+    # a per-account limit is the honest, exploit-resistant choice available
+    # right now. A fixed-window limit, not a hard lockout, so this can
+    # never itself become a way to lock a real admin out.
+    settings = get_settings()
+    login_limiter = RateLimiter(
+        f"login:{payload.email.lower()}",
+        max_calls=settings.login_rate_limit_max_attempts,
+        window_seconds=settings.login_rate_limit_window_seconds,
+    )
+    if not await login_limiter.allow():
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many login attempts for this account. Try again in under "
+            f"{settings.login_rate_limit_window_seconds} seconds.",
+        )
+
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
     if not user or not verify_password(payload.password, user.hashed_password):

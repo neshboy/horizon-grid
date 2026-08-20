@@ -175,6 +175,24 @@ $State = @{
     SetupSucceeded   = $false
 }
 
+# Real gap fixed: the AI Configuration and Providers pages let an operator
+# click "Next" regardless of whether Test Connection was ever clicked, or
+# even after it just failed -- nothing stopped an obviously-broken
+# credential/base_url from being written to .env as if it were valid,
+# directly contradicting this platform's own "must not save obviously
+# invalid config as valid" requirement. Keyed by backend/provider id ->
+# @{ Signature; Ok }, where Signature is the exact JSON body that was last
+# tested for that id -- each page's Validate block only blocks Next when the
+# CURRENT textbox values still match a Signature whose last real test
+# result was Ok=$false. Deliberately does NOT block on "never tested": on a
+# fresh install the backend isn't running yet, so a live test is genuinely
+# impossible before this point -- see the Summary/Install page's own
+# post-health-check AI validation for how that case is still honestly
+# reported rather than silently assumed to be fine.
+$script:AiTestState = @{}
+$script:AiGetters = @{}
+$script:ProviderTestState = @{}
+
 # If this is a re-run (Configuration from the Start Menu) on an existing
 # install, load the real current values instead of starting from scratch.
 if ($State.IsUpgrade) {
@@ -464,6 +482,12 @@ function Add-AiTestConnectionRow {
     #>
     param($Panel, [int]$Y, [string]$BackendId, [scriptblock]$GetCredentials, [scriptblock]$GetModel)
 
+    # Registered so the AI Configuration page's Validate block can recompute
+    # the CURRENT signature for whichever backend is selected at Next-click
+    # time, using the exact same credential-gathering logic this button
+    # itself uses -- see $script:AiTestState's declaration for why.
+    $script:AiGetters[$BackendId] = @{ Creds = $GetCredentials; Model = $GetModel }
+
     $btn = New-StyledButton -Text "Test Connection" -X 0 -Y $Y -W 160 -Primary $false
     $lblStatus = New-StyledLabel -Text "" -X 172 -Y ($Y + 7) -W 460 -Height 40 -Color $MutedColor
     $Panel.Controls.Add($btn)
@@ -480,23 +504,26 @@ function Add-AiTestConnectionRow {
             $lblStatus.Text = "Sign-in required: enter your existing administrator email and password on the Administrator Account page, then return here to test."
             return
         }
+        $creds = & $GetCredentials
+        $model = & $GetModel
+        $body = @{ backend = $BackendId; credentials = $creds; model = $model } | ConvertTo-Json -Compress
         try {
-            $creds = & $GetCredentials
-            $model = & $GetModel
-            $body = @{ backend = $BackendId; credentials = $creds; model = $model } | ConvertTo-Json
             $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/test" `
                 -Method Post -Body $body -ContentType "application/json" `
                 -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 30
             if ($resp.ok) {
                 $lblStatus.ForeColor = $SuccessColor
                 $lblStatus.Text = "OK: $($resp.message) (model: $($resp.model), $($resp.latency_ms) ms)"
+                $script:AiTestState[$BackendId] = @{ Signature = $body; Ok = $true }
             } else {
                 $lblStatus.ForeColor = $ErrorColor
                 $lblStatus.Text = "FAILED: $($resp.message)"
+                $script:AiTestState[$BackendId] = @{ Signature = $body; Ok = $false }
             }
         } catch {
             $lblStatus.ForeColor = $ErrorColor
             $lblStatus.Text = "FAILED: $(Get-FriendlyHttpError $_)"
+            $script:AiTestState[$BackendId] = @{ Signature = $body; Ok = $false }
         }
     }.GetNewClosure())
 }
@@ -996,7 +1023,33 @@ $Pages += @{
     }
     Validate = {
         $t = $script:AiPagePanel.Tag
-        $State.Settings.AiBackend = $t.BackendMap[$t.Combo.SelectedIndex]
+        $selectedBackend = $t.BackendMap[$t.Combo.SelectedIndex]
+
+        # Blocks Next only when a live test for the CURRENT settings of the
+        # SELECTED backend already ran and failed -- never blocks on
+        # "never tested" (a fresh install has no backend running yet to
+        # test against). See $script:AiTestState's declaration for the full
+        # rationale.
+        $getters = $script:AiGetters[$selectedBackend]
+        if ($getters) {
+            $currentSignature = @{
+                backend = $selectedBackend
+                credentials = (& $getters.Creds)
+                model = (& $getters.Model)
+            } | ConvertTo-Json -Compress
+            $lastResult = $script:AiTestState[$selectedBackend]
+            if ($lastResult -and $lastResult.Signature -eq $currentSignature -and -not $lastResult.Ok) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "The last connection test for '$selectedBackend' failed with these exact settings. Fix the settings and click 'Test Connection' again before continuing, or change a value.",
+                    "AI Configuration",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                return $false
+            }
+        }
+
+        $State.Settings.AiBackend = $selectedBackend
         $State.Settings.OllamaModel = $t.OllamaModel.Text.Trim()
         $State.Settings.AnthropicApiKey = $t.AnthropicKey.Text.Trim()
         $State.Settings.BedrockApiKey = $t.BedrockKey.Text.Trim()
@@ -1126,21 +1179,24 @@ $Pages += @{
                 } else {
                     $creds = @{ $def.Field = $ctrls.Key.Text.Trim() }
                 }
+                $body = @{ credentials = $creds } | ConvertTo-Json -Compress
                 try {
-                    $body = @{ credentials = $creds } | ConvertTo-Json
                     $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/providers/$pid0/test" `
                         -Method Post -Body $body -ContentType "application/json" `
                         -Headers @{ Authorization = "Bearer $($State.AccessToken)" } -TimeoutSec 15
                     if ($resp.ok) {
                         $ctrls.Status.ForeColor = $SuccessColor
                         $ctrls.Status.Text = "OK: $($resp.message) ($($resp.latency_ms) ms)"
+                        $script:ProviderTestState[$pid0] = @{ Signature = $body; Ok = $true }
                     } else {
                         $ctrls.Status.ForeColor = $ErrorColor
                         $ctrls.Status.Text = "FAILED: $($resp.message)"
+                        $script:ProviderTestState[$pid0] = @{ Signature = $body; Ok = $false }
                     }
                 } catch {
                     $ctrls.Status.ForeColor = $ErrorColor
                     $ctrls.Status.Text = "FAILED: $(Get-FriendlyHttpError $_)"
+                    $script:ProviderTestState[$pid0] = @{ Signature = $body; Ok = $false }
                 }
             }.GetNewClosure())
 
@@ -1157,6 +1213,30 @@ $Pages += @{
         foreach ($providerId in $ProviderDefs.Keys) {
             $def = $ProviderDefs[$providerId]
             $ctrls = $rows[$providerId]
+
+            # Same "block only on a known-failed test for these exact
+            # current values" gate as the AI Configuration page -- see
+            # $script:ProviderTestState's declaration for the rationale.
+            # Every provider here is optional, so a blank/never-tested
+            # field is never blocked, only a field that was actively tested
+            # and failed with the value still unchanged.
+            if ($def.Field -eq "censys") {
+                $currentCreds = @{ personal_access_token = $ctrls.Token.Text.Trim(); organization_id = $ctrls.Org.Text.Trim() }
+            } else {
+                $currentCreds = @{ $def.Field = $ctrls.Key.Text.Trim() }
+            }
+            $currentSignature = @{ credentials = $currentCreds } | ConvertTo-Json -Compress
+            $lastResult = $script:ProviderTestState[$providerId]
+            if ($lastResult -and $lastResult.Signature -eq $currentSignature -and -not $lastResult.Ok) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "The last connection test for '$($def.Label)' failed with these exact settings. Fix the value and click 'Test' again before continuing, clear the field to skip this provider, or change the value.",
+                    "Threat Intelligence Providers",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                return $false
+            }
+
             if ($def.Field -eq "censys") {
                 $State.Settings.CensysPersonalAccessToken = $ctrls.Token.Text.Trim()
                 $State.Settings.CensysOrganizationId = $ctrls.Org.Text.Trim()
@@ -1407,6 +1487,15 @@ $Pages += @{
                 }
                 & $addLine "Backend is healthy."
 
+                & $addLine "Registering automatic startup and health-watchdog tasks..."
+                try {
+                    Register-BootAndWatchdogTasks -ScriptsDir $ScriptsDir
+                    & $addLine "The platform will now start automatically after a reboot, and self-restart if it becomes unhealthy."
+                } catch {
+                    & $addLine "WARNING: Could not register the startup/watchdog Scheduled Tasks -- the platform will need to be started manually (Start Menu -> Start Platform) after a reboot. $($_.Exception.Message)"
+                    Write-SetupLog "Register-BootAndWatchdogTasks failed: $_" "WARN"
+                }
+
                 if ($State.AdminEmail -and $State.AdminPassword) {
                     & $addLine "Creating administrator account..."
                     try {
@@ -1459,6 +1548,47 @@ $Pages += @{
                     }
                 } else {
                     & $addLine "Setup complete."
+                }
+
+                # Real gap fixed: this wizard could reach "Setup complete"
+                # with an AI backend configuration that was never actually
+                # validated against the now-running backend -- on a FRESH
+                # install, the AI Configuration page's own Test Connection
+                # button cannot work yet (no backend to test against at that
+                # point), so a bad base_url/API key/model id previously went
+                # straight into .env with zero validation of any kind,
+                # directly contradicting "must not save obviously invalid
+                # config as valid." Now that the backend is confirmed
+                # healthy and (if requested) an admin session exists, run
+                # the exact same real connectivity test the AI Configuration
+                # page's own button runs, and report the honest result --
+                # never silently assume success, but also never block
+                # "Setup complete" on it (a downed/not-yet-started local
+                # Ollama at install time is common and recoverable; the
+                # platform's own AI-resilience design already tolerates a
+                # missing AI backend at investigation time).
+                if ($State.AccessToken) {
+                    & $addLine "Validating the configured AI backend ($($State.Settings.AiBackend))..."
+                    try {
+                        $aiGetters = $script:AiGetters[$State.Settings.AiBackend]
+                        $aiCreds = if ($aiGetters) { & $aiGetters.Creds } else { @{} }
+                        $aiModel = if ($aiGetters) { & $aiGetters.Model } else { $null }
+                        $aiTestBody = @{ backend = $State.Settings.AiBackend; credentials = $aiCreds; model = $aiModel } | ConvertTo-Json -Compress
+                        $aiTestResp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/test" `
+                            -Method Post -Body $aiTestBody -ContentType "application/json" `
+                            -Headers @{ Authorization = "Bearer $($State.AccessToken)" } -TimeoutSec 30
+                        if ($aiTestResp.ok) {
+                            & $addLine "AI backend OK: $($aiTestResp.message) (model: $($aiTestResp.model), $($aiTestResp.latency_ms) ms)"
+                        } else {
+                            & $addLine "WARNING: the configured AI backend ('$($State.Settings.AiBackend)') failed a connectivity test: $($aiTestResp.message). Investigations will still run, but AI-generated summaries/assessments will fail until this is fixed (Start Menu -> Configuration -> AI Configuration)."
+                            Write-SetupLog "Post-install AI connectivity test failed: $($aiTestResp.message)" "WARN"
+                        }
+                    } catch {
+                        & $addLine "WARNING: could not reach the AI backend to validate it ($(Get-FriendlyHttpError $_)). Investigations will still run, but AI-generated summaries/assessments will fail until this is fixed (Start Menu -> Configuration -> AI Configuration)."
+                        Write-SetupLog "Post-install AI connectivity test errored: $_" "WARN"
+                    }
+                } else {
+                    & $addLine "Skipped AI backend validation (not signed in) -- verify it from Start Menu -> Configuration -> AI Configuration once you have signed in."
                 }
 
                 New-Item -ItemType File -Path $setupCompleteMarker -Force | Out-Null

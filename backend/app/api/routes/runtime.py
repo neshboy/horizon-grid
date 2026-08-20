@@ -43,9 +43,12 @@ async def configure_ai_provider(
 ):
     if backend not in svc.AI_BACKENDS:
         raise HTTPException(status_code=400, detail=f"Unknown AI backend {backend!r}")
-    return await svc.upsert_ai_provider(
-        backend, payload.credentials, payload.model_id, actor_user_id=user.id, actor_email=user.email
-    )
+    try:
+        return await svc.upsert_ai_provider(
+            backend, payload.credentials, payload.model_id, actor_user_id=user.id, actor_email=user.email
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class ActivateAIRequest(BaseModel):

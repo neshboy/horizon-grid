@@ -23,6 +23,10 @@ case "$1" in
         if command -v systemctl >/dev/null 2>&1; then
             systemctl stop horizon-grid.service 2>/dev/null || true
             systemctl disable horizon-grid.service 2>/dev/null || true
+            systemctl stop horizon-grid-watchdog.timer 2>/dev/null || true
+            systemctl disable horizon-grid-watchdog.timer 2>/dev/null || true
+            systemctl stop horizon-grid-backup.timer 2>/dev/null || true
+            systemctl disable horizon-grid-backup.timer 2>/dev/null || true
         fi
         ;;
     upgrade|deconfigure)

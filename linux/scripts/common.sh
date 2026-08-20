@@ -182,7 +182,12 @@ hg_test_backend_health() {
     # section for the full explanation of why that override exists at all.
     local host="${HORIZON_GRID_BACKEND_HOST:-localhost}"
     local base_url="${1:-http://${host}:8000}"
-    curl -fsS --max-time 5 "${base_url}/health" >/dev/null 2>&1
+    # /health/detailed, not plain /health -- confirmed live that plain
+    # /health returns 200 unconditionally even with Postgres fully stopped,
+    # so it can never tell this watchdog whether the backend can actually
+    # serve a real request. /health/detailed genuinely pings Postgres and
+    # Redis and returns 503 if the database is unreachable.
+    curl -fsS --max-time 5 "${base_url}/health/detailed" >/dev/null 2>&1
 }
 
 hg_test_frontend_health() {

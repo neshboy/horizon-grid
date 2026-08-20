@@ -1,12 +1,15 @@
 """FastAPI application entrypoint."""
+import asyncio
 import contextvars
 import logging
+import time
 import uuid
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
+from sqlalchemy import text
 
 from app.api.routes import (
     admin,
@@ -52,9 +55,15 @@ structlog.configure(processors=[structlog.processors.JSONRenderer()])
 
 settings = get_settings()
 
+_APP_VERSION = "0.2.2"
+# Process start time, for /health's uptime field -- confirmed live that no
+# version or uptime indicator was visible anywhere an operator would look
+# (the FastAPI version= below only ever surfaces via /docs' OpenAPI schema).
+_process_started_at = time.monotonic()
+
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.2",
+    version=_APP_VERSION,
     description="Unified threat intelligence workbench: single-search IOC lookup across "
     "dozens of providers, correlated and summarized by a local Ollama model "
     "(or AWS Bedrock/Gemini/Anthropic/Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter, configurable via AI_BACKEND).",
@@ -223,9 +232,91 @@ async def _recover_orphaned_running_lookups() -> None:
         logging.getLogger(__name__).exception("Orphaned-security-assessment-run recovery sweep failed -- continuing without it.")
 
 
+_HEALTH_CHECK_TIMEOUT_SECONDS = 3.0
+
+
+async def _check_postgres() -> tuple[bool, str]:
+    try:
+        from app.core.db import new_session
+
+        async def _ping():
+            async with new_session() as db:
+                await db.execute(text("SELECT 1"))
+
+        await asyncio.wait_for(_ping(), timeout=_HEALTH_CHECK_TIMEOUT_SECONDS)
+        return True, "reachable"
+    except Exception as exc:  # noqa: BLE001 -- a health check must never itself raise
+        return False, f"{type(exc).__name__}: {exc}"[:200]
+
+
+async def _check_redis() -> tuple[bool, str]:
+    try:
+        from app.core.cache import get_redis
+
+        await asyncio.wait_for(get_redis().ping(), timeout=_HEALTH_CHECK_TIMEOUT_SECONDS)
+        return True, "reachable"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"[:200]
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": settings.app_name}
+    """Deliberately dependency-free liveness check -- kept that way on
+    purpose (see this repo's own backend-tests.yml comment and
+    test_api_health.py's docstring, both explicit that this route needs no
+    real DB/Redis so it can smoke-test on a bare CI runner). Real
+    dependency checking lives at GET /health/detailed instead of here, so
+    this endpoint's existing fast, infra-independent contract is preserved
+    for anything already relying on it. version/uptime_seconds are new but
+    additive -- no dependency involved, and no existing caller asserts an
+    exact/closed body shape (confirmed: test_api_health.py only checks
+    status=="ok" and "service" in body)."""
+    return {
+        "status": "ok",
+        "service": settings.app_name,
+        "version": _APP_VERSION,
+        "uptime_seconds": round(time.monotonic() - _process_started_at, 1),
+    }
+
+
+@app.get("/health/detailed")
+async def health_detailed(response: Response):
+    """The real dependency-aware health check. Previously there was no such
+    thing anywhere in the app -- GET /health (above) unconditionally
+    returned {"status": "ok"} regardless of any real dependency, confirmed
+    live to still return 200 with Postgres fully stopped, which is exactly
+    the signal a watchdog needs to judge whether the backend is actually
+    usable, not just alive. Windows/Linux watchdog scripts and the Docker
+    Compose healthcheck: block should point here, not at the plain
+    /health above.
+
+    Postgres is load-bearing for virtually every endpoint, so its failure
+    makes the service genuinely DOWN (503). Redis failure is DEGRADED
+    (200): caching, rate limiting, and Celery break, but read-mostly
+    endpoints that don't touch Redis still work -- collapsing that into the
+    same DOWN/503 state as a real outage would be less accurate, not more.
+    """
+    postgres_ok, postgres_detail = await _check_postgres()
+    redis_ok, redis_detail = await _check_redis()
+
+    if not postgres_ok:
+        overall = "down"
+    elif not redis_ok:
+        overall = "degraded"
+    else:
+        overall = "healthy"
+
+    response.status_code = 200 if overall != "down" else 503
+    return {
+        "status": overall,
+        "service": settings.app_name,
+        "version": _APP_VERSION,
+        "uptime_seconds": round(time.monotonic() - _process_started_at, 1),
+        "dependencies": {
+            "postgres": {"ok": postgres_ok, "detail": postgres_detail},
+            "redis": {"ok": redis_ok, "detail": redis_detail},
+        },
+    }
 
 
 @app.get("/network-info")

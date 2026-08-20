@@ -37,6 +37,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -144,6 +145,70 @@ def fail(message):
 def require_root():
     if os.geteuid() != 0:
         fail("This wizard needs root privileges (it writes %s and manages containers). Re-run with sudo." % CONFIG_DIR)
+
+
+def run_prerequisite_checks():
+    """Real gap fixed: check-prerequisites.sh (Docker Engine installed and
+    running, Compose v2, root, disk space -- every HARD check the postinst
+    hook already runs) was previously wired up as informational-only: the
+    .deb's postinst discards its exit code and output entirely
+    (`>/dev/null 2>&1 || echo "...run 'horizon-grid check' for detail"`),
+    and NOTHING ever called it before actually attempting
+    'docker compose up' -- a missing Docker install, for example, surfaced
+    only as a confusing "docker: command not found" mid-install instead of
+    a clear, actionable message up front. This wizard is the one place both
+    a fresh install AND a reconfigure always pass through, so it's the
+    right choke point to make this a REAL gate rather than yet another
+    caller that has to remember to check.
+
+    The script itself already distinguishes hard vs. soft failures (its own
+    `ok` field in the JSON it emits) -- soft ones (unsupported distro,
+    <8GB RAM, a busy port the wizard's own Port Review page can remap) are
+    only ever printed as warnings here, never block. Only a real hard
+    failure (not root, Docker missing/not running, no Compose v2,
+    insufficient disk) stops the wizard, with the exact failing checks'
+    own detail printed -- never a bare "prerequisites failed."
+    """
+    script = os.path.join(SCRIPTS_DIR, "check-prerequisites.sh")
+    if not os.path.isfile(script):
+        log("check-prerequisites.sh not found at %s -- skipping the prerequisite gate." % script, "WARN")
+        return
+
+    print("Checking prerequisites...")
+    try:
+        # stderr is the script's own live human-readable [PASS]/[FAIL] lines
+        # -- left to flow straight to the terminal instead of capturing it,
+        # so the operator sees real-time progress exactly like running
+        # 'horizon-grid check' directly. Only stdout (the one JSON summary
+        # object) is parsed to decide whether to block.
+        result = subprocess.run([script], stdout=subprocess.PIPE, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log("Could not run check-prerequisites.sh: %s -- continuing without this gate." % exc, "WARN")
+        print("WARNING: could not run the prerequisite check (%s) -- continuing anyway." % exc)
+        return
+
+    try:
+        report = json.loads(result.stdout)
+    except (ValueError, TypeError) as exc:
+        log("Could not parse check-prerequisites.sh output: %s -- continuing without this gate." % exc, "WARN")
+        print("WARNING: could not parse the prerequisite check's output -- continuing anyway.")
+        return
+
+    if report.get("ok"):
+        print("Prerequisites OK.")
+        print("")
+        return
+
+    failing_hard = [c for c in report.get("checks", []) if c.get("hard") and not c.get("passed")]
+    print("")
+    print("ERROR: this machine does not meet HORIZON GRID's hard requirements:")
+    for check in failing_hard:
+        print("  - %s: %s" % (check.get("name"), check.get("detail")))
+    print("")
+    print("Fix the issue(s) above, then re-run 'sudo horizon-grid configure'. "
+          "Run 'sudo horizon-grid check' any time to re-check without starting the wizard.")
+    log("Blocked by failing hard prerequisite check(s): %s" % ", ".join(c.get("name", "") for c in failing_hard), "ERROR")
+    sys.exit(1)
 
 
 def new_random_secret(nbytes=48):
@@ -403,35 +468,47 @@ class Wizard:
         return None
 
     def test_ai_connection(self, backend, credentials, model=None):
+        """Returns True (test passed), False (test ran and failed), or None
+        (no session available -- couldn't test at all, e.g. fresh install
+        with no backend running yet). Callers use this three-way result
+        (not just print output) to decide whether it's safe to move on --
+        see page_ai_configuration's retry loop and run_install's
+        post-health-check validation, both added to fix a real gap: nothing
+        previously stopped an operator from proceeding past a config value
+        that had just failed a live connectivity test."""
         token = self.get_or_create_session()
         if not token:
             print("  (Test Connection needs the backend already running with a valid admin login -- "
                   "same as on Windows, this only works on a reconfigure of an existing install. "
                   "It will be reachable from the app's own AI Providers page after install.)")
-            return
+            return None
         base = "http://%s:%s" % (BACKEND_HOST, self.settings["PortBackend"])
         payload = {"backend": backend, "credentials": credentials}
         if model:
             payload["model"] = model
         status, body = http_json("POST", base + "/api/v1/ai/test", payload, token=token, timeout=30)
-        if status == 200:
+        if status == 200 and body.get("ok"):
             print("  OK: %s" % body.get("message", body))
-        else:
-            print("  FAILED: %s" % body.get("detail", body))
+            return True
+        print("  FAILED: %s" % body.get("detail", body.get("message", body)))
+        return False
 
     def test_provider_connection(self, provider_id, credentials):
+        """Same three-way True/False/None contract as test_ai_connection --
+        see its docstring."""
         token = self.get_or_create_session()
         if not token:
             print("  (Test Connection needs the backend already running with a valid admin login -- "
                   "reachable from the app's own IOC Providers page after install.)")
-            return
+            return None
         base = "http://%s:%s" % (BACKEND_HOST, self.settings["PortBackend"])
         status, body = http_json("POST", base + "/api/v1/providers/%s/test" % provider_id,
                                   {"credentials": credentials}, token=token, timeout=30)
-        if status == 200:
+        if status == 200 and body.get("ok"):
             print("  OK: %s" % body.get("message", body))
-        else:
-            print("  FAILED: %s" % body.get("detail", body))
+            return True
+        print("  FAILED: %s" % body.get("detail", body.get("message", body)))
+        return False
 
     # --- pages ---
     def page_welcome(self):
@@ -484,66 +561,96 @@ class Wizard:
         backends = ["ollama", "anthropic", "bedrock", "gemini", "groq", "openai", "kimi", "deepseek", "xai", "mistral", "openrouter"]
         current = self.settings.get("AiBackend", "ollama")
         print("AI backends: %s" % ", ".join(backends))
-        backend = self.ask("ai_backend", "AI backend", default=current)
-        if backend not in backends:
-            print("  Unrecognized backend '%s' -- keeping '%s'." % (backend, current))
-            backend = current
-        self.settings["AiBackend"] = backend
 
-        creds = {}
-        if backend == "ollama":
-            self.settings["OllamaBaseUrl"] = self.ask("ollama_base_url", "Ollama base URL",
-                                                        default=self.settings.get("OllamaBaseUrl", "http://host.docker.internal:11434"))
-            self.settings["OllamaModel"] = self.ask("ollama_model", "Ollama model",
-                                                      default=self.settings.get("OllamaModel", "llama3.2:3b"))
-            creds = {"base_url": self.settings["OllamaBaseUrl"], "model": self.settings["OllamaModel"]}
-        elif backend == "anthropic":
-            self.settings["AnthropicApiKey"] = self.ask("anthropic_api_key", "Anthropic API key", secret=True) or self.settings.get("AnthropicApiKey", "")
-            self.settings["AnthropicModelId"] = self.ask("anthropic_model_id", "Anthropic model ID", default=self.settings.get("AnthropicModelId", "claude-sonnet-4-5-20250929"))
-            creds = {"api_key": self.settings["AnthropicApiKey"]}
-        elif backend == "bedrock":
-            self.settings["BedrockApiKey"] = self.ask("bedrock_api_key", "Bedrock API key (bearer token, preferred)", secret=True) or self.settings.get("BedrockApiKey", "")
-            self.settings["AwsAccessKeyId"] = self.ask("aws_access_key_id", "AWS access key ID (fallback, if no Bedrock API key)", default=self.settings.get("AwsAccessKeyId", ""))
-            self.settings["AwsSecretAccessKey"] = self.ask("aws_secret_access_key", "AWS secret access key", secret=True) or self.settings.get("AwsSecretAccessKey", "")
-            self.settings["AwsRegion"] = self.ask("aws_region", "AWS region", default=self.settings.get("AwsRegion", "us-east-1"))
-            self.settings["BedrockModelId"] = self.ask("bedrock_model_id", "Bedrock model ID", default=self.settings.get("BedrockModelId"))
-            creds = {"api_key": self.settings["BedrockApiKey"], "access_key_id": self.settings["AwsAccessKeyId"],
-                     "secret_access_key": self.settings["AwsSecretAccessKey"], "region": self.settings["AwsRegion"]}
-        elif backend == "gemini":
-            self.settings["GeminiApiKey"] = self.ask("gemini_api_key", "Gemini API key", secret=True) or self.settings.get("GeminiApiKey", "")
-            self.settings["GeminiModelId"] = self.ask("gemini_model_id", "Gemini model ID", default=self.settings.get("GeminiModelId", "gemini-2.0-flash"))
-            creds = {"api_key": self.settings["GeminiApiKey"]}
-        elif backend == "groq":
-            self.settings["GroqApiKey"] = self.ask("groq_api_key", "Groq API key", secret=True) or self.settings.get("GroqApiKey", "")
-            self.settings["GroqModelId"] = self.ask("groq_model_id", "Groq model ID", default=self.settings.get("GroqModelId", "llama-3.3-70b-versatile"))
-            creds = {"api_key": self.settings["GroqApiKey"]}
-        elif backend == "openai":
-            self.settings["OpenAiApiKey"] = self.ask("openai_api_key", "OpenAI API key", secret=True) or self.settings.get("OpenAiApiKey", "")
-            self.settings["OpenAiModelId"] = self.ask("openai_model_id", "OpenAI model ID", default=self.settings.get("OpenAiModelId", "gpt-4o-mini"))
-            creds = {"api_key": self.settings["OpenAiApiKey"]}
-        elif backend == "kimi":
-            self.settings["KimiApiKey"] = self.ask("kimi_api_key", "Kimi (Moonshot) API key", secret=True) or self.settings.get("KimiApiKey", "")
-            self.settings["KimiModelId"] = self.ask("kimi_model_id", "Kimi model ID", default=self.settings.get("KimiModelId", "kimi-k2.5"))
-            creds = {"api_key": self.settings["KimiApiKey"]}
-        elif backend == "deepseek":
-            self.settings["DeepSeekApiKey"] = self.ask("deepseek_api_key", "DeepSeek API key", secret=True) or self.settings.get("DeepSeekApiKey", "")
-            self.settings["DeepSeekModelId"] = self.ask("deepseek_model_id", "DeepSeek model ID", default=self.settings.get("DeepSeekModelId", "deepseek-v4-flash"))
-            creds = {"api_key": self.settings["DeepSeekApiKey"]}
-        elif backend == "xai":
-            self.settings["XaiApiKey"] = self.ask("xai_api_key", "xAI (Grok) API key", secret=True) or self.settings.get("XaiApiKey", "")
-            self.settings["XaiModelId"] = self.ask("xai_model_id", "xAI model ID", default=self.settings.get("XaiModelId", "grok-4.6"))
-            creds = {"api_key": self.settings["XaiApiKey"]}
-        elif backend == "mistral":
-            self.settings["MistralApiKey"] = self.ask("mistral_api_key", "Mistral API key", secret=True) or self.settings.get("MistralApiKey", "")
-            self.settings["MistralModelId"] = self.ask("mistral_model_id", "Mistral model ID", default=self.settings.get("MistralModelId", "mistral-small-2506"))
-            creds = {"api_key": self.settings["MistralApiKey"]}
-        elif backend == "openrouter":
-            self.settings["OpenRouterApiKey"] = self.ask("openrouter_api_key", "OpenRouter API key", secret=True) or self.settings.get("OpenRouterApiKey", "")
-            self.settings["OpenRouterModelId"] = self.ask("openrouter_model_id", "OpenRouter model ID", default=self.settings.get("OpenRouterModelId", "openai/gpt-4o"))
-            creds = {"api_key": self.settings["OpenRouterApiKey"]}
+        # Real gap fixed: this page previously let an operator answer "no"
+        # (the default) to "Test this connection now?", or test it, see
+        # FAILED, and just proceed anyway -- nothing enforced this
+        # platform's own "must not save obviously invalid config as valid"
+        # requirement. Wrapped in a loop so a failed test re-prompts for the
+        # same backend's fields (pre-filled with what was just typed, easy
+        # to fix or re-confirm) instead of silently moving on. Deliberately
+        # does NOT loop forever with no escape: a fresh install has no
+        # backend running yet to test against at all (get_or_create_session
+        # returns None, test_*_connection returns None, not False) -- that
+        # case can never be gated here, see run_install()'s own
+        # post-health-check validation for how it's still honestly reported
+        # once the backend exists. An interactive operator who deliberately
+        # wants to proceed past a REAL failure (e.g. Ollama isn't started
+        # yet but will be before first use) can still choose to.
+        while True:
+            backend = self.ask("ai_backend", "AI backend", default=current)
+            if backend not in backends:
+                print("  Unrecognized backend '%s' -- keeping '%s'." % (backend, current))
+                backend = current
+            self.settings["AiBackend"] = backend
 
-        if self.confirm("Test this connection now?", default=False):
-            self.test_ai_connection(backend, creds)
+            creds = {}
+            if backend == "ollama":
+                self.settings["OllamaBaseUrl"] = self.ask("ollama_base_url", "Ollama base URL",
+                                                            default=self.settings.get("OllamaBaseUrl", "http://host.docker.internal:11434"))
+                self.settings["OllamaModel"] = self.ask("ollama_model", "Ollama model",
+                                                          default=self.settings.get("OllamaModel", "llama3.2:3b"))
+                creds = {"base_url": self.settings["OllamaBaseUrl"], "model": self.settings["OllamaModel"]}
+            elif backend == "anthropic":
+                self.settings["AnthropicApiKey"] = self.ask("anthropic_api_key", "Anthropic API key", secret=True) or self.settings.get("AnthropicApiKey", "")
+                self.settings["AnthropicModelId"] = self.ask("anthropic_model_id", "Anthropic model ID", default=self.settings.get("AnthropicModelId", "claude-sonnet-4-5-20250929"))
+                creds = {"api_key": self.settings["AnthropicApiKey"]}
+            elif backend == "bedrock":
+                self.settings["BedrockApiKey"] = self.ask("bedrock_api_key", "Bedrock API key (bearer token, preferred)", secret=True) or self.settings.get("BedrockApiKey", "")
+                self.settings["AwsAccessKeyId"] = self.ask("aws_access_key_id", "AWS access key ID (fallback, if no Bedrock API key)", default=self.settings.get("AwsAccessKeyId", ""))
+                self.settings["AwsSecretAccessKey"] = self.ask("aws_secret_access_key", "AWS secret access key", secret=True) or self.settings.get("AwsSecretAccessKey", "")
+                self.settings["AwsRegion"] = self.ask("aws_region", "AWS region", default=self.settings.get("AwsRegion", "us-east-1"))
+                self.settings["BedrockModelId"] = self.ask("bedrock_model_id", "Bedrock model ID", default=self.settings.get("BedrockModelId"))
+                creds = {"api_key": self.settings["BedrockApiKey"], "access_key_id": self.settings["AwsAccessKeyId"],
+                         "secret_access_key": self.settings["AwsSecretAccessKey"], "region": self.settings["AwsRegion"]}
+            elif backend == "gemini":
+                self.settings["GeminiApiKey"] = self.ask("gemini_api_key", "Gemini API key", secret=True) or self.settings.get("GeminiApiKey", "")
+                self.settings["GeminiModelId"] = self.ask("gemini_model_id", "Gemini model ID", default=self.settings.get("GeminiModelId", "gemini-2.0-flash"))
+                creds = {"api_key": self.settings["GeminiApiKey"]}
+            elif backend == "groq":
+                self.settings["GroqApiKey"] = self.ask("groq_api_key", "Groq API key", secret=True) or self.settings.get("GroqApiKey", "")
+                self.settings["GroqModelId"] = self.ask("groq_model_id", "Groq model ID", default=self.settings.get("GroqModelId", "llama-3.3-70b-versatile"))
+                creds = {"api_key": self.settings["GroqApiKey"]}
+            elif backend == "openai":
+                self.settings["OpenAiApiKey"] = self.ask("openai_api_key", "OpenAI API key", secret=True) or self.settings.get("OpenAiApiKey", "")
+                self.settings["OpenAiModelId"] = self.ask("openai_model_id", "OpenAI model ID", default=self.settings.get("OpenAiModelId", "gpt-4o-mini"))
+                creds = {"api_key": self.settings["OpenAiApiKey"]}
+            elif backend == "kimi":
+                self.settings["KimiApiKey"] = self.ask("kimi_api_key", "Kimi (Moonshot) API key", secret=True) or self.settings.get("KimiApiKey", "")
+                self.settings["KimiModelId"] = self.ask("kimi_model_id", "Kimi model ID", default=self.settings.get("KimiModelId", "kimi-k2.5"))
+                creds = {"api_key": self.settings["KimiApiKey"]}
+            elif backend == "deepseek":
+                self.settings["DeepSeekApiKey"] = self.ask("deepseek_api_key", "DeepSeek API key", secret=True) or self.settings.get("DeepSeekApiKey", "")
+                self.settings["DeepSeekModelId"] = self.ask("deepseek_model_id", "DeepSeek model ID", default=self.settings.get("DeepSeekModelId", "deepseek-v4-flash"))
+                creds = {"api_key": self.settings["DeepSeekApiKey"]}
+            elif backend == "xai":
+                self.settings["XaiApiKey"] = self.ask("xai_api_key", "xAI (Grok) API key", secret=True) or self.settings.get("XaiApiKey", "")
+                self.settings["XaiModelId"] = self.ask("xai_model_id", "xAI model ID", default=self.settings.get("XaiModelId", "grok-4.6"))
+                creds = {"api_key": self.settings["XaiApiKey"]}
+            elif backend == "mistral":
+                self.settings["MistralApiKey"] = self.ask("mistral_api_key", "Mistral API key", secret=True) or self.settings.get("MistralApiKey", "")
+                self.settings["MistralModelId"] = self.ask("mistral_model_id", "Mistral model ID", default=self.settings.get("MistralModelId", "mistral-small-2506"))
+                creds = {"api_key": self.settings["MistralApiKey"]}
+            elif backend == "openrouter":
+                self.settings["OpenRouterApiKey"] = self.ask("openrouter_api_key", "OpenRouter API key", secret=True) or self.settings.get("OpenRouterApiKey", "")
+                self.settings["OpenRouterModelId"] = self.ask("openrouter_model_id", "OpenRouter model ID", default=self.settings.get("OpenRouterModelId", "openai/gpt-4o"))
+                creds = {"api_key": self.settings["OpenRouterApiKey"]}
+
+            tested_ok = None
+            if self.confirm("Test this connection now?", default=False):
+                tested_ok = self.test_ai_connection(backend, creds)
+            if tested_ok is False:
+                if self.args.non_interactive:
+                    log("AI backend '%s' failed its connectivity test in non-interactive mode -- "
+                        "continuing anyway. Fix it later with 'horizon-grid configure'." % backend, "WARN")
+                    print("  WARNING: continuing with a failing AI backend configuration (non-interactive mode).")
+                    break
+                retry = input("  This test FAILED. Re-enter these settings? [Y/n]: ").strip().lower()
+                if retry in ("", "y", "yes"):
+                    continue
+                print("  Continuing with these settings despite the failed test -- fix later with "
+                      "'horizon-grid configure' if needed.")
+            break
         print("")
 
     def page_providers(self):
@@ -557,22 +664,41 @@ class Wizard:
             if settings_key in seen_settings_keys:
                 continue
             seen_settings_keys.add(settings_key)
-            current = self.settings.get(settings_key, "")
-            value = self.ask(settings_key.lower(), label, secret=True) or current
-            self.settings[settings_key] = value
-            # Censys needs BOTH the Personal Access Token and Organization ID
-            # together -- deferred to right after the second field is
-            # collected (matches the app's own Manage Providers UI, where
-            # Censys's row only has one Test Connection button for both
-            # fields, not one each) rather than testing the token alone with
-            # an organization ID that hasn't been typed yet.
-            if env_key == "CENSYS_PERSONAL_ACCESS_TOKEN":
-                continue
-            if value and self.confirm("  Test %s now?" % label, default=False):
-                creds = {"api_key": value}
-                if env_key == "CENSYS_ORGANIZATION_ID":
-                    creds = {"personal_access_token": self.settings.get("CensysPersonalAccessToken", ""), "organization_id": value}
-                self.test_provider_connection(provider_id, creds)
+            # Same "don't silently move on from a known-failed test" gate as
+            # page_ai_configuration -- see its comment for the full
+            # rationale. Every provider here is optional, so a blank value
+            # is never gated (nothing to test); only a non-blank value that
+            # was actively tested and failed re-prompts.
+            while True:
+                current = self.settings.get(settings_key, "")
+                value = self.ask(settings_key.lower(), label, secret=True) or current
+                self.settings[settings_key] = value
+                # Censys needs BOTH the Personal Access Token and Organization ID
+                # together -- deferred to right after the second field is
+                # collected (matches the app's own Manage Providers UI, where
+                # Censys's row only has one Test Connection button for both
+                # fields, not one each) rather than testing the token alone with
+                # an organization ID that hasn't been typed yet.
+                if env_key == "CENSYS_PERSONAL_ACCESS_TOKEN":
+                    break
+                tested_ok = None
+                if value and self.confirm("  Test %s now?" % label, default=False):
+                    creds = {"api_key": value}
+                    if env_key == "CENSYS_ORGANIZATION_ID":
+                        creds = {"personal_access_token": self.settings.get("CensysPersonalAccessToken", ""), "organization_id": value}
+                    tested_ok = self.test_provider_connection(provider_id, creds)
+                if tested_ok is False:
+                    if self.args.non_interactive:
+                        log("Provider '%s' failed its connectivity test in non-interactive mode -- "
+                            "continuing anyway. Fix it later with 'horizon-grid configure'." % provider_id, "WARN")
+                        print("  WARNING: continuing with a failing %s configuration (non-interactive mode)." % label)
+                        break
+                    retry = input("  This test FAILED. Re-enter this value? [Y/n]: ").strip().lower()
+                    if retry in ("", "y", "yes"):
+                        continue
+                    print("  Continuing with this value despite the failed test -- clear it to skip this "
+                          "provider, or fix it later with 'horizon-grid configure'.")
+                break
         print("")
 
     def page_ports(self):
@@ -615,7 +741,37 @@ class Wizard:
             sys.exit(0)
 
     # --- install/start ---
+    def _backup_before_upgrade(self):
+        """Real gap fixed: Setup-Wizard.ps1's Windows equivalent already
+        calls Backup-Database.ps1 before an upgrade re-runs docker compose
+        up --build against an existing install (real gap fixed: if the new
+        configuration or a container-image change breaks something, there
+        was no fresh snapshot taken right before the risky operation) --
+        this wizard had no equivalent call at all. Runs BEFORE the new
+        .env is written, same ordering as Windows, so it snapshots the
+        database exactly as it stood under the OLD configuration.
+        backup-database.sh already no-ops quietly if Postgres isn't
+        currently running (e.g. a first attempt that failed before ever
+        starting containers) -- same as Windows's script, and same
+        "reflect what actually happened, don't just print success"
+        discipline: this checks the real exit code."""
+        script = os.path.join(SCRIPTS_DIR, "backup-database.sh")
+        if not os.path.isfile(script):
+            log("backup-database.sh not found at %s -- skipping pre-upgrade backup." % script, "WARN")
+            return
+        print("Backing up the database before upgrading...")
+        result = subprocess.run([script, "--quiet"])
+        if result.returncode == 0:
+            print("Backup step finished (see %s if you need to confirm a snapshot was actually taken)." % os.path.join(DATA_DIR, "backups"))
+        else:
+            print("WARNING: database backup failed (exit code %d) -- continuing with the upgrade anyway. "
+                  "See %s for details." % (result.returncode, LOG_DIR))
+            log("Pre-upgrade backup failed with exit code %d" % result.returncode, "WARN")
+
     def run_install(self):
+        if self.is_upgrade:
+            self._backup_before_upgrade()
+
         write_platform_env_file(self.settings, ENV_FILE)
         log("Configuration written to %s" % ENV_FILE)
         print("Configuration written to %s" % ENV_FILE)
@@ -656,7 +812,11 @@ class Wizard:
         base = "http://%s:%s" % (BACKEND_HOST, self.settings["PortBackend"])
         healthy = False
         for _ in range(60):
-            status, _ = http_json("GET", base + "/health", timeout=5)
+            # /health/detailed, not plain /health: the very next step below
+            # creates the administrator account, a real database write, so
+            # this must confirm Postgres is actually reachable -- not just
+            # that the backend process has started -- before proceeding.
+            status, _ = http_json("GET", base + "/health/detailed", timeout=5)
             if status == 200:
                 healthy = True
                 break
@@ -664,6 +824,53 @@ class Wizard:
         if not healthy:
             fail("Backend did not become healthy in time. Run 'horizon-grid status' for detail.")
         print("Backend is healthy.")
+
+        # Real gap found and fixed during a mission-critical-readiness
+        # review: horizon-grid.service's own [Install] section declares
+        # WantedBy=multi-user.target, but a systemd unit file merely
+        # existing (even after `systemctl daemon-reload`, which postinst
+        # already runs) does nothing at boot -- WantedBy= only takes effect
+        # once `systemctl enable` has actually created the symlink under
+        # /etc/systemd/system/multi-user.target.wants/. Confirmed live: this
+        # call never existed anywhere in the codebase before, meaning a
+        # configured, running platform would NOT come back after a host
+        # reboot despite the unit file itself being entirely correct -- the
+        # exact Linux equivalent of the "no boot-time auto-start at all" gap
+        # this same review found and fixed on Windows (Setup-Wizard.ps1's
+        # Register-BootAndWatchdogTasks).
+        if shutil.which("systemctl"):
+            try:
+                subprocess.run(["systemctl", "enable", "horizon-grid.service"], check=True)
+                print("Enabled horizon-grid.service -- the platform will now start automatically on boot.")
+            except subprocess.CalledProcessError as exc:
+                print("WARNING: could not enable horizon-grid.service (%s) -- the platform will need to be "
+                      "started manually after a reboot ('sudo horizon-grid start')." % exc)
+                log("systemctl enable horizon-grid.service failed: %s" % exc, "WARN")
+            try:
+                # --now also starts the timer immediately, matching
+                # Register-BootAndWatchdogTasks's Windows equivalent (the
+                # watchdog task is registered to already be running, not
+                # merely armed for the next boot).
+                subprocess.run(["systemctl", "enable", "--now", "horizon-grid-watchdog.timer"], check=True)
+                print("Enabled horizon-grid-watchdog.timer -- the platform will now self-restart if it becomes unhealthy.")
+            except subprocess.CalledProcessError as exc:
+                print("WARNING: could not enable horizon-grid-watchdog.timer (%s) -- no automatic recovery "
+                      "watchdog will run." % exc)
+                log("systemctl enable horizon-grid-watchdog.timer failed: %s" % exc, "WARN")
+            try:
+                # Real gap fixed: before this, the ONLY backup mechanisms on
+                # Linux were the manual 'horizon-grid backup' command and
+                # this wizard's own pre-upgrade call (see _backup_before_upgrade)
+                # -- a remote, unattended site where nobody ever runs that
+                # command manually had zero recurring backups of its own
+                # investigation data. Mirrors Windows's equivalent daily
+                # Scheduled Task (Common.ps1's Register-BootAndWatchdogTasks).
+                subprocess.run(["systemctl", "enable", "--now", "horizon-grid-backup.timer"], check=True)
+                print("Enabled horizon-grid-backup.timer -- the database will now be backed up automatically every day.")
+            except subprocess.CalledProcessError as exc:
+                print("WARNING: could not enable horizon-grid-backup.timer (%s) -- no automatic recurring "
+                      "backup will run ('sudo horizon-grid backup' still works manually)." % exc)
+                log("systemctl enable horizon-grid-backup.timer failed: %s" % exc, "WARN")
 
         if not self.is_upgrade:
             print("Creating administrator account...")
@@ -677,8 +884,79 @@ class Wizard:
                                       {"email": self.admin_email, "password": self.admin_password})
             if status != 200:
                 fail("Administrator account was created but sign-in verification failed: %s" % body.get("detail", body))
+            # Needed below for the post-install AI validation call -- this
+            # login response was previously discarded once its status code
+            # was checked, so no session existed yet for a fresh install
+            # even though one was just legitimately obtained right here.
+            self.access_token = body.get("access_token")
             print("Administrator account created: %s" % self.admin_email)
             log("Administrator account created: %s" % self.admin_email)
+        elif self.admin_email and self.admin_password:
+            # Reconfigure run where the operator re-entered credentials --
+            # get_or_create_session() is a no-op if a session already exists
+            # (e.g. from testing a connection earlier on this same run).
+            self.get_or_create_session()
+
+        # Real gap fixed: this wizard could reach "Setup complete" with an
+        # AI backend configuration that was never actually validated against
+        # the now-running backend -- on a FRESH install, page_ai_configuration's
+        # own Test Connection prompt cannot work yet (no backend to test
+        # against at that point), so a bad base_url/API key/model id
+        # previously went straight into .env with zero validation of any
+        # kind, directly contradicting "must not save obviously invalid
+        # config as valid." Now that the backend is confirmed healthy and
+        # (if available) a session exists, run the exact same real
+        # connectivity test page_ai_configuration's own prompt runs, and
+        # report the honest result -- never silently assume success, but
+        # also never block "Setup complete" on it (a downed/not-yet-started
+        # local Ollama at install time is common and recoverable; the
+        # platform's own AI-resilience design already tolerates a missing AI
+        # backend at investigation time).
+        if self.access_token:
+            print("Validating the configured AI backend (%s)..." % self.settings["AiBackend"])
+            creds = self._current_ai_credentials()
+            ok = self.test_ai_connection(self.settings["AiBackend"], creds)
+            if ok is False:
+                print("WARNING: the configured AI backend ('%s') failed a connectivity test. Investigations "
+                      "will still run, but AI-generated summaries/assessments will fail until this is fixed "
+                      "('sudo horizon-grid configure')." % self.settings["AiBackend"])
+                log("Post-install AI connectivity test failed for backend '%s'." % self.settings["AiBackend"], "WARN")
+        else:
+            print("Skipped AI backend validation (no session available) -- verify it with "
+                  "'sudo horizon-grid configure' once you can sign in.")
+
+    def _current_ai_credentials(self):
+        """Rebuilds the credentials dict for the currently-configured AI
+        backend from self.settings -- the same shape page_ai_configuration's
+        own per-backend branches build, reused here so run_install's
+        post-health-check validation tests the real, just-written values
+        rather than needing page_ai_configuration to have kept its local
+        `creds` variable around."""
+        backend = self.settings["AiBackend"]
+        if backend == "ollama":
+            return {"base_url": self.settings.get("OllamaBaseUrl", ""), "model": self.settings.get("OllamaModel", "")}
+        if backend == "anthropic":
+            return {"api_key": self.settings.get("AnthropicApiKey", "")}
+        if backend == "bedrock":
+            return {"api_key": self.settings.get("BedrockApiKey", ""), "access_key_id": self.settings.get("AwsAccessKeyId", ""),
+                    "secret_access_key": self.settings.get("AwsSecretAccessKey", ""), "region": self.settings.get("AwsRegion", "")}
+        if backend == "gemini":
+            return {"api_key": self.settings.get("GeminiApiKey", "")}
+        if backend == "groq":
+            return {"api_key": self.settings.get("GroqApiKey", "")}
+        if backend == "openai":
+            return {"api_key": self.settings.get("OpenAiApiKey", "")}
+        if backend == "kimi":
+            return {"api_key": self.settings.get("KimiApiKey", "")}
+        if backend == "deepseek":
+            return {"api_key": self.settings.get("DeepSeekApiKey", "")}
+        if backend == "xai":
+            return {"api_key": self.settings.get("XaiApiKey", "")}
+        if backend == "mistral":
+            return {"api_key": self.settings.get("MistralApiKey", "")}
+        if backend == "openrouter":
+            return {"api_key": self.settings.get("OpenRouterApiKey", "")}
+        return {}
 
     def _remove_stale_volume(self):
         result = subprocess.run(
@@ -724,6 +1002,7 @@ def main():
         parser.error("--non-interactive requires --answers-file")
 
     require_root()
+    run_prerequisite_checks()
     os.makedirs(CONFIG_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(os.path.join(DATA_DIR, "backups"), exist_ok=True)

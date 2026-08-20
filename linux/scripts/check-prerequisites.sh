@@ -24,12 +24,31 @@ OK=true
 
 add_check() {
     # $1=name $2=passed(true/false) $3=detail $4=hard(true/false, default true)
+    #
+    # Real bug fixed: this used to interpolate $passed/$hard directly into
+    # Python SOURCE as bare identifiers (`'passed': $passed`) -- bash's
+    # lowercase true/false are not valid Python literals (Python's are
+    # True/False), so EVERY call raised a silent NameError, caught only by
+    # this function's own `2>/dev/null || echo "$CHECKS_JSON"` fallback.
+    # The human-readable [PASS]/[FAIL] stderr lines below and the script's
+    # overall exit code (bash's own $OK, tracked independently) both still
+    # worked, which is exactly why this went unnoticed -- CHECKS_JSON's
+    # "checks" array was silently empty in every real run, discovered only
+    # once something actually parsed it programmatically (this mission's
+    # new setup_wizard.py prerequisite gate). Fixed by passing every field
+    # through the environment instead of interpolating into Python source
+    # at all -- also removes the need for $detail's own sed-escaping, since
+    # env vars need no shell-quoting-for-Python-string-literal handling.
     local name="$1" passed="$2" detail="$3" hard="${4:-true}"
-    detail=$(printf '%s' "$detail" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    CHECKS_JSON=$(printf '%s' "$CHECKS_JSON" | python3 -c "
-import json, sys
-checks = json.load(sys.stdin)
-checks.append({'name': '$name', 'passed': $passed, 'detail': \"$detail\", 'hard': $hard})
+    CHECKS_JSON=$(NAME="$name" PASSED="$passed" DETAIL="$detail" HARD="$hard" CHECKS_JSON="$CHECKS_JSON" python3 -c "
+import json, os
+checks = json.loads(os.environ['CHECKS_JSON'])
+checks.append({
+    'name': os.environ['NAME'],
+    'passed': os.environ['PASSED'] == 'true',
+    'detail': os.environ['DETAIL'],
+    'hard': os.environ['HARD'] == 'true',
+})
 print(json.dumps(checks))
 " 2>/dev/null || echo "$CHECKS_JSON")
     if [ "$hard" = "true" ] && [ "$passed" = "false" ]; then

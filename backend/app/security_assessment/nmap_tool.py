@@ -36,6 +36,7 @@ Severity rules (deterministic, evidence-based -- never "ask the AI"):
 - ... with CVSS >= 9.0 or severity CRITICAL -> CRITICAL
 """
 import asyncio
+import ipaddress
 import shutil
 import xml.etree.ElementTree as ET
 
@@ -47,6 +48,26 @@ from app.security_assessment.vuln_intel import search_cves_by_service
 from app.providers.base import ProviderStatus
 
 _TIMEOUT_SECONDS = 120
+
+
+def _timeout_for(target: str, ioc_type: IOCType) -> int:
+    """Real gap fixed: _TIMEOUT_SECONDS was a single flat constant applied
+    identically to a single host and to a full /28 CIDR (up to 16 addresses,
+    the cap enforced in app/core/security_assessment.py's _validate_scope)
+    -- the same wall-clock budget for up to 16x the scan work, risking a
+    spurious timeout on the largest permitted target with no slack margin.
+    Scales linearly with host count for a CIDR target, capped at 8x (not a
+    full 16x) since nmap parallelizes host probing rather than scanning
+    each address in strict serial -- a full 16x budget would be overly
+    generous, not just safe."""
+    if ioc_type != IOCType.CIDR:
+        return _TIMEOUT_SECONDS
+    try:
+        num_addresses = ipaddress.ip_network(target, strict=False).num_addresses
+    except ValueError:
+        return _TIMEOUT_SECONDS
+    scale = min(max(num_addresses, 1), 8)
+    return _TIMEOUT_SECONDS * scale
 
 PROFILES: dict[str, ScanProfile] = {
     "quick": ScanProfile(
@@ -109,17 +130,18 @@ class NmapTool(SecurityAssessmentTool):
         # IPv6 support and no scan of any kind ever actually ran.
         ipv6_flag = ["-6"] if ioc_type == IOCType.IPV6 else []
         argv = ["nmap", "-oX", "-", *ipv6_flag, *_PROFILE_ARGS[profile_id], target]
+        timeout_seconds = _timeout_for(target, ioc_type)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_SECONDS)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
                 return self._error(
-                    target, ioc_type, ProviderStatus.TIMEOUT, f"Scan exceeded {_TIMEOUT_SECONDS}s and was stopped."
+                    target, ioc_type, ProviderStatus.TIMEOUT, f"Scan exceeded {timeout_seconds}s and was stopped."
                 )
             except asyncio.CancelledError:
                 # A user-initiated cancel (app/core/security_assessment.py's

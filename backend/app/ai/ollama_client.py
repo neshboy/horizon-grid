@@ -47,7 +47,25 @@ class OllamaClient:
         # the frozen .env-derived Settings singleton -- defaults preserve
         # the original settings-only behavior for any other caller.
         settings = get_settings()
-        self._base_url = (base_url if base_url is not None else settings.ollama_base_url).rstrip("/")
+        resolved_base_url = (base_url if base_url is not None else settings.ollama_base_url).rstrip("/")
+        # Real gap fixed: a validation call here (app/core/url_safety.py's
+        # assert_safe_outbound_url, blocks link-local addresses including
+        # cloud instance-metadata services at 169.254.169.254) previously
+        # existed only in app/ai/service.py's _build_client(), which is
+        # skipped entirely whenever no runtime-config DB row has ever been
+        # saved for this backend (get_ollama_client() below, which reads
+        # ONLY the frozen .env-derived OLLAMA_BASE_URL) -- confirmed via
+        # every real caller of get_ollama_client()/OllamaClient() that this
+        # is actually the COMMON case for a wizard-driven install that never
+        # touches the runtime-config web UI afterward, not an edge case.
+        # Centralizing the check in __init__ covers every construction path
+        # (settings-only singleton and explicit override alike) by
+        # construction, rather than requiring every future caller to
+        # remember to check first.
+        from app.core.url_safety import assert_safe_outbound_url
+
+        assert_safe_outbound_url(resolved_base_url)
+        self._base_url = resolved_base_url
         self._model = model if model is not None else settings.ollama_model
         self._max_tokens = max_tokens if max_tokens is not None else settings.ollama_max_tokens
 

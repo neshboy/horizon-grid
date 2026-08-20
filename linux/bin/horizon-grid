@@ -26,6 +26,8 @@ Commands:
   open          Start the platform if needed and open it in your browser
   backup        Take a database backup now
   diagnostics   Collect a support diagnostics archive (no real credentials included)
+  watchdog      Run one health check now; restarts the platform if unhealthy (normally
+                run automatically every 5 minutes via horizon-grid-watchdog.timer)
   check         Run the prerequisite checks (Docker, ports, disk, RAM)
   uninstall     Show how to remove HORIZON GRID (via apt remove/purge)
   version       Print the installed version
@@ -60,6 +62,9 @@ case "${1:-}" in
         ;;
     diagnostics)
         exec "$SCRIPTS_DIR/diagnostics.sh"
+        ;;
+    watchdog)
+        exec "$SCRIPTS_DIR/watchdog.sh"
         ;;
     check)
         shift
