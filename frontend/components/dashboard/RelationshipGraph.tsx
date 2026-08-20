@@ -90,7 +90,14 @@ function colorForIocType(iocType: string): string {
   return hsl ? `hsl(${hsl})` : "hsl(215 20% 65%)";
 }
 
-function formatLabel(value: string): string {
+function formatLabel(value: string | null | undefined): string {
+  // Defensive: every current edge-construction path in the backend only
+  // ever produces a non-empty relationship/provenance string, but nothing
+  // in the serialization layer (a raw dataclass __dict__ dump, no
+  // validating response_model) would actually catch it if that ever
+  // changed -- cheap insurance against the exact TypeError this shape of
+  // bug would otherwise cause (`undefined.replace is not a function`).
+  if (!value) return "unknown";
   return value.replace(/_/g, " ");
 }
 
@@ -109,7 +116,8 @@ function linkTooltip(link: GraphLinkDatum): string {
   )}</span><br/><span style="opacity:.75">confidence: ${confidencePct}%</span></div>`;
 }
 
-function escapeHtml(value: string): string {
+function escapeHtml(value: string | null | undefined): string {
+  if (!value) return "";
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -143,7 +151,7 @@ function GraphListView({ nodes, links }: { nodes: GraphNodeDatum[]; links: Graph
               <td className="py-2 pr-3 text-muted-foreground">{formatLabel(link.relationship)}</td>
               <td className="py-2 pr-3">{target?.value ?? link.target}</td>
               <td className="py-2 pr-3">{Math.round((link.confidence ?? 0) * 100)}%</td>
-              <td className="py-2 text-muted-foreground">{link.provenance}</td>
+              <td className="py-2 text-muted-foreground">{link.provenance || "unknown"}</td>
             </tr>
           );
         })}
@@ -198,6 +206,28 @@ export function RelationshipGraph({ data, height = 500 }: RelationshipGraphProps
     return { nodes, links };
   }, [data]);
 
+  // react-force-graph-2d's underlying d3-force simulation mutates its input
+  // IN PLACE once it starts: it writes x/y/vx/vy/index onto every node
+  // object, and -- critically -- replaces each link's `source`/`target`
+  // (originally the plain string ids graphData was built with) with direct
+  // references to the corresponding node objects. Confirmed live: switching
+  // to "View as list" after the graph had already rendered crashed the
+  // whole page with React error #31 ("Objects are not valid as a React
+  // child"), because GraphListView's nodesById.get(link.source) then failed
+  // (the key was no longer a string) and its `?? link.source` fallback
+  // rendered the mutated node object itself as a table cell. Feeding the
+  // force graph its own shallow-cloned copy keeps those mutations
+  // contained to the simulation's own throwaway objects, so `graphData` --
+  // shared with the list view -- is never touched no matter how many times
+  // the graph has rendered.
+  const forceGraphData = React.useMemo(
+    () => ({
+      nodes: graphData.nodes.map((n) => ({ ...n })),
+      links: graphData.links.map((l) => ({ ...l })),
+    }),
+    [graphData]
+  );
+
   const isEmpty = !data || data.edges.length === 0;
 
   return (
@@ -230,7 +260,7 @@ export function RelationshipGraph({ data, height = 500 }: RelationshipGraphProps
               aria-label={`Force-directed relationship graph with ${graphData.nodes.length} nodes and ${graphData.links.length} relationships. Use "View as list" for a keyboard/screen-reader-accessible table of the same data.`}
             >
               <ForceGraph2D
-                graphData={graphData}
+                graphData={forceGraphData}
                 width={width}
                 height={height}
                 backgroundColor="transparent"
