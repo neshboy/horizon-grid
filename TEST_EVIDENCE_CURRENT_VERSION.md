@@ -42,6 +42,28 @@ A 3-hour soak test against the live `hgmc` stack — 171 cycles, first cycle `20
 
 Secret scanning was run across the full diff for every commit in this review (`git diff <base>..HEAD` against a pattern covering API keys, passwords, tokens, and credential-shaped strings, with test/mock/placeholder values excluded from matching) — no real secrets found. See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full methodology.
 
+## Post-push finding: a real CI-environment gap, found and fixed
+
+After this document's numbers were recorded, the actual GitHub Actions "Backend Tests" workflow run
+triggered by this release's push (`e27bde5`) came back **failing** on its `unit` job — 2 of 337 tests
+failed, even though every number above was genuinely executed and genuinely passing inside the local
+dev container. Root cause: `test_ai_service_ollama_ssrf.py`'s `test_no_credentials_override_uses_the_settings_default_and_it_passes_validation`
+and `test_missing_base_url_in_credentials_does_not_raise` (both added this release, covering the SSRF
+guard) construct a real `OllamaClient` against the actually-configured default `base_url`
+(`host.docker.internal`), which `assert_safe_outbound_url()` resolves via a genuine `socket.getaddrinfo()`
+call. `host.docker.internal` only resolves inside a Docker Desktop container network — it resolves fine
+in the local dev container and in CI's own `integration-docker` job (which runs inside real Docker), but
+not on the `unit` job's bare GitHub Actions Ubuntu runner, which runs pytest directly on the host with no
+Docker Desktop present at all. This was a genuine gap in this release's own test evidence: the local
+"335 passed" / "380 passed, 39 skipped" numbers above were real, but they were never actually exercised
+against a bare-runner CI environment before this document was first written.
+
+Fixed in commit `40ee62b` by mocking only the DNS-resolution step to a fixed, non-link-local RFC 5737
+address, so both tests exercise the real `assert_safe_outbound_url()`/`OllamaClient` construction path
+deterministically regardless of environment, rather than skipping or weakening what they verify.
+Re-verified after the fix: all 5 tests in the file pass, full unit suite still 335 passed, full suite
+(real Postgres/Redis) still 380 passed/39 skipped — confirming the fix caused no regressions.
+
 ## Methodology note: a real mistake caught mid-review
 
 Partway through this review, a full-suite run reported exactly 365 passed — matching the *previous* known-good count, which was itself a red flag. The test container had been built with a `docker-compose.prod.yml` override that strips dev bind-mounts, and was running a stale image that predated nearly all of this session's backend changes — the run had silently validated old code. This was caught by checking whether a brand-new test file actually existed inside the running container (it didn't), the image was rebuilt, and the full suite was re-run for real. Every test number cited in this document and in `MISSION_CRITICAL_CERTIFICATION_REPORT.md` is from after this correction.

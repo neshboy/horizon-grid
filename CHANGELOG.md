@@ -60,6 +60,7 @@ A dedicated reliability and security review for unattended, remote-site deployme
 ### Testing
 - New regression tests for the retry-logic fix, the login rate limiter, and the SSRF guard on both the AI-call and config-save paths.
 - Full backend suite: 380 passed, 39 skipped (up from 365 at the start of this review).
+- Fixed two of the new SSRF regression tests that passed locally but failed on GitHub Actions' bare `unit` CI job: they resolved the real default `host.docker.internal` hostname via genuine DNS, which only resolves inside a Docker Desktop network, not on a bare Ubuntu runner. Now mocks the DNS-resolution step to a fixed, non-link-local address so the tests are deterministic across environments.
 
 ### Known Limitations
 - No automated host-disk-space alerting.
