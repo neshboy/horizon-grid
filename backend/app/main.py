@@ -8,6 +8,7 @@ import uuid
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import text
 
@@ -122,6 +123,34 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response
+
+
+# Real gap fixed: no request-body-size limit existed anywhere -- an
+# unauthenticated or authenticated caller could send an arbitrarily large
+# request body to any JSON endpoint, forcing the full body to be buffered
+# in memory before Pydantic validation (and its own per-field max_length
+# checks) ever runs. Checked against the client-supplied Content-Length
+# header BEFORE reading the body -- a lightweight, early rejection; a
+# caller that lies about Content-Length and streams more than declared is
+# still bounded by ASGI/uvicorn's own default body-read behavior, so this
+# is a real, cheap first line of defense, not the only one.
+_MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@app.middleware("http")
+async def request_body_size_limit_middleware(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > _MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body too large (max {_MAX_REQUEST_BODY_BYTES} bytes)."},
+                )
+        except ValueError:
+            pass
+    return await call_next(request)
+
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 

@@ -82,10 +82,17 @@ export interface FinalAssessment {
   final_verdict: string;
   verdict_rationale: string;
   /** Which AI backend/model actually produced this conclusion (Phase 20
-   * traceability) -- both null when no AI was called at all (the
-   * no-evidence short-circuit in ai/service.py never invokes a backend). */
+   * traceability) -- both null whenever ai_outcome !== "success" (neither
+   * the no-evidence short-circuit nor a genuine generation failure ever
+   * invokes/identifies a backend). Use ai_outcome, not ai_backend's
+   * truthiness, to tell those two apart -- they render very differently:
+   * "skipped_no_evidence" is a correct, unremarkable decision; "failed" is
+   * a real error worth flagging (see FinalAssessmentPanel.tsx). */
   ai_backend: string | null;
   ai_model: string | null;
+  /** "success" | "failed" | "skipped_no_evidence" -- optional only because
+   * older persisted assessments (pre-Phase-9-tracking) may not have it. */
+  ai_outcome?: "success" | "failed" | "skipped_no_evidence" | null;
 }
 
 // Mirrors backend/app/core/runtime_config.py's _row_to_public_dict() -- the
