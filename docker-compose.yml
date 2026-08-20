@@ -67,6 +67,20 @@ services:
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 256m
+    # Real gap fixed: confirmed live that Redis previously had no volume at
+    # all -- every recreation (an image update, `docker compose up --build`
+    # during a reconfigure) silently reset it to empty. Nothing here is a
+    # system of record (provider-result cache, rate-limiter counters, the
+    # Celery broker/result backend for the one lightweight periodic crawl
+    # task), so losing it is never data-loss in the disaster-recovery sense
+    # -- but a reconfigure-triggered reset of every rate limiter and the
+    # whole provider cache on an otherwise-routine config change is still a
+    # real, avoidable behavior change. Redis's own default save schedule
+    # (900s/1 key, 300s/10 keys, 60s/10000 keys) is enough for this --
+    # nothing here needs AOF-grade durability.
+    command: ["redis-server", "--save", "900", "1", "--save", "300", "10", "--save", "60", "10000"]
+    volumes:
+      - redis_data:/data
     ports:
       # Loopback-only -- see the postgres service's port comment above for
       # why (same LAN-exposure issue, same fix, same reasoning).
@@ -272,5 +286,6 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
   neo4j_data:
   opensearch_data:

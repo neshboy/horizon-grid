@@ -121,6 +121,7 @@ Name: "{group}\Stop Platform"; Filename: "powershell.exe"; Parameters: "-NoProfi
 Name: "{group}\Restart Platform"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\app\windows\scripts\Service-Restart.ps1"""; WorkingDir: "{app}\app\windows\scripts"
 Name: "{group}\Service Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\app\windows\scripts\Service-Status.ps1"""; WorkingDir: "{app}\app\windows\scripts"
 Name: "{group}\Backup Database Now"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\app\windows\scripts\Backup-Database.ps1"""; WorkingDir: "{app}\app\windows\scripts"
+Name: "{group}\Restore Database"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\app\windows\scripts\Restore-Database.ps1"""; WorkingDir: "{app}\app\windows\scripts"; Comment: "Replace the current database with a backup file -- destructive, asks for confirmation"
 Name: "{group}\Diagnostics"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\app\windows\scripts\Diagnostics.ps1"""; WorkingDir: "{app}\app\windows\scripts"
 Name: "{group}\Documentation"; Filename: "{app}\app\docs"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"

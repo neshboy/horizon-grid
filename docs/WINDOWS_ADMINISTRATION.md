@@ -64,11 +64,14 @@ Now** from the Start Menu.
 
 **Restoring** a backup is a manual step, deliberately not automated (an
 automatic restore is one of the more dangerous things a setup wizard could
-silently do wrong): stop the platform, then restore the dump into the
-running Postgres container with `docker exec -i <postgres-container> psql
--U ioc ioc_intel < backup-file.sql` from an elevated PowerShell prompt in
-`C:\Program Files\IOC Intelligence Platform\app`, adjusting the username/
-database name if you changed them from the defaults.
+silently do wrong): use **Restore Database** from the Start Menu, which
+stops only the services that write to the database (backend, celery worker,
+celery beat) -- Postgres itself stays running, since a restore needs a live
+server to connect to -- drops and recreates the database, replays the
+backup file, then restarts what it stopped. It asks for an explicit typed
+confirmation first, since this permanently discards anything written since
+the backup was taken. Pass a specific file with `-BackupFile <path>`, or
+run it with no arguments to restore the most recent backup automatically.
 
 ## Upgrading
 

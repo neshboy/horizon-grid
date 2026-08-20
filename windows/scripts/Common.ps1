@@ -290,6 +290,24 @@ function Sync-ComposeEnvFile {
     }
 }
 
+function Get-ConfiguredBackendPort {
+    <# Real gap fixed: Test-BackendHealth/Watchdog.ps1 previously hardcoded
+       port 8000 regardless of what the operator actually configured
+       (HOST_PORT_BACKEND, set on the Ports page if 8000 conflicted with
+       something else on the machine) -- confirmed by reading .env's real
+       key, not assumed. A customized port made the watchdog check the
+       wrong port forever, either falsely reporting "unhealthy" (nothing
+       listening on 8000) or checking an unrelated service that happens to
+       be on 8000. #>
+    $port = 8000
+    if (Test-Path $script:EnvFilePath) {
+        Get-Content $script:EnvFilePath | ForEach-Object {
+            if ($_ -match '^\s*HOST_PORT_BACKEND\s*=\s*(\d+)\s*$') { $port = [int]$Matches[1] }
+        }
+    }
+    return $port
+}
+
 function Test-BackendHealth {
     <# Hits /health/detailed, not the plain /health -- confirmed live that
        plain /health returns 200 unconditionally even with Postgres fully
@@ -297,7 +315,8 @@ function Test-BackendHealth {
        backend can actually serve a real request. /health/detailed
        genuinely pings Postgres and Redis and returns 503 if the database
        is unreachable. #>
-    param([string]$BaseUrl = "http://localhost:8000")
+    param([string]$BaseUrl)
+    if (-not $BaseUrl) { $BaseUrl = "http://localhost:$(Get-ConfiguredBackendPort)" }
     try {
         $resp = Invoke-WebRequest -Uri "$BaseUrl/health/detailed" -UseBasicParsing -TimeoutSec 5
         return $resp.StatusCode -eq 200

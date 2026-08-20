@@ -181,7 +181,18 @@ hg_test_backend_health() {
     # own network namespace -- see the Linux QA report's "Test Environment"
     # section for the full explanation of why that override exists at all.
     local host="${HORIZON_GRID_BACKEND_HOST:-localhost}"
-    local base_url="${1:-http://${host}:8000}"
+    local port
+    port="$(hg_read_env_var HOST_PORT_BACKEND)"; port="${port:-8000}"
+    # Real gap fixed: every caller here (watchdog.sh, service-status.sh,
+    # service-start.sh, service-restart.sh, open-platform.sh) calls this
+    # with no argument, so hardcoding 8000 meant a customized
+    # HOST_PORT_BACKEND (set on the wizard's Ports page if 8000 conflicted
+    # with something else on the machine) was checked at the WRONG port
+    # forever -- either falsely reporting unhealthy, or silently checking
+    # an unrelated service that happens to be listening on 8000. Now reads
+    # the real configured value via hg_read_env_var, same source of truth
+    # every other script already uses for POSTGRES_USER/POSTGRES_DB.
+    local base_url="${1:-http://${host}:${port}}"
     # /health/detailed, not plain /health -- confirmed live that plain
     # /health returns 200 unconditionally even with Postgres fully stopped,
     # so it can never tell this watchdog whether the backend can actually
@@ -192,9 +203,12 @@ hg_test_backend_health() {
 
 hg_test_frontend_health() {
     # Mirrors Common.ps1's Test-FrontendHealth. See hg_test_backend_health's
-    # comment above for HORIZON_GRID_BACKEND_HOST.
+    # comment above for HORIZON_GRID_BACKEND_HOST and the same real
+    # customized-port gap, fixed the same way here for HOST_PORT_FRONTEND.
     local host="${HORIZON_GRID_BACKEND_HOST:-localhost}"
-    local base_url="${1:-http://${host}:3000}"
+    local port
+    port="$(hg_read_env_var HOST_PORT_FRONTEND)"; port="${port:-3000}"
+    local base_url="${1:-http://${host}:${port}}"
     curl -fsS --max-time 5 "${base_url}" >/dev/null 2>&1
 }
 
