@@ -1,6 +1,6 @@
 # Provider and AI Backend Integration Reference
 
-This chapter is the exhaustive technical reference for every external integration the backend calls: the 16 registered IOC (Indicator of Compromise) providers in `backend/app/providers/` and the 5 interchangeable AI backends in `backend/app/ai/`. Where the *Provider Architecture* and *AI Architecture* chapters explain how the fan-out, caching, credential-override, and grounding mechanisms work, this chapter documents **what each individual integration actually calls** — real endpoint URLs, auth schemes, credential fields, supported IOC types, rate-limit/error detection, and the shape of the normalized data each one returns. All facts are drawn directly from the connector source files cited inline; nothing below is inferred from documentation or docstrings alone.
+This chapter is the exhaustive technical reference for every external integration the backend calls: the 18 registered IOC (Indicator of Compromise) providers in `backend/app/providers/` and the 11 interchangeable AI backends in `backend/app/ai/`. Where the *Provider Architecture* and *AI Architecture* chapters explain how the fan-out, caching, credential-override, and grounding mechanisms work, this chapter documents **what each individual integration actually calls** — real endpoint URLs, auth schemes, credential fields, supported IOC types, rate-limit/error detection, and the shape of the normalized data each one returns. All facts are drawn directly from the connector source files cited inline; nothing below is inferred from documentation or docstrings alone.
 
 ## 1. Shared Provider Contract
 
@@ -119,6 +119,18 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 - **Normalized data**: `verdict:"unknown"` (Censys is a passive-DNS/asset-inventory source, not a verdict provider), `services` (list of `port`/`protocol`/`service_name`), `location` (`city`/`province`/`country`/`country_code`), `autonomous_system`, `asn`, `as_owner`, `last_seen` (`:78-91`).
 - **Errors**: 404 → `NO_DATA`; other statuses fall through to the shared mapping.
 
+### 2.16 urlscan.io — `urlscan`
+- **File**: `app/providers/urlscan_io.py`. Category `SANDBOX`. IOC types: `url`, `domain` (`:39-41`).
+- **Credential**: `requires_key=True`; field `api_key`, header `API-Key` (`:41,45`). Not offered on either installer's setup wizard (§ below) — configured after install from the app's own Providers page.
+- **Endpoint**: `POST https://urlscan.io/api/v1/scan/` to submit, then `GET https://urlscan.io/api/v1/result/{uuid}/` polled every 3 seconds until ready or a 60-second wall-clock timeout (`_TIMEOUT_SECONDS`/`_POLL_INTERVAL_SECONDS`) elapses — a real, live sandbox run per lookup, not a cached-database check like most other providers in this chapter.
+- **Errors**: the poll endpoint returns HTTP 404 while the scan is still processing (expected, not an error) and HTTP 200 with the full result once ready; 401/403 on either the submit or poll request are treated as "bad API key," not rate limiting — deliberately not routed through `BaseProvider.run()`'s generic mapping (which treats 403 as `RATE_LIMITED` for every other connector, matching PhishTank's documented behavior) because urlscan.io's own 403 semantics are different. A scan not ready by the timeout → `ProviderStatus.TIMEOUT`, never a fabricated result from an incomplete scan.
+
+### 2.17 Google Safe Browsing — `google_safe_browsing`
+- **File**: `app/providers/google_safe_browsing.py`. Category `THREAT_INTEL`. IOC types: `url`, `domain` (`:31-33`).
+- **Credential**: `requires_key=True`; field `api_key`, sent as the `key` query parameter on the Lookup API v4 call (`:33`). Not offered on either installer's setup wizard (§ below) — configured after install from the app's own Providers page.
+- **Endpoint**: `POST https://safebrowsing.googleapis.com/v4/threatMatches:find?key=<API_KEY>`, checking against `MALWARE`, `SOCIAL_ENGINEERING`, `UNWANTED_SOFTWARE`, and `POTENTIALLY_HARMFUL_APPLICATION` threat types (`_THREAT_TYPES`).
+- **Normalized data**: a "clean" verdict only when the response is a genuine HTTP 200 with an empty/missing `matches` field — this is the *only* input path that can produce a safe result. Every other outcome (non-200 status, network error/timeout, or a response that doesn't parse the way the API contract promises) returns early via the module's own `_error()` helper, which always sets `data={"verdict": "unknown", ...}` — there is no code path from "the request failed" to a result that looks clean, a deliberately pinned invariant (module docstring; covered by `test_google_safe_browsing.py`'s `test_*_never_looks_like_safe` tests).
+
 ## 3. Internet Intelligence Collector (OSINT Crawler-as-Provider) — `internet_intelligence`
 
 - **File**: `app/crawler/collector.py`. Category `OSINT`. IOC types: `domain`, `ipv4`, `malware_family`, `threat_actor`, `campaign`, `cve`, `file_name` — deliberately limited to free-text-searchable types; the module docstring notes that "raw network atoms like ja3 hashes or mutexes are excluded" (`:36-44,50-52`).
@@ -137,7 +149,7 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 
 ## 4. AI Backends
 
-All five backend clients expose an identical async method, `call_claude_json(system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None) -> dict`, which is what lets `app/ai/service.py` swap backends with zero branching logic (`service.py:43-53,56-99`). Defaults for every credential/model/URL below live in `app/core/config.py:44-80`; at call time, `_build_client()` (`service.py:56-99`) constructs a **fresh** client per call using whichever credentials the active runtime-config row (or an explicit override) supplies — proving these constructor parameters are live override points a caller genuinely exercises, not dead code.
+All eleven backend clients expose an identical async method, `call_claude_json(system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None) -> dict`, which is what lets `app/ai/service.py` swap backends with zero branching logic (`service.py:43-53,56-99`). Defaults for every credential/model/URL below live in `app/core/config.py:44-80`; at call time, `_build_client()` (`service.py:56-99`) constructs a **fresh** client per call using whichever credentials the active runtime-config row (or an explicit override) supplies — proving these constructor parameters are live override points a caller genuinely exercises, not dead code.
 
 ### 4.1 Ollama — `ollama_client.py`
 - **Endpoint**: `POST {base_url}/api/chat`; default `base_url` = `http://host.docker.internal:11434` (`:15-17`, `config.py:76`, used at `:91`).
@@ -179,11 +191,55 @@ All five backend clients expose an identical async method, `call_claude_json(sys
 - **Constructor overrides**: `GroqClient(api_key=None, model_id=None, max_tokens=None)` (`:64-73`).
 - **Errors**: `httpx.TimeoutException` after 60s → `RuntimeError`; HTTP status ≥400 → `RuntimeError`; no `choices` in the response → `RuntimeError`; no matching tool call → `RuntimeError`; invalid JSON in `arguments` → `RuntimeError` (`:110-137`).
 
+### 4.6 OpenAI — `openai_client.py`
+- **Endpoint**: `POST https://api.openai.com/v1/chat/completions`; model discovery `GET https://api.openai.com/v1/models` (`_API_BASE`).
+- **Auth**: header `Authorization: Bearer <OPENAI_API_KEY>`.
+- **Default model**: `settings.openai_model_id`, `DEFAULT_MODEL = "gpt-4o-mini"` — the smaller/cheaper model, matching this codebase's convention of defaulting to the fast tier rather than the largest available model.
+- **Structured output**: forced tool-calling (`tool_choice` naming a specific function) rather than `response_format` JSON mode — the same "name/shape exactly one tool call" approach `groq_client.py` uses, chosen for the same precision reason. `inline_refs()` flattens `$ref`/`$defs` defensively, same as every other client in this module.
+- **Model discovery filtering**: OpenAI's `/models` endpoint lists every model visible to the account, including embedding/moderation/image/audio models that can't do chat completions at all — `list_models()` filters to ids starting with `gpt-`/`o1`/`o3`/`o4`/`chatgpt-` and excluding audio/realtime/transcribe/tts/embedding matches, so the wizard's dropdown isn't cluttered with entries that would fail immediately if selected.
+- **Errors**: `httpx.TimeoutException` after 60s → `RuntimeError`; HTTP status ≥400 → `RuntimeError`; no `choices` in the response → `RuntimeError`; no matching tool call → `RuntimeError`; invalid JSON in `arguments` → `RuntimeError`.
+
+### 4.7 Kimi (Moonshot AI) — `kimi_client.py`
+- **Endpoint**: `POST https://api.moonshot.ai/v1/chat/completions`, an OpenAI-compatible surface; model discovery `GET https://api.moonshot.ai/v1/models`.
+- **Auth**: header `Authorization: Bearer <KIMI_API_KEY>`.
+- **Default model**: `settings.kimi_model_id`, `DEFAULT_MODEL = "kimi-k2.5"` — deliberately not Moonshot's newest model. Several current Moonshot models (`kimi-k3`, `kimi-k2.7-code`) always run in "thinking" mode with no way to disable it, and a forced `tool_choice` call is documented as incompatible with thinking mode on those models (would `400`). `kimi-k2.5` and the `moonshot-v1-*` family have no thinking parameter and work with forced tool-calling with no special handling, so the default is pinned there.
+- **Structured output**: OpenAI-style forced tool-calling, same approach as `openai_client.py`/`groq_client.py`.
+- **Errors**: same shape as OpenAI — timeout after 60s, HTTP ≥400, missing choices, missing matching tool call, or invalid JSON in `arguments` all raise `RuntimeError`.
+
+### 4.8 DeepSeek — `deepseek_client.py`
+- **Endpoint**: `POST https://api.deepseek.com/chat/completions` — note the base URL has **no** `/v1` path segment, unlike most other OpenAI-compatible clients in this module; model discovery `GET https://api.deepseek.com/models`.
+- **Auth**: header `Authorization: Bearer <DEEPSEEK_API_KEY>`.
+- **Default model**: `settings.deepseek_model_id`, `DEFAULT_MODEL = "deepseek-v4-flash"`.
+- **Structured output**: OpenAI-style forced tool-calling, same approach as every other OpenAI-compatible client in this module.
+- **Errors**: same RuntimeError shape as OpenAI/Kimi. DeepSeek's API also returns a provider-specific HTTP 402 ("Insufficient Balance") in addition to the standard 400/401/429/500/503 codes — that per-status distinction is handled in `app/ai/connection_test.py`, not in the client itself.
+
+### 4.9 xAI (Grok) — `xai_client.py`
+- **Endpoint**: `POST https://api.x.ai/v1/chat/completions`, an OpenAI-compatible surface; model discovery `GET https://api.x.ai/v1/models`.
+- **Auth**: header `Authorization: Bearer <XAI_API_KEY>`.
+- **Default model**: `settings.xai_model_id`, `DEFAULT_MODEL = "grok-4.6"`. The module's own docstring flags that `"grok-3"` is retired (as of 2026-05-15) and deliberately excluded from `FALLBACK_MODELS`.
+- **Structured output**: forced tool-calling via the standard OpenAI-shaped `tool_choice` object. Caveat noted in the module docstring: xAI's own documentation states `tools[].function.parameters` "should" be followed by the model but is "not enforced at the moment" — there is no guaranteed strict schema adherence on xAI's end, so the JSON-decode error handling is left exactly as defensive as every other client's, not loosened or tightened for this one.
+- **Errors**: same RuntimeError shape as the other OpenAI-compatible clients. xAI's error body is flat (`{"code", "error"}` as a bare string), not nested like OpenAI's — this client doesn't parse error bodies itself (it surfaces `response.text` verbatim), so the shape difference doesn't affect anything here.
+
+### 4.10 Mistral AI — `mistral_client.py`
+- **Endpoint**: `POST https://api.mistral.ai/v1/chat/completions`; model discovery `GET https://api.mistral.ai/v1/models`.
+- **Auth**: header `Authorization: Bearer <MISTRAL_API_KEY>` (standard OpenAI-compatible bearer scheme, not Anthropic's `x-api-key` or Gemini's query-param key).
+- **Default model**: `settings.mistral_model_id`, `DEFAULT_MODEL = "mistral-small-2506"` — the smaller/faster/cheaper model, matching this codebase's default-to-fast-tier convention. Mistral versions its models with dated suffixes rather than a single rolling name, though rolling aliases (e.g. `mistral-large-latest`) also exist.
+- **Structured output**: forced tool-calling via the standard OpenAI-shaped `tool_choice` object, per Mistral's own live API reference.
+- **Errors**: same RuntimeError shape as the other OpenAI-compatible clients. Mistral's error-response body shape is unconfirmed (no dedicated error-schema documentation was found), so this client deliberately doesn't attempt to parse it — same as `openai_client.py`'s own template, which only ever surfaces `response.text` on a non-2xx status.
+
+### 4.11 OpenRouter — `openrouter_client.py`
+- **Endpoint**: `POST https://openrouter.ai/api/v1/chat/completions`; model discovery `GET https://openrouter.ai/api/v1/models`. OpenRouter is a meta-router, not a model provider of its own — it gives access to hundreds of underlying models from many companies (OpenAI, Anthropic, Google, Meta, DeepSeek, and others) through one OpenAI-compatible API surface.
+- **Auth**: header `Authorization: Bearer <OPENROUTER_API_KEY>`.
+- **Default model**: `settings.openrouter_model_id`, `DEFAULT_MODEL = "openai/gpt-4o"`.
+- **Structured output**: forced tool-calling via the standard OpenAI-shaped `tool_choice` object, confirmed directly against OpenRouter's own OpenAPI spec (schema `ChatNamedToolChoice`).
+- **Model discovery filtering, a real constraint specific to this backend**: because OpenRouter fans out to hundreds of underlying models, many of which do not support forced tool-calling at all, `list_models()` filters the live `/models` response down to ids whose `supported_parameters` array contains `tool_choice` (confirmed live: 342 of 413 models declared tool_choice support at the time this was written) — picking a model without it would `400` against this client's forced-tool-calling `call_claude_json()`. Falls back to returning every listed model id if the response doesn't include `supported_parameters` for any model.
+- **Errors**: same RuntimeError shape as the other OpenAI-compatible clients. OpenRouter's error body is `{"error": {"code", "message", "metadata"?}}` — similar to OpenAI's nested shape but without an `error.type`/`error.param` field; doesn't change handling since only `response.text` is surfaced either way.
+
 ## 5. Cross-Cutting Mechanisms
 
 - **Per-investigation credential overrides (IOC providers)**: `app/core/runtime_context.py:38-47` — `get_credential(provider_id, field, fallback)` returns a per-investigation `ContextVar` override when one has been set (via `set_provider_overrides()` at `orchestrator.py:113`), else falls back to the `.env`-derived `Settings` value. Every real provider's `fetch()` calls this — e.g. `abuseipdb.py:29`, `virustotal.py:44`, `otx.py:46`, `nvd.py:32`, `censys.py:40-41`, `hybrid_analysis.py:45`, `phishtank.py:29`, `urlhaus.py:31`, `threatfox.py:38`, `malwarebazaar.py:31`.
 - **AI backend resolution order**: `app/ai/service.py:_get_ai_client` (`:102-145`) resolves the active backend in this order on **every call**: an explicit `backend_override` (used by the reanalyze/comparison feature) → the DB-backed active runtime config (`app/core/runtime_config.py`) → the legacy `settings.ai_backend` default of `"ollama"` (`config.py:80`).
-- **Live connection tests** (candidate credentials only, never `get_settings()`): IOC providers are tested in `app/providers/connection_test.py:51-208` (VirusTotal, AbuseIPDB, OTX, the abuse.ch family via ThreatFox's `query_status`, NVD, Hybrid Analysis, Censys, PhishTank); AI backends are tested in `app/ai/connection_test.py:49-240` (Groq, Anthropic, Gemini, Ollama, Bedrock). Both endpoints — `POST /api/v1/providers/{id}/test` and `POST /api/v1/ai/test` — make one real, minimal outbound call with the credentials from the request body and never persist them; see the *Runtime Configuration and Credential Lifecycle* chapter for how this relates to the separate, saved runtime-config path.
+- **Live connection tests** (candidate credentials only, never `get_settings()`): IOC providers are tested in `app/providers/connection_test.py:51-208` (VirusTotal, AbuseIPDB, OTX, the abuse.ch family via ThreatFox's `query_status`, NVD, Hybrid Analysis, Censys, PhishTank); urlscan.io and Google Safe Browsing are tested the same way despite having no wizard entry. AI backends are tested in `app/ai/connection_test.py` — a dedicated `_check_*` function exists for all eleven (Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter, Anthropic, Gemini, Ollama, Bedrock), not just the original five; the module's own docstring records the investigation finding that motivated dedicated per-backend checks in the first place: none of the original five backends' generic error handling reliably distinguished "bad key" from "bad request" from "service down" without one. Both endpoints — `POST /api/v1/providers/{id}/test` and `POST /api/v1/ai/test` — make one real, minimal outbound call with the credentials from the request body and never persist them; see the *Runtime Configuration and Credential Lifecycle* chapter for how this relates to the separate, saved runtime-config path.
 
 ## 6. Quick-Reference Table
 
@@ -205,11 +261,19 @@ All five backend clients expose an identical async method, `call_claude_json(sys
 | `phishtank` | threat_intel | optional form `app_key` | url | 429/403/**509** |
 | `censys` | passive_dns | Bearer token + `X-Organization-ID` | ipv4/ipv6 | 429/403/509 |
 | `internet_intelligence` | osint | none | domain/ipv4/malware_family/threat_actor/campaign/cve/file_name | per-sub-source (see §3) |
+| `urlscan` | sandbox | header `API-Key` | url/domain | 401/403 = bad key, not rate limit; else `TIMEOUT` at 60s |
+| `google_safe_browsing` | threat_intel | query param `key` | url/domain | any non-200/error → `unknown`, never `RATE_LIMITED`-mapped as "safe" |
 
 | AI backend | Endpoint style | Auth | Structured-output technique |
 |---|---|---|---|
 | Ollama | Local REST (`/api/chat`) | none | `format` = flattened JSON Schema (grammar-constrained) |
 | Anthropic | Messages API | header `x-api-key` | forced tool call |
 | Bedrock | boto3 `.converse()` SDK call | bearer token or IAM SigV4 | forced tool call via `toolConfig` |
-| Gemini | `generateContent` REST | API key as query param | `responseSchema` JSON mode (flattened) |
+| Gemini | `generateContent` REST | header `x-goog-api-key` (deliberately not the `?key=` query-string form, to keep the key out of httpx's INFO-level URL logging) | `responseSchema` JSON mode (flattened) |
 | Groq | OpenAI-compatible chat-completions | header `Authorization: Bearer` | forced tool call (not `response_format`) |
+| OpenAI | OpenAI chat-completions | header `Authorization: Bearer` | forced tool call |
+| Kimi (Moonshot AI) | OpenAI-compatible chat-completions | header `Authorization: Bearer` | forced tool call |
+| DeepSeek | OpenAI-compatible chat-completions (no `/v1` in base URL) | header `Authorization: Bearer` | forced tool call |
+| xAI (Grok) | OpenAI-compatible chat-completions | header `Authorization: Bearer` | forced tool call (best-effort — xAI docs note `parameters` isn't strictly enforced) |
+| Mistral AI | OpenAI-compatible chat-completions | header `Authorization: Bearer` | forced tool call |
+| OpenRouter | OpenAI-compatible chat-completions (meta-router over many providers) | header `Authorization: Bearer` | forced tool call (model list filtered to `tool_choice`-capable ids) |

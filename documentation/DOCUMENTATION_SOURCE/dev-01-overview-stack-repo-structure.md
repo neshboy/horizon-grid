@@ -7,10 +7,10 @@ HORIZON GRID is a self-hosted SOC (Security Operations Center) workbench for inv
 Concretely, one investigation does the following, all reachable from a single API call (`POST /api/v1/lookup/stream`):
 
 1. A raw string is classified into a typed IOC (`backend/app/ioc/detector.py`).
-2. The IOC is fanned out concurrently to as many of ~16 registered threat-intelligence providers as support that IOC type (`backend/app/providers/orchestrator.py`).
+2. The IOC is fanned out concurrently to as many of ~18 registered threat-intelligence providers as support that IOC type (`backend/app/providers/orchestrator.py`).
 3. A deterministic correlation engine extracts relationships between the seed IOC and anything the providers returned (`backend/app/correlation/engine.py`).
 4. A deterministic, non-AI evidence ledger is built from the raw provider data and correlation edges (`backend/app/evidence/builder.py`) — this ledger is what every later AI explanation must cite back to.
-5. An AI backend (one of five interchangeable options, hot-swappable without a restart) summarizes each provider's result and then produces one final verdict/risk-score assessment grounded in the evidence (`backend/app/ai/service.py`).
+5. An AI backend (one of eleven interchangeable options, hot-swappable without a restart) summarizes each provider's result and then produces one final verdict/risk-score assessment grounded in the evidence (`backend/app/ai/service.py`).
 6. Every step streams back to the browser as Server-Sent Events, and the whole run — provider results, AI summaries, correlation edges, evidence, final assessment — is persisted to PostgreSQL.
 
 Beyond the core lookup, the platform layers analyst workflow on top: a persisted evidence ledger with on-demand AI explanations (why-malicious, disagreement, false-positive, red-team challenge, next-actions, intelligence gaps, score explanation, free-form "Copilot" Q&A), threat-hunting query generation (Sigma/Splunk/KQL/etc.), an IOC "basket" scratch space with AI-assisted comparison, case management, JWT-based auth with three roles, and a DB-backed runtime configuration system that lets an admin change AI/provider credentials from the UI with no container restart.
@@ -98,8 +98,8 @@ ioc-intel-platform/
 │       ├── core/                 config.py (Settings), runtime_config.py (DB-backed config), runtime_context.py (ContextVar overrides), db.py, cache.py, crypto.py
 │       ├── auth/                 security.py (bcrypt/JWT), rbac.py (get_current_user, require_permission)
 │       ├── ioc/                  types.py (IOCType enum), detector.py (regex-cascade classifier)
-│       ├── providers/            ~16 threat-intel connectors + base.py, orchestrator.py, registry.py, connection_test.py, stubs/
-│       ├── ai/                   5 AI-backend clients + service.py, analysis_service.py, hunting_service.py, schemas, connection_test.py
+│       ├── providers/            ~18 threat-intel connectors + base.py, orchestrator.py, registry.py, connection_test.py, stubs/
+│       ├── ai/                   11 AI-backend clients + service.py, analysis_service.py, hunting_service.py, schemas, connection_test.py
 │       ├── correlation/          engine.py — pure fact/relationship extraction, no I/O
 │       ├── evidence/             builder.py, loaders.py, pivot.py — the citable, deterministic evidence ledger
 │       ├── crawler/               OSINT collector provider + 4 sub-source modules (github, reddit, rss_news, pastebin_search)
@@ -164,7 +164,7 @@ The following ~26 files, read roughly in this order, cover the entire system end
 5. `backend/app/api/routes/lookup.py` — the single most important file: the whole SSE-streamed investigation lifecycle (`detect → fan-out → correlate → summarize → assess → persist`) lives here.
 6. `backend/app/providers/base.py` — the `BaseProvider` contract every connector implements; read before any individual provider file.
 7. `backend/app/providers/orchestrator.py` — how one IOC fans out to N providers concurrently, with caching, retry, and timeout.
-8. `backend/app/providers/registry.py` — the flat list of all ~16 registered provider singletons; the extensibility seam for adding a new source.
+8. `backend/app/providers/registry.py` — the flat list of all ~18 registered provider singletons; the extensibility seam for adding a new source.
 9. `backend/app/providers/virustotal.py` — the most complete, documented reference connector to model new providers on.
 10. `backend/app/ioc/detector.py` — how a raw string becomes a typed `IOCType`; determines which providers even run for a given input.
 11. `backend/app/ioc/types.py` — the `IOCType` enum and `HASH_TYPES`/`NETWORK_TYPES` sets that every other module keys off of.

@@ -55,7 +55,7 @@ Beyond the core pipeline, `analysis_service.py` implements 8 additional grounded
 
 ## 4. Provider Architecture
 
-16 providers registered in `backend/app/providers/registry.py` (`_ALL_PROVIDERS`):
+18 providers registered in `backend/app/providers/registry.py` (`_ALL_PROVIDERS`):
 
 | provider_id | Category | Supported IOC types | Key requirement | Notes |
 |---|---|---|---|---|
@@ -75,10 +75,12 @@ Beyond the core pipeline, `analysis_service.py` implements 8 additional grounded
 | `phishtank` | threat_intel | url | none (optional key raises rate limit) | |
 | `censys` | passive_dns | ipv4, ipv6 | Personal Access Token **and** Organization ID both required | Platform API v3 |
 | `internet_intelligence` | osint | domain, ipv4, malware_family, threat_actor, campaign, cve, file_name | none | OSINT crawler wrapping GitHub/Reddit/RSS/pastebin sources (`app/crawler/`) |
+| `urlscan` | sandbox | url, domain | API key | submit-then-poll live sandbox scan, 60s timeout |
+| `google_safe_browsing` | threat_intel | url, domain | API key | Lookup API v4; non-200/error/malformed response always maps to unknown, never to a "safe" verdict |
 
 **Cross-check against `windows/wizard/Setup-Wizard.ps1`'s `$ProviderDefs`** (lines 486-495): the wizard lists exactly `virustotal, abuseipdb, otx, abusech (URLhaus/ThreatFox/MalwareBazaar), nvd, hybrid_analysis, censys, phishtank` — all 8 have real, working backend implementations confirmed above. The wizard's Censys note ("Requires both a Personal Access Token and an Organization ID") matches `censys.py`'s `configured` check exactly (`bool(personal_access_token and organization_id)`). The abusech note ("One free Auth-Key covers all three abuse.ch connectors") matches `abusech.py`/`urlhaus.py`/`threatfox.py`/`malwarebazaar.py` all reading `settings.abusech_auth_key`. The NVD note ("works without a key at a lower rate limit") matches `nvd.py`'s `requires_key = False`, `configured = True` unconditionally.
 
-**Discrepancy found (consistent, not a bug)**: 6 backend providers have real code but are **not** in the wizard's UI: `crtsh`, `cisa_kev`, `mitre_attack`, `whois_rdap`, `spamhaus`, `internet_intelligence`. All six are `requires_key = False` with no credential to collect, so `backend/app/providers/connection_test.py`'s handler dict (lines 190-206) explicitly has no test handler for them either, with a fallback message naming them as needing none.
+**Discrepancy found (consistent, not a bug)**: 8 backend providers have real code but are **not** in the wizard's UI. Six are `requires_key = False` with no credential to collect at all: `crtsh`, `cisa_kev`, `mitre_attack`, `whois_rdap`, `spamhaus`, `internet_intelligence` — `backend/app/providers/connection_test.py`'s handler dict (lines 190-206) explicitly has no test handler for them either, with a fallback message naming them as needing none. The other two, `urlscan` and `google_safe_browsing`, **do** require a key (`requires_key = True`) but still have no wizard entry — both installers' wizards omit them identically (see `linux/wizard/setup_wizard.py`'s `RUNTIME_ONLY_NOTE`), and both are configured after install from the app's own Providers page instead.
 
 ## 5. Database Architecture
 
@@ -112,11 +114,11 @@ Postgres tables (`backend/app/models/`): `users` (email, hashed_password, full_n
 
 **Network exposure**: every datastore port binding in `docker-compose.yml` (`postgres`, `redis`, `neo4j` x2, `opensearch`) uses the `127.0.0.1:<port>:<container_port>` form — syntactically bound to loopback only, not `0.0.0.0`. `backend`/`frontend` ports are published without an explicit host binding (`"${HOST_PORT_BACKEND:-8000}:8000"`), which Docker's shorthand form publishes on all host interfaces.
 
-**Rate limiting**: exactly one limiter in the codebase, Redis fixed-window, on `POST /lookup/stream` only (10 calls/60s/user, both configurable). No rate limiting on `/auth/login` or `/auth/register`.
+**Rate limiting**: a Redis fixed-window limiter on `POST /lookup/stream` (10 calls/60s/user, both configurable), plus a second one added in a later mission-critical-reliability review (v0.2.3) on `/auth/login`, keyed per-account by email rather than by user ID or IP (10 attempts/60s, both configurable, `429` once exceeded). No rate limiting on `/auth/register`.
 
 **CORS** (`app/main.py` lines 27-33): `allow_origins=["http://localhost:3000"]` when `settings.debug` (default `True`), else `[]` — a `DEBUG=false` deployment permits zero cross-origin browser requests until the code itself is edited; there's no `CORS_ORIGINS` env var.
 
-**Input validation of note**: `LookupCreateRequest.value` is an unconstrained `str` server-side (`app/schemas/lookup.py`); IOC-type detection (`ioc/detector.py`) is regex-based classification, not sanitization. `RegisterRequest.password` has no server-side strength constraint; the wizard's 8-char minimum (`Setup-Wizard.ps1` line 350) is a client-side-equivalent check on the admin account creation flow only, not a backend constraint.
+**Input validation of note**: `LookupCreateRequest.value` is an unconstrained `str` server-side (`app/schemas/lookup.py`); IOC-type detection (`ioc/detector.py`) is regex-based classification, not sanitization. `RegisterRequest.password` has a server-side 8-character minimum (`Field(min_length=8, ...)`, `app/schemas/auth.py`) but no complexity constraint beyond that; the wizard's own 8-char minimum (`Setup-Wizard.ps1` line 350) matches this backend constraint rather than substituting for it.
 
 ## 8. Testing
 

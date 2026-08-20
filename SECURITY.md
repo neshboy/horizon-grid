@@ -2,16 +2,16 @@
 
 ## Supported Versions
 
-HORIZON GRID is currently a single rolling `0.2.0` release line — there is no
+HORIZON GRID is currently a single rolling `0.2.x` release line — there is no
 older major/minor version still receiving fixes, and no formal LTS or
-maintenance branch. Security fixes, when made, land on the current `0.2.0`
+maintenance branch. Security fixes, when made, land on the current `0.2.x`
 line. As the project matures past its first release, this section will be
 updated to reflect which versions are actively supported.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.2.0.x | Yes (current line) |
-| < 0.2.0 | N/A — no prior releases |
+| 0.2.3   | Yes (current release) |
+| < 0.2.3 | No — upgrade to 0.2.3 |
 
 ## Reporting a Vulnerability
 

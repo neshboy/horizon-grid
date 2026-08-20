@@ -189,7 +189,7 @@ Base path `/api/v1/ai`. Live AI-backend credential testing and model-list discov
 ### `POST /api/v1/ai/test`
 `app/api/routes/ai_config.py:39`
 
-- **Purpose:** Live credential check for any of the five AI backends (Ollama, Anthropic, Bedrock, Gemini, Groq) — makes one real, minimal chat request with candidate credentials. Never persists anything.
+- **Purpose:** Live credential check for any of the eleven AI backends (Ollama, Anthropic, Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter) — makes one real, minimal chat request with candidate credentials. Never persists anything.
 - **Auth:** `require_permission("provider:manage")`.
 - **Request body** (`AITestRequest`, inline `ai_config.py:33-36`): `backend: str`, `credentials: dict[str, str]` (default `{}`), `model: str | None` (default `None`).
 - **Response:** `{backend: str, ok: bool, message: str, model: str | None, latency_ms: <type>}`.

@@ -3,12 +3,9 @@
 /**
  * Composition root for a *live* IOC lookup. Reads the raw value the home
  * page search box navigated here with (?value=...), opens the SSE stream via
- * streamLookup(), and fans the incoming events out into local state that the
- * real dashboard components (built separately under components/dashboard/)
- * will eventually consume. Until those land, each section below renders a
- * clearly-labelled placeholder -- swap the placeholder <div> for the real
- * component import (the commented-out TODO line right above each one) in a
- * single line once it exists.
+ * streamLookup(), and fans the incoming events out into local state consumed
+ * by the real dashboard components under components/dashboard/ (ProviderCardGrid,
+ * FinalAssessmentPanel, RelationshipGraph, MitreMatrix, and the rest).
  */
 
 import { Suspense, useEffect, useRef, useState } from "react";

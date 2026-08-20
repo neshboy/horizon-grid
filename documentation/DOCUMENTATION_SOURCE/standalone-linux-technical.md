@@ -55,7 +55,7 @@ It is configured as `Type=oneshot` with `RemainAfterExit=yes`. This is the corre
 
 `linux/wizard/setup_wizard.py` is a terminal program that replaces the Windows WinForms wizard (`windows/wizard/Setup-Wizard.ps1`) but follows the **same real flow and makes the same real HTTP calls**, in this order:
 
-Welcome → Administrator Account → AI Configuration → Threat Intelligence Providers → Network Ports → Summary → write `/etc/horizon-grid/.env` (`0600`, `root:root`) → `docker compose up -d --build` → wait for `GET /health` → register the admin account via `POST /api/v1/auth/register` (fresh install only) → confirm via `POST /api/v1/auth/login`.
+Welcome → Administrator Account → AI Configuration → Threat Intelligence Providers → Network Ports → Summary → write `/etc/horizon-grid/.env` (`0600`, `root:root`) → `docker compose up -d --build` → wait for `GET /health/detailed` (up to 3 minutes -- confirms Postgres is genuinely reachable before the next step writes to it, not just that the process has started) → register the admin account via `POST /api/v1/auth/register` (bootstrap-only: succeeds only while the users table is empty, so this only actually creates an account on a genuinely fresh install) → confirm via `POST /api/v1/auth/login`.
 
 On a **reconfigure** of an existing install, re-entering the existing admin email and password signs in for that session and enables live "Test Connection" calls (`POST /api/v1/providers/{id}/test`, `POST /api/v1/ai/test`) — exactly as on Windows. During a **fresh** install's provider/AI pages, Test Connection cannot work yet because no backend is running at that point in the flow. This is an application-level fact true on both platforms, not a Linux-specific limitation.
 

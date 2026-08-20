@@ -10,20 +10,20 @@ All facts below are drawn directly from `docker-compose.yml`, `docker-compose.pr
 
 | Service | Image / entrypoint | Depends on (health-gated) | Port binding (host) | Restart policy |
 |---|---|---|---|---|
-| `postgres` | `postgres:16-alpine` | -- | `127.0.0.1:${HOST_PORT_POSTGRES:-5433}:5432` | none set |
-| `redis` | `redis:7-alpine` | -- | `127.0.0.1:${HOST_PORT_REDIS:-6379}:6379` | none set |
-| `neo4j` | `neo4j:5-community` + APOC | -- | `127.0.0.1:${HOST_PORT_NEO4J_HTTP:-7475}:7474`, `127.0.0.1:${HOST_PORT_NEO4J_BOLT:-7688}:7687` | none set |
-| `opensearch` | `opensearchproject/opensearch:2.17.0` | -- | `127.0.0.1:${HOST_PORT_OPENSEARCH:-9200}:9200` | none set |
-| `backend` | built from `backend/Dockerfile` (`python:3.12-slim`) | `postgres`, `redis` (`service_healthy`) | `${HOST_PORT_BACKEND:-8000}:8000` | none set |
+| `postgres` | `postgres:16-alpine` | -- | `127.0.0.1:${HOST_PORT_POSTGRES:-5433}:5432` | `unless-stopped` |
+| `redis` | `redis:7-alpine` | -- | `127.0.0.1:${HOST_PORT_REDIS:-6379}:6379` | `unless-stopped` |
+| `neo4j` | `neo4j:5-community` + APOC | -- | `127.0.0.1:${HOST_PORT_NEO4J_HTTP:-7475}:7474`, `127.0.0.1:${HOST_PORT_NEO4J_BOLT:-7688}:7687` | `unless-stopped` |
+| `opensearch` | `opensearchproject/opensearch:2.17.0` | -- | `127.0.0.1:${HOST_PORT_OPENSEARCH:-9200}:9200` | `unless-stopped` |
+| `backend` | built from `backend/Dockerfile` (`python:3.12-slim`) | `postgres`, `redis` (`service_healthy`) | `${HOST_PORT_BACKEND:-8000}:8000` | `unless-stopped` |
 | `celery_worker` | same `backend/` build context | `postgres`, `redis` (`service_healthy`) | none published | `unless-stopped` |
 | `celery_beat` | same `backend/` build context | `redis` (`service_healthy`) | none published | `unless-stopped` |
-| `frontend` | built from `frontend/Dockerfile` (Next.js) | `backend` (existence only, not health) | `${HOST_PORT_FRONTEND:-3000}:3000` | none set |
+| `frontend` | built from `frontend/Dockerfile` (Next.js) | `backend` (`service_healthy`) | `${HOST_PORT_FRONTEND:-3000}:3000` | `unless-stopped` |
 
 Operationally relevant details:
 
 - **All four datastore ports bind to `127.0.0.1` only**, not `0.0.0.0` -- the application itself never uses these host bindings, since `DATABASE_URL`/`REDIS_URL`/`NEO4J_URI`/`OPENSEARCH_URL` all address the internal Docker network by service name. The bindings only affect what can reach the datastore directly from the host machine.
 - **`backend` and `celery_worker` wait on both Postgres and Redis health checks** (`pg_isready` / `redis-cli ping`) before Compose starts them; `celery_beat` only waits on Redis, since it schedules jobs but never queries Postgres.
-- **Only `celery_worker`/`celery_beat` have `restart: unless-stopped`.** `backend`, the datastores, and `frontend` do not auto-restart on crash under the default compose file (`docker-compose.prod.yml` does not change this).
+- **All 8 services have `restart: unless-stopped`** (added in a later mission-critical-reliability review, v0.2.3 -- previously only `celery_worker`/`celery_beat` did, and `backend`, the datastores, and `frontend` stayed down after a crash until a human ran `docker compose up`). Confirmed live: a container OOM-killed by its own `mem_limit` now restarts automatically within seconds; a container an operator deliberately stops or kills stays down, matching Docker's own intended "operator explicitly wants this down" semantics.
 - **`backend`, `celery_worker`, and `celery_beat` build from the identical `backend/` context** and ship the same image; they differ only in the `command:` each service starts with (see §2), not in the code on disk.
 - `OLLAMA_BASE_URL` is set directly in the `backend` service's `environment:` block rather than via `env_file: .env` like other credentials. A compose `environment:` entry always wins over `env_file:`, so this silently overrides whatever `OLLAMA_BASE_URL` is written into `.env`.
 - `docker-compose.prod.yml` (used by the Windows installer) layers on top of the base file: it strips every bind-mount (`volumes: !reset []`) from `backend`, `celery_worker`, `celery_beat`, and `frontend`, and swaps their commands for non-hot-reload equivalents.
@@ -50,7 +50,7 @@ Everything in `backend/app/main.py` at module scope runs once, before Uvicorn ac
 
 ### 2.3 The `startup` event: seeding runtime provider configuration
 
-`app.main` registers exactly one `@app.on_event("startup")` handler, `_seed_runtime_config()`, calling `seed_from_env_if_empty()` (`app/core/runtime_config.py`), once per process start, after the app is fully constructed but before Uvicorn begins accepting connections. If `provider_runtime_configs` already has any row, this is a no-op. Otherwise, for each of the 5 AI backends and 16 registered IOC providers, it reads that backend's/provider's credential fields off the frozen `Settings` singleton (i.e. whatever was in `.env` at container start) and inserts a `ProviderRuntimeConfig` row, Fernet-encrypting credentials before writing (full mechanism in the Provider/AI Runtime Configuration chapter). The handler is wrapped in its own `try/except Exception`, logging and continuing rather than crashing the process on failure (`main.py:57-60`) -- a failed seed leaves providers reporting as unconfigured rather than blocking startup.
+`app.main` registers exactly one `@app.on_event("startup")` handler, `_seed_runtime_config()`, calling `seed_from_env_if_empty()` (`app/core/runtime_config.py`), once per process start, after the app is fully constructed but before Uvicorn begins accepting connections. If `provider_runtime_configs` already has any row, this is a no-op. Otherwise, for each of the 11 AI backends and 18 registered IOC providers, it reads that backend's/provider's credential fields off the frozen `Settings` singleton (i.e. whatever was in `.env` at container start) and inserts a `ProviderRuntimeConfig` row, Fernet-encrypting credentials before writing (full mechanism in the Provider/AI Runtime Configuration chapter). The handler is wrapped in its own `try/except Exception`, logging and continuing rather than crashing the process on failure (`main.py:57-60`) -- a failed seed leaves providers reporting as unconfigured rather than blocking startup.
 
 ### 2.4 Uvicorn serving
 

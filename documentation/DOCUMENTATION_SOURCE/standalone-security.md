@@ -22,7 +22,7 @@ An administrator resetting a user's password increments that user's `token_versi
 
 **Bootstrap and account creation.** The very first user ever created on an instance is automatically granted `ADMIN`; every registration attempt after that is rejected outright (`403`, "Self-registration is closed"). There is no seed script and no default account -- this bootstrap rule, exercised by the Windows Setup Wizard at install time, is the platform's only path to an initial administrator. Every account after that first one is created by an existing administrator from the Administration page, who picks its role up front.
 
-**What is honestly not yet in place:** no self-service "log out everywhere" (only an admin-driven password reset triggers revocation -- a user cannot invalidate their own other sessions without changing their password), no rate limiting or account lockout on `/auth/login` or `/auth/register`, and no multi-factor authentication. None of these are silently glossed over; see §12.
+**What is honestly not yet in place:** no self-service "log out everywhere" (only an admin-driven password reset triggers revocation -- a user cannot invalidate their own other sessions without changing their password), no rate limiting on `/auth/register`, no account lockout on either endpoint, and no multi-factor authentication. `/auth/login` itself did gain a real per-account rate limiter in a later mission-critical-reliability review (v0.2.3) -- see §12. None of the remaining gaps are silently glossed over either.
 
 ## 2. Authorization: Role-Based Access Control
 
@@ -176,7 +176,7 @@ limiter = RateLimiter(
 
 The reasoning is stated directly in the route's own rejection message: each lookup fans out to every configured provider plus, potentially, an OSINT crawler and multiple AI calls, so this is a cost/load control on the single most expensive operation in the platform, not a generic API throttle. Both the call limit and window are configurable settings; the enforcement itself is per-user (keyed on the authenticated user's ID), not per-IP or global, which means it cannot be used to throttle one user's traffic by exhausting a shared bucket.
 
-There is honestly no rate limiting anywhere else in the API -- most importantly, `/auth/login` and `/auth/register` have no throttling of any kind against credential-stuffing or brute-force attempts. This is stated plainly in §12 rather than left implicit.
+A second limiter exists on `/auth/login` (added in a later mission-critical-reliability review, v0.2.3): a per-account limiter keyed by email, defaulting to 10 attempts per 60 seconds, both configurable, returning `429` once exceeded -- a real defense against credential-stuffing/brute-force attempts against one specific account. `/auth/register` still has no rate limiting of any kind, and there is no rate limiting anywhere else in the API. This is stated plainly in §12 rather than left implicit.
 
 ## 10. Audit Logging
 
@@ -200,7 +200,7 @@ Browser-originated cross-origin requests are gated by a private-network-shaped C
 
 This platform's own release process treats "known limitation, disclosed" as a materially different thing from "silently accepted risk." The following are pulled directly from the most recent release's QA report and the security appendices' own "Recommended (not yet implemented)" lists -- none of these are hidden, and none of them were found to be actively exploited in a running instance:
 
-- **No rate limiting or lockout on authentication endpoints.** `/auth/login` and `/auth/register` have no throttling against repeated attempts (§1, §9).
+- **No rate limiting on `/auth/register`, and no account lockout on either authentication endpoint.** `/auth/login` itself gained a real per-account rate limiter in a later mission-critical-reliability review (v0.2.3, §1, §9).
 - **No self-service session revocation.** A user cannot invalidate their own other sessions without an administrator-driven password reset (§1).
 - **No multi-factor authentication and no server-side password complexity rule** beyond an 8-character minimum.
 - **The "Test Connection" button never falls back to an already-saved credential** (§3) -- a deliberate security property, not a bug, but confirmed during the most recent release's QA cycle to be a real point of user confusion the first time it's encountered; now documented explicitly for exactly that reason.
@@ -217,7 +217,7 @@ Two positive, verified findings from the same release round out this section hon
 
 | Area | Strongest control in place | Most significant disclosed gap |
 |---|---|---|
-| Authentication | JWT + bcrypt; `token_version`-based instant revocation on password reset/role change/disable | No self-service logout-everywhere; no login rate limiting |
+| Authentication | JWT + bcrypt; `token_version`-based instant revocation on password reset/role change/disable; per-account rate limiter on `/auth/login` (v0.2.3) | No self-service logout-everywhere; no rate limiting on `/auth/register` |
 | Authorization | Single-source `ROLE_PERMISSIONS` matrix, one shared dependency, race-safe last-admin protection | No per-case/per-lookup ACL (deliberate, team-shared scope) |
 | Credentials | Fernet-at-rest encryption; masked-only API display, never round-tripped | Default encryption key is derived from `jwt_secret_key`, not independent, unless set explicitly |
 | SSRF | `assert_safe_outbound_url()` blocks link-local/metadata addresses on the one fully-operator-chosen outbound URL | Scoped to Ollama's `base_url` only -- the one surface that needs it today |

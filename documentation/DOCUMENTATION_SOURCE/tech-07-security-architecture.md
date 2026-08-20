@@ -75,7 +75,7 @@ The `backend` and `frontend` containers are published differently: their compose
 
 The codebase implements exactly **one** rate limiter: a Redis fixed-window limiter that applies solely to `POST /lookup/stream` (the IOC lookup endpoint), defaulting to 10 calls per 60 seconds per authenticated user — both figures are configurable.
 
-No rate limiting exists on `/auth/login` or `/auth/register`. The limiter does not apply anywhere else in the API.
+`/auth/login` has a second limiter, added in a later mission-critical-reliability review (v0.2.3): a per-account Redis fixed-window limiter keyed by email (`login:{email}`, not source IP), defaulting to 10 attempts per 60 seconds, both configurable, returning `429` once exceeded. `/auth/register` still has no rate limiting of any kind.
 
 ## CORS Behavior
 
@@ -91,15 +91,15 @@ There is no `CORS_ORIGINS` environment variable or other configuration knob to a
 Two related facts are worth surfacing here because they feed directly into the hardening list below:
 
 - `LookupCreateRequest.value` (the raw IOC string submitted for lookup) is an unconstrained `str` on the server side. Classification into an IOC type happens via regex-based heuristics (`app/ioc/detector.py`), which is pattern classification, not input sanitization.
-- `RegisterRequest.password` carries no server-side minimum-length or complexity rule. The Setup Wizard enforces an 8-character minimum in its own UI when creating the bootstrap admin account, but that is a client-side-equivalent check scoped to the installer flow only — it is not a constraint the backend itself enforces for any account.
+- `RegisterRequest.password` carries a server-side 8-character minimum (`Field(min_length=8, ...)`, `app/schemas/auth.py`), enforced by Pydantic for every account, not just the bootstrap admin — but no complexity rule (digit/symbol/case) beyond that length floor. The Setup Wizard's own UI also enforces an 8-character minimum when creating the bootstrap admin account, matching the backend constraint rather than substituting for it.
 
 ## Areas for Future Hardening
 
 Based only on the facts established above:
 
 - **Default JWT secret is a known literal.** `jwt_secret_key` defaults to `"change-me-in-production"` if the operator never sets it explicitly — any instance that ships with this unedited has a predictable signing key.
-- **No rate limiting on authentication endpoints.** The platform's only rate limiter covers IOC lookup creation; `/auth/login` and `/auth/register` have no throttling against repeated attempts.
-- **No server-side password strength rule.** Password length/complexity is not validated by the backend for any account, including the initial admin account (the Setup Wizard's 8-character minimum is a UI-level check on that one flow, not a backend constraint).
+- **No rate limiting on `/auth/register`.** `/auth/login` gained a real per-account rate limiter in v0.2.3 (see Rate Limiting above); registration has no throttling against repeated attempts.
+- **No server-side password complexity rule beyond length.** The backend enforces an 8-character minimum for every account (`app/schemas/auth.py`), but no digit/symbol/case requirement on top of that.
 - **One admin-tier permission still has no enforcing route.** `user:manage` is defined in the RBAC permission matrix but, unlike `provider:manage` and `audit:read`, is not currently checked by any route.
 - **Backend and frontend ports are not loopback-restricted by default.** Datastores (Postgres, Redis, Neo4j, OpenSearch) are bound to `127.0.0.1` only; the backend API and frontend web app publish on all host interfaces by default, unless the operator adds their own network restriction.
 - **Runtime-credential encryption key defaults to a derived, not independently-generated, secret.** Unless an operator explicitly sets `encryption_master_key`, the Fernet key protecting runtime-configured provider/AI credentials (see Secrets Management above) is deterministically derived via HKDF from `jwt_secret_key` rather than generated and stored separately. That is a reasonable defense-in-depth default — it means every existing install already has a working encryption key — but it is not equivalent to HSM-grade key separation: compromise of `jwt_secret_key` would also expose the derived encryption key.

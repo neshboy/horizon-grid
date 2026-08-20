@@ -1,5 +1,15 @@
 # HORIZON GRID — Release Notes
 
+## v0.2.3 — Mission-critical deployment hardening
+
+A dedicated reliability and security review for a one-time install at a remote, physically-inaccessible site with no developer access afterward. 18 real gaps were found and fixed — 2 of them self-discovered during the review itself. Every service now restarts automatically on a crash (previously only 2 of 8 did), a real dependency-aware health check (`/health/detailed`) backs a new 5-minute watchdog on both platforms, both platforms now auto-start at boot (a self-discovered bug meant Linux's systemd unit was never actually enabled, despite the unit file itself being correct), and both platforms got a real, tested database restore procedure plus scheduled nightly backups — previously only manual/pre-upgrade backups existed, with no restore procedure at all beyond a self-contradictory manual instruction.
+
+On the security side: the SSRF guard on the local AI backend's outbound URL now covers the actual investigation call path (not just the connection-test button), login attempts are now rate-limited, the API's interactive documentation is disabled in production, and a request-body-size limit closes an unbounded-input gap. A page-crashing bug in the Relationship Graph's "View as list" toggle was found and fixed, along with a dead-code bug that meant provider network-error retries had no real effect for most providers.
+
+Full backend suite: 380 passed, 39 skipped. A 3-hour soak test against the live stack completed cleanly — flat memory, zero spontaneous restarts. See the Mission-Critical Operations Manual and Mission-Critical Certification Report for complete detail, including honestly disclosed limitations (no off-site backup option, no disk-space alerting, a live elevated Windows install not performed this release).
+
+No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
+
 ## v0.2.2 — Independent re-verification: 7 real bugs found and fixed
 
 The v0.2.1 cancellation fix was independently re-verified rather than taken on faith: nine separate reviewers, each reading the real code fresh, re-proved the original before/after claim directly from git history, then tried hard to break the result — live browser automation of the full UI flow, every real scan profile and target type, every documented failure condition, a dedicated adversarial security pass, real concurrency races, and full regression of the rest of the application. That pass found four real defects in the scanner itself and three unrelated ones elsewhere. All seven are fixed, tested, and live-verified in this release; nothing here was assumed correct because a test suite stayed green.
@@ -34,11 +44,17 @@ HORIZON GRID is the renamed, significantly extended release of this platform (pr
 
 Re-running the installer on an existing install preserves your configuration, credentials, and all investigation/case/watchlist data — nothing about this release requires starting over. Internal identifiers (data folder location, database name) are unchanged from before the rename specifically so an upgrade is safe.
 
-## Known limitations
+## Known limitations (current, as of v0.2.3)
 
-- If you configure a local AI model (Ollama) as your active backend, the AI-generated executive summary can be slower under heavy *concurrent* load, since a single local model processes generation requests one at a time. This does not affect the accuracy of any number shown — only how quickly the AI's prose explanation of it appears — and does not affect the Dashboard's KPI tiles or the Provider Health page, both of which are plain database reads independent of AI backend choice.
+- No automated host-disk-space alerting, and no retention/cleanup job for ever-growing investigation tables.
+- No off-host/off-site backup copy option — backups are local-disk-only, which does not protect a genuinely remote site against the host/disk itself failing.
+- A narrow DNS-rebinding TOCTOU window remains on the SSRF check (validates a resolution snapshot; the real outbound call re-resolves independently afterward).
+- Neo4j and OpenSearch remain fully provisioned (~1.5–2 GB RAM) with zero actual application traffic — a real resource cost with no current benefit, flagged as an open product question rather than resolved unilaterally.
+- No frontend test infrastructure exists (`vitest` is wired into `package.json`, but zero test files exist anywhere in the tree).
+- A live, elevated, end-to-end Windows installer run was not performed for v0.2.3 (requires an interactive UAC prompt); the installer's packaged contents were verified directly instead.
+- If you configure a local AI model (Ollama) as your active backend, the AI-generated executive summary can be slower under heavy *concurrent* load, since a single local model processes generation requests one at a time. This does not affect the accuracy of any number shown, and does not affect the Dashboard's KPI tiles or the Provider Health page, both plain database reads independent of AI backend choice.
 - A minor, disclosed hardening item remains in the scoring engine's handling of a malformed numeric provider value (NaN/Infinity) — not exploitable by any currently-integrated provider, tracked as a future improvement.
 
 ## Verdict
 
-**RELEASE READY WITH KNOWN LIMITATIONS.** See the Final Release QA Report for the full evidence behind this verdict.
+**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (v0.2.3). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict.

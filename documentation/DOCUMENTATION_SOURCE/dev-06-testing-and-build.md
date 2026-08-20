@@ -20,7 +20,7 @@ No database, Redis, Docker, or network access is required for any file in this d
 | File | What it exercises |
 |---|---|
 | `test_abusech.py` | `app.providers.abusech.map_query_status` -- the shared abuse.ch `query_status` mapping used by URLhaus/ThreatFox/MalwareBazaar |
-| `test_ai_connection_test.py` | `app.ai.connection_test.test_ai_connection` for all 5 AI backends against **respx**-mocked HTTP: success, invalid-key/401, rate-limit/429, model-not-found/404, timeout, network error (16 test functions) |
+| `test_ai_connection_test.py` | `app.ai.connection_test.test_ai_connection` for all 11 AI backends against **respx**-mocked HTTP: success, invalid-key/401, rate-limit/429, model-not-found/404, timeout, network error, plus backend-specific cases (Kimi's thinking-mode conflict, DeepSeek's 402, xAI's flat error body) (53 test functions) |
 | `test_ai_schemas.py` | `app.ai.schemas.MitreMapping`'s enum/regex-free `technique_id` field and `FinalAssessment`'s grounding validator |
 | `test_ai_service.py` | `app.ai.service.generate_final_assessment`'s no-real-evidence short-circuit -- the fix for a fabricated `highly_malicious` verdict against the EICAR hash with zero provider evidence |
 | `test_analysis_service.py` | `app.ai.analysis_service._strip_invalid_evidence_ids`, the guard that drops any AI-cited `evidence_id` not present in the real evidence set |

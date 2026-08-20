@@ -6,9 +6,9 @@ Every time you look up an IOC (Indicator of Compromise — a piece of evidence s
 
 Each of those outside sources — a malware database, a government vulnerability catalog, a domain registration lookup, a live web crawler — is called a **provider**. A provider is simply a specialized service, database, or feed that knows something specific about the internet: who owns this IP address, has this file hash been seen in malware before, is this CVE (Common Vulnerabilities and Exposures — a standardized ID number for a publicly known security flaw, e.g. "CVE-2021-44228") actively being exploited right now, and so on.
 
-The platform has **16 providers built in**. When you submit an IOC, it queries every provider that's relevant to that IOC's type — for example, a file hash won't be sent to a domain-registration lookup, but it will be sent to a malware-sample database — and streams each provider's answer back to you as it arrives, before combining everything into one assessment.
+The platform has **18 providers built in**. When you submit an IOC, it queries every provider that's relevant to that IOC's type — for example, a file hash won't be sent to a domain-registration lookup, but it will be sent to a malware-sample database — and streams each provider's answer back to you as it arrives, before combining everything into one assessment.
 
-This section walks through what each of the 16 real providers is, in plain language: what it is, what kind of intelligence it supplies, why a SOC (Security Operations Center) analyst would care, and roughly what comes back.
+This section walks through what each of the 18 real providers is, in plain language: what it is, what kind of intelligence it supplies, why a SOC (Security Operations Center) analyst would care, and roughly what comes back.
 
 ## Malware, IP, and URL Reputation Providers
 
@@ -31,6 +31,10 @@ These are the "has anyone seen this before, and was it bad?" sources — the clo
 - **Spamhaus** — A long-established DNSBL (DNS-based blocklist) — a reputation list checked via a plain DNS query rather than a web API — covering IPs and domains, widely used across the email and network security industry to flag spam sources and malicious infrastructure. It's a fast, no-configuration check. What it returns: a verdict (listed / not listed), and sometimes a specific reason string from the lookup itself.
 
 - **PhishTank** — A community-reported database of phishing URLs. Since phishing pages are often short-lived, having a dedicated, frequently updated phishing list matters. What it returns: whether the URL has been reported and confirmed as phishing.
+
+- **urlscan.io** — Submits a URL or domain for a real, live sandbox scan rather than checking it against a pre-built database, then polls for the result (capped at 60 seconds). This is useful when you want to see what a page actually does right now, not just whether it was flagged before. It checks URLs and domains only. What it returns: a scan verdict once the sandbox run completes; a scan that isn't ready by the timeout is reported honestly as timed out, never as clean.
+
+- **Google Safe Browsing** — Google's own URL/domain reputation check (the same list of malware and phishing threat types your web browser itself would normally warn you about), covering malware, social engineering, unwanted software, and potentially harmful applications. It checks URLs and domains only. What it returns: a verdict based on whether Google's own threat lists have a match — and, by design, absolutely nothing else (a failed check, a network error, or an unexpected response is always reported as unknown/error, never mistaken for "safe," specifically so a broken or misconfigured key can never look like a clean scan).
 
 ## Vulnerability Intelligence Providers
 
@@ -60,7 +64,7 @@ These answer "who owns this, and what else is tied to it?" — infrastructure-an
 
 - **Censys** — An internet-wide scanning service that catalogs what's actually running on IP addresses across the internet (open ports, services, certificates) — sometimes described as passive DNS / internet asset intelligence. This is useful for understanding what an IP is actually hosting, beyond just a reputation score. Censys is the one provider in this platform that needs **two** separate credentials to work — a Personal Access Token *and* an Organization ID — both are required, and having only one leaves it not configured.
 
-## All 16 Providers at a Glance
+## All 18 Providers at a Glance
 
 | Provider | What It Checks | Key Required? |
 |---|---|---|
@@ -80,19 +84,22 @@ These answer "who owns this, and what else is tied to it?" — infrastructure-an
 | PhishTank | URLs — community-reported phishing | No (optional key raises rate limit) |
 | Censys | IPs — internet-wide host/certificate scan data | Yes (Personal Access Token **and** Organization ID, both required) |
 | Internet Intelligence Collector | Domains, IPs, malware families, threat actors, campaigns, CVEs, filenames — live OSINT crawl | No |
+| urlscan.io | URLs, domains — live sandbox scan | Yes (no wizard entry — see below) |
+| Google Safe Browsing | URLs, domains — Google's malware/phishing threat lists | Yes (no wizard entry — see below) |
 
-## Why the Setup Wizard Only Shows 8 Providers, Not 16
+## Why the Setup Wizard Only Shows 8 Providers, Not 18
 
-If you've been through the installation wizard, you may have noticed its provider page only lists 8 entries to fill in — not 16. This is a deliberate, verified design detail, not a missing feature.
+If you've been through the installation wizard, you may have noticed its provider page only lists 8 entries to fill in — not 18. This is a deliberate, verified design detail, not a missing feature.
 
 [FIGURE: 12-wizard-providers-configured.png | The Setup Wizard's Threat Intelligence Providers page, where an administrator enters credentials (shown as masked dots, never real key text) for providers such as VirusTotal, AbuseIPDB, and AlienVault OTX.]
 
 Here's the honest breakdown of why the numbers work out that way:
 
-- **6 of the 16 providers need no credential at all and have no entry on the wizard's page**: crt.sh, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, and the Internet Intelligence Collector. Since there's nothing to type in, there's simply nothing for a setup screen to ask for — these providers are already active the moment the platform starts, with no setup step required. (NIST NVD and PhishTank also work with no credential, but the wizard still gives each of them an optional key field purely to raise their rate limit — so they're counted in the wizard's 8 entries below, not in this list of 6.)
-- The remaining **10 providers are covered by only 8 wizard entries**, because three of them — URLhaus, ThreatFox, and MalwareBazaar — all share a single abuse.ch "Auth-Key." Entering that one key on the wizard's single abuse.ch field activates all three providers at once.
+- **6 of the 18 providers need no credential at all and have no entry on the wizard's page**: crt.sh, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, and the Internet Intelligence Collector. Since there's nothing to type in, there's simply nothing for a setup screen to ask for — these providers are already active the moment the platform starts, with no setup step required. (NIST NVD and PhishTank also work with no credential, but the wizard still gives each of them an optional key field purely to raise their rate limit — so they're counted in the wizard's 8 entries below, not in this list of 6.)
+- The remaining **10 providers with an actual credential requirement are covered by only 8 wizard entries**, because three of them — URLhaus, ThreatFox, and MalwareBazaar — all share a single abuse.ch "Auth-Key." Entering that one key on the wizard's single abuse.ch field activates all three providers at once.
+- **2 providers need a credential but have no wizard entry at all: urlscan.io and Google Safe Browsing.** Both are configured exclusively after install, from the app's own Providers page (sign in → Providers) — the same runtime, database-backed, no-restart configuration described below. This isn't a Windows-versus-Linux gap; both installers' wizards omit these two identically, and both say so explicitly in their own setup-time messaging.
 
-So the math is: 8 wizard entries → 10 providers with a wizard entry (7 individual + 3 sharing one abuse.ch key) + 6 always-on providers with nothing to configure = **16 providers total**, all working from install day one. Nothing is hidden or broken — the shorter wizard list is simply an accurate reflection of which providers actually have a setting to configure.
+So the math is: 8 wizard entries → 10 providers with a wizard entry (7 individual + 3 sharing one abuse.ch key) + 6 always-on providers with nothing to configure + 2 providers that need a credential but are set up after install instead of during the wizard = **18 providers total**, all working once configured. Nothing is hidden or broken — the shorter wizard list is simply an accurate reflection of which providers actually have a setting on that specific page.
 
 ## Managing Providers From the App (No Restart)
 

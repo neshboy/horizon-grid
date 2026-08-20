@@ -74,7 +74,7 @@ You don't need to configure all 18 providers to get useful results — the platf
 
 ## Step 7: Configure an AI Backend
 
-Every investigation ends with an AI-written explanation of what was found. HORIZON GRID supports five interchangeable AI backends, and you pick one from the same **Providers** page, under the **AI Providers** tab.
+Every investigation ends with an AI-written explanation of what was found. HORIZON GRID supports eleven interchangeable AI backends, and you pick one from the same **Providers** page, under the **AI Providers** tab.
 
 [FIGURE: 32-manage-providers-ai-tab.png | The AI Providers tab, listing each of the five supported AI backends with its live configured/active status.]
 

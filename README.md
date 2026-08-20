@@ -172,6 +172,25 @@ evidence/correlation/AI pipeline used by ordinary provider lookups, and a
 refresh re-runs the deterministic scoring engine using the new finding
 severities as a floor on the risk score.
 
+### Reliability and mission-critical deployment
+
+Hardened for a one-time install at a remote site with no developer access
+afterward (full detail in the Mission-Critical Operations Manual):
+
+- All 8 Docker Compose services restart automatically on a crash
+  (`restart: unless-stopped`), including Redis's persistent volume so a
+  routine container recreation no longer resets the cache/rate-limiter state.
+- Boot-time auto-start on both platforms (Windows Scheduled Task; Linux
+  `systemctl enable`) and a 5-minute health watchdog that checks a real
+  dependency-aware endpoint (`GET /health/detailed`, which genuinely pings
+  Postgres/Redis) and restarts the stack if it's unhealthy.
+- Scheduled nightly database backups on both platforms, plus a real,
+  tested restore procedure (`Restore-Database.ps1` / `horizon-grid restore`)
+  requiring an explicit typed confirmation.
+- An SSRF guard on the Ollama AI backend's outbound URL, login brute-force
+  rate limiting, a 10 MB request-body-size limit, and Swagger/OpenAPI docs
+  disabled in production.
+
 ## Platform support
 
 | | Windows | Linux |
@@ -253,16 +272,17 @@ for the auth/JWT model, RBAC enforcement, and secrets handling in more detail.
 
 ## Testing
 
-Backend (282 unit tests pass standalone, no infra required; the integration
-suite additionally requires either a running Docker Compose stack or the
-host-published Postgres/Redis ports, and a subset is designed to run inside
-the backend container):
+Backend (335 unit tests pass standalone, no infra required; the full suite —
+380 passed, 39 skipped — additionally requires either a running Docker
+Compose stack or the host-published Postgres/Redis ports, and a subset is
+designed to run inside the backend container; the 39 skips are intentional
+host-only/environment-gated tests, not failures):
 
 ```bash
 cd backend
 pip install -r requirements.txt
-python -m pytest app/tests/unit -v      # 282 passed, no infra required
-python -m pytest app/tests -v           # full suite, requires DB/Redis
+python -m pytest app/tests/unit -v      # 335 passed, no infra required
+python -m pytest app/tests -v           # full suite: 380 passed, 39 skipped, requires DB/Redis
 ```
 
 Frontend:

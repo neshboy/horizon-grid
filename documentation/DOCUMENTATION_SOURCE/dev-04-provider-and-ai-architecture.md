@@ -1,6 +1,6 @@
 # Provider and AI Client Architecture (Developer Reference)
 
-This chapter is the source-level companion to the *Provider Architecture* and *AI Architecture* chapters elsewhere in this documentation set. Those chapters describe what the provider and AI layers *do*; this one documents the actual interfaces, classes, and method signatures a developer extending or maintaining this codebase needs to implement or call. All facts below are drawn directly from `backend/app/providers/base.py`, `registry.py`, `orchestrator.py`, `backend/app/ai/service.py`, and the five AI client modules (`ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, `groq_client.py`).
+This chapter is the source-level companion to the *Provider Architecture* and *AI Architecture* chapters elsewhere in this documentation set. Those chapters describe what the provider and AI layers *do*; this one documents the actual interfaces, classes, and method signatures a developer extending or maintaining this codebase needs to implement or call. All facts below are drawn directly from `backend/app/providers/base.py`, `registry.py`, `orchestrator.py`, `backend/app/ai/service.py`, and the eleven AI client modules (`ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, `groq_client.py`, `openai_client.py`, `kimi_client.py`, `deepseek_client.py`, `xai_client.py`, `mistral_client.py`, `openrouter_client.py`).
 
 ## 1. The `BaseProvider` Contract (`app/providers/base.py`)
 
@@ -43,7 +43,7 @@ Because every branch above is centralized, a concrete `fetch()` only needs to ha
 
 The registry is a flat list and two accessor functions, no logic: `_ALL_PROVIDERS: list[BaseProvider]` holds one module-level singleton instance per connector (imported from its own module, never constructed here); `get_all_providers()` returns it; `get_provider_health()` maps it to the dicts backing `GET /api/v1/providers/health` (`registry.py:8-64`). The docstring states the extensibility contract: "adding a new provider is a two-line change (import + append) and never touches the orchestrator, API routes, or correlation engine" (`registry.py:1-7`). Note `get_provider_health()` reports the class-level `configured` flag, not the per-investigation runtime-override value from §3 — worth knowing when comparing this endpoint against what an in-flight investigation actually saw.
 
-### 2.1 The 16 registered connectors
+### 2.1 The 18 registered connectors
 
 | provider_id | Category | `IOCType`s supported | `requires_key` | Credential setting (`app/core/config.py`) | Base endpoint |
 |---|---|---|---|---|---|
@@ -63,8 +63,10 @@ The registry is a flat list and two accessor functions, no logic: `_ALL_PROVIDER
 | `phishtank` | threat_intel | URL | No | optional `phishtank_api_key` (form `app_key`) | `checkurl.phishtank.com/checkurl/` |
 | `censys` | passive_dns | IPV4, IPV6 | Yes (both fields) | Bearer token **and** `X-Organization-ID` | `platform.censys.io/v3/global/asset/host/{ip}` |
 | `internet_intelligence` | osint | DOMAIN, IPV4, MALWARE_FAMILY, THREAT_ACTOR, CAMPAIGN, CVE, FILE_NAME | No | — | `crawler/sources/{github,reddit,rss_news,pastebin_search}.py` |
+| `urlscan` | sandbox | URL, DOMAIN | Yes | `urlscan_api_key` (header `API-Key`) | `urlscan.io/api/v1` (submit-then-poll) |
+| `google_safe_browsing` | threat_intel | URL, DOMAIN | Yes | `google_safe_browsing_api_key` (query param `key`) | `safebrowsing.googleapis.com/v4` |
 
-All 16 dispatch through the identical `run()`/`fetch()` contract in §1; this table exists to show where each one's credential and endpoint live for anyone tracing a credential end to end. The `IOCType` enum (`app/ioc/types.py:5-38`) has 33 members including `UNKNOWN`; each provider's `supported_types` set is a subset.
+All 18 dispatch through the identical `run()`/`fetch()` contract in §1; this table exists to show where each one's credential and endpoint live for anyone tracing a credential end to end. `urlscan` and `google_safe_browsing` are the two exceptions to the setup wizard's provider page (see the Provider Guide) — both require a key but are configured after install via the app's own Providers page instead. The `IOCType` enum (`app/ioc/types.py:5-38`) has 33 members including `UNKNOWN`; each provider's `supported_types` set is a subset.
 
 ## 3. The Orchestrator: Concurrent Fan-Out (`app/providers/orchestrator.py`)
 
@@ -95,7 +97,7 @@ Diagram: Provider call sequence -- registry to orchestrator to `BaseProvider.run
 
 ## 4. The AI Client Interface: `call_claude_json`
 
-`app/ai/service.py` defines the required shape as a `typing.Protocol`, not a base class — each of the five client modules independently implements a matching method:
+`app/ai/service.py` defines the required shape as a `typing.Protocol`, not a base class — each of the eleven client modules independently implements a matching method:
 
 ```python
 class _AIClient(Protocol):
@@ -104,7 +106,7 @@ class _AIClient(Protocol):
                                 json_schema: dict, tool_name: str = ...,
                                 max_tokens: int | None = ...) -> dict: ...
 ```
-(`service.py:43-53`). Because this is structural typing, adding a sixth backend requires only a class exposing this method name/signature and an `is_configured` property — no shared inheritance, no registration beyond the branch added to `_build_client()` (§5.2).
+(`service.py:43-53`). Because this is structural typing, adding a twelfth backend requires only a class exposing this method name/signature and an `is_configured` property — no shared inheritance, no registration beyond the branch added to `_build_client()` (§5.2).
 
 | Client class | Module | Endpoint / call | Auth | Structured-output technique |
 |---|---|---|---|---|
@@ -113,8 +115,14 @@ class _AIClient(Protocol):
 | `BedrockClaudeClient` | `bedrock_client.py` | boto3 `bedrock-runtime.converse()` via `asyncio.to_thread` | bearer token or IAM key/secret | forced tool call via `toolConfig` |
 | `GeminiClient` | `gemini_client.py` | `POST {API_BASE}/models/{model_id}:generateContent` | header `x-goog-api-key` (deliberately not `?key=...`, to avoid the key landing in httpx's INFO-level URL logs) | `responseMimeType: application/json` + ref-flattened `responseSchema` |
 | `GroqClient` | `groq_client.py` | `POST api.groq.com/openai/v1/chat/completions` | header `Authorization: Bearer` | forced tool-calling, ref-flattened schema |
+| `OpenAIClient` | `openai_client.py` | `POST api.openai.com/v1/chat/completions` | header `Authorization: Bearer` | forced tool-calling, ref-flattened schema |
+| `KimiClient` | `kimi_client.py` | `POST api.moonshot.ai/v1/chat/completions` | header `Authorization: Bearer` | forced tool-calling, ref-flattened schema; default model pinned to `kimi-k2.5` since several newer Moonshot models' always-on "thinking" mode is incompatible with a forced `tool_choice` |
+| `DeepSeekClient` | `deepseek_client.py` | `POST api.deepseek.com/chat/completions` (no `/v1` segment) | header `Authorization: Bearer` | forced tool-calling, ref-flattened schema |
+| `XAIClient` | `xai_client.py` | `POST api.x.ai/v1/chat/completions` | header `Authorization: Bearer` | forced tool-calling, ref-flattened schema (best-effort — xAI's own docs say `parameters` isn't strictly enforced) |
+| `MistralClient` | `mistral_client.py` | `POST api.mistral.ai/v1/chat/completions` | header `Authorization: Bearer` | forced tool-calling, ref-flattened schema |
+| `OpenRouterClient` | `openrouter_client.py` | `POST openrouter.ai/api/v1/chat/completions` | header `Authorization: Bearer` | forced tool-calling; model discovery filtered to `tool_choice`-capable ids, since most of the hundreds of underlying models OpenRouter fans out to don't support forced tool-calling at all |
 
-Every constructor accepts `Optional` overrides for credentials/model/`max_tokens`, falling back to `get_settings()` when `None` — e.g. `AnthropicClient.__init__(self, api_key=None, model_id=None, max_tokens=None)` (`anthropic_client.py:26-35`) resolves against `settings.anthropic_api_key`/`anthropic_model_id`/`anthropic_max_tokens`. Each module also exposes a lazily-initialized singleton getter (e.g. `get_anthropic_client()`), used only as the no-runtime-config fallback (§5.2). Ollama, Gemini, and Groq run their schema through `app/ai/schema_utils.py`'s `inline_refs()` first, since their schema compilers don't reliably resolve `$ref`/`$defs`; Anthropic and Bedrock's Converse API resolve refs natively and skip that step.
+Every constructor accepts `Optional` overrides for credentials/model/`max_tokens`, falling back to `get_settings()` when `None` — e.g. `AnthropicClient.__init__(self, api_key=None, model_id=None, max_tokens=None)` (`anthropic_client.py:26-35`) resolves against `settings.anthropic_api_key`/`anthropic_model_id`/`anthropic_max_tokens`. Each module also exposes a lazily-initialized singleton getter (e.g. `get_anthropic_client()`), used only as the no-runtime-config fallback (§5.2). Ollama, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, and OpenRouter all run their schema through `app/ai/schema_utils.py`'s `inline_refs()` first, since their schema compilers don't reliably resolve `$ref`/`$defs`; Anthropic and Bedrock's Converse API resolve refs natively and skip that step.
 
 ## 5. `app/ai/service.py`: Backend Resolution and the Two-Step Flow
 

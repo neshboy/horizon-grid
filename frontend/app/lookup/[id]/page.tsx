@@ -2,10 +2,9 @@
 
 /**
  * Composition root for viewing an *already-completed* lookup by id (no SSE --
- * a single fetch via getLookup() on mount). Renders the exact same
- * placeholder structure as app/lookup/new/page.tsx so the follow-up pass that
- * swaps placeholders for real components only has to do it once per
- * component, not once per page.
+ * a single fetch via getLookup() on mount). Renders the same real dashboard
+ * components as app/lookup/new/page.tsx (ProviderCardGrid, FinalAssessmentPanel,
+ * RelationshipGraph, etc.) from the fetched data instead of a live stream.
  *
  * Note on shape mismatches with the live stream: GET /api/v1/lookup/{id}
  * (see backend/app/api/routes/lookup.py get_lookup) rebuilds `correlation`
