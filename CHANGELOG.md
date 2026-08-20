@@ -1,0 +1,136 @@
+# Changelog
+
+All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
+
+## [0.2.3] — 2026-08-20 — Mission-critical deployment hardening
+
+A dedicated reliability and security review for unattended, remote-site deployment. 18 real gaps found and fixed (2 self-discovered during the review, not flagged by the initial assessment) — every item confirmed present before the fix and confirmed resolved after, via a real test, a live re-verification, or both.
+
+### Added
+- Real database restore scripts on both platforms (`Restore-Database.ps1`, `restore-database.sh`) — previously only backup scripts existed. Requires a typed `RESTORE` confirmation unless `-Force`/`--force` is passed.
+- Scheduled daily database backups on both platforms (02:00 local time); a pre-upgrade backup added to the Linux wizard for parity with the existing Windows behavior.
+- A real dependency-aware health endpoint, `GET /health/detailed` (Postgres + Redis checks), alongside the existing dependency-free `GET /health`.
+- Boot-time auto-start (Windows Scheduled Task; Linux `systemctl enable`) and a 5-minute health watchdog on both platforms.
+- A global 10 MB request-body-size limit and `max_length` constraints on every previously-unbounded free-text field.
+- Login brute-force rate limiting (fixed-window, 10 attempts/60s default, keyed on the attempted email).
+
+### Changed
+- All 8 Docker Compose services now have `restart: unless-stopped` (previously only 2 of 8 did).
+- Redis now has a persistent volume (previously reset to empty on every container recreation).
+- Swagger UI, ReDoc, and the raw OpenAPI schema are now disabled whenever `ENVIRONMENT=production` (set by `docker-compose.prod.yml`, the override every real installer uses).
+- Both setup wizards now gate configuration save on a real Test Connection result, and the install flow's Summary page runs an automatic post-health-check AI connectivity test.
+
+### Fixed
+- **Relationship Graph list-view crash**: `react-force-graph-2d`'s physics simulation mutates its input data in place; switching to "View as list" after the graph had rendered operated on already-mutated data and crashed the whole page. Fixed by isolating the force graph's data from the shared copy used by the list view.
+- **Dead retry-code bug**: `BaseProvider.run()` silently caught the exact exception types the orchestrator's retry loop needed to see, so `provider_max_retries` had no real effect for most providers.
+- **AI-outcome badge**: a genuine AI generation failure and a correct "no evidence to assess" decision rendered an identical badge; the frontend now reads the `ai_outcome` field the backend already tracked.
+- **Linux boot-time auto-start** (self-discovered): the systemd unit's `WantedBy=` declaration did nothing because `systemctl enable` was never actually called anywhere in the codebase — a working install would silently not survive a reboot.
+- **`check-prerequisites.sh`'s JSON output** (self-discovered): a bash→Python boolean-interpolation bug left its `checks` array permanently empty in every run, unnoticed because the human-readable output and exit code were computed independently.
+- A customized `HOST_PORT_BACKEND`/`HOST_PORT_FRONTEND` was ignored by every unattended health check on both platforms, which hardcoded the default port.
+- Self-contradictory manual restore documentation (told the operator to stop the platform, then restore into "the running" Postgres container).
+
+### Security
+- SSRF guard extended to the actual production Ollama AI-call path (previously only checked on the Test-Connection convenience endpoint), including the `.env`-only fallback singleton used whenever no runtime-config DB row has been saved.
+- Swagger/OpenAPI docs gated behind production mode (see Changed).
+- Global request-body-size limit and per-field length caps (see Added).
+- Login brute-force rate limiting (see Added).
+
+### AI
+- No new AI provider changes this release (still 11 backends, confirmed unchanged from v0.2.0's expansion — see AI-outcome badge fix under Fixed).
+
+### IOC Intelligence
+- No provider-list changes this release (still 18 registered providers).
+
+### Port Scanner
+- Added a concurrency cap (`_MAX_CONCURRENT_SCANS = 4`) on scan execution and CIDR-size-proportional nmap timeout scaling (a full /28 previously got the identical wall-clock budget as a single host).
+
+### Reliability
+- Restart policies, persistent Redis, boot auto-start, watchdog, scheduled backups, real restore, dead-retry-code fix (see Added/Changed/Fixed above).
+- A 3-hour soak test against the live stack completed cleanly: memory flat throughout, zero spontaneous container restarts.
+
+### Installation
+- Linux's prerequisite check is now a real blocking gate in the setup wizard (previously an ignored informational check).
+- Both wizards gate configuration save on a real Test Connection result.
+
+### Documentation
+- Added the Mission-Critical Operations Manual (new PDF/DOCX).
+- Corrected stale restart-policy and health-endpoint claims in the existing Operations Guide.
+- Added `MISSION_CRITICAL_CERTIFICATION_REPORT.md` and this rebuilt `CHANGELOG.md`/`README.md`/release-notes/version-audit/test-evidence set.
+
+### Testing
+- New regression tests for the retry-logic fix, the login rate limiter, and the SSRF guard on both the AI-call and config-save paths.
+- Full backend suite: 380 passed, 39 skipped (up from 365 at the start of this review).
+
+### Known Limitations
+- No automated host-disk-space alerting.
+- No retention/cleanup job for ever-growing investigation tables.
+- No off-host/off-site backup copy option (backups are local-disk-only).
+- A narrow DNS-rebinding TOCTOU window on the SSRF check (validates a resolution snapshot; the real call re-resolves independently afterward).
+- Neo4j and OpenSearch remain fully provisioned with zero actual application traffic (confirmed via exhaustive search this release and independently re-confirmed by this changelog's own audit) — a real resource cost with no current benefit, flagged as an open product question, not resolved unilaterally.
+- No frontend test infrastructure exists (vitest is wired into `package.json` but zero test files exist anywhere in the tree).
+- A live, elevated, end-to-end Windows installer run was not performed this release (requires an interactive UAC prompt); the installer's packaged contents were verified directly instead.
+
+## [0.2.2] — Independent re-verification: 7 real bugs found and fixed
+
+An independent, adversarial re-verification of the v0.2.1 port-scanning cancellation fix (nine parallel reviewers, each reading the real code fresh) found four new, real defects in the scanner and three unrelated ones surfaced during full-application regression.
+
+### Fixed
+- IPv6 scans silently never probed the target (missing a required nmap `-6` flag), yet reported an ordinary clean result.
+- An unknown/mistyped scan profile id was silently accepted and reported as a clean scan.
+- A malformed CIDR value could crash the endpoint with a raw 500.
+- A run's own successful completion could silently overwrite a status another writer had already finalized (a real concurrency race).
+- An empty `tool_ids` list is now rejected at the schema level (422) instead of producing a no-op "completed" run.
+- Spamhaus DBL/ZEN misread a DNS query-rejection (common on containerized default DNS) as a positive "malicious" verdict.
+- A confusing generic 401 on the losing side of a concurrent last-admin-protection race, instead of the accurate "Account disabled".
+- An AI-generated assessment could cite specific findings while leaving its structured supporting-evidence list empty.
+
+### Testing
+- Full backend suite: 365 passed (up from 313 at v0.2.0), following the addition of regression tests for all seven fixes.
+
+## [0.2.1] — Port scanning: real cancellation added
+
+### Added
+- `POST /api/v1/security-assessment/runs/{run_id}/cancel` and a "Cancel Scan" button — genuinely stops the underlying `nmap` OS process, not just the displayed status.
+
+### Fixed
+- `asyncio.CancelledError` (which does not inherit from `Exception` in Python 3.8+) was never caught by the scan orchestrator's generic error handler, so a cancelled run's database row would have stayed `running` forever without a dedicated fix.
+- A database migration bug: the new `CANCELLED` enum value was initially added in lowercase, not matching the existing uppercase convention.
+- A follow-up adversarial pass found and fixed a race where two concurrent cancel requests for the same run could each write a redundant audit-log entry.
+
+### Testing
+- 5 new integration tests covering in-flight cancellation, the backend-restart-orphan case, rejecting a cancel on an already-finished run, an unknown run id, and RBAC enforcement.
+
+## [0.2.0] — AI provider ecosystem expansion, rebrand, deterministic scoring, executive dashboard
+
+The renamed (from "IOC Intelligence Platform"), significantly extended release.
+
+### Added
+- Five new AI backends — Kimi (Moonshot AI), DeepSeek, xAI (Grok), Mistral AI, and OpenRouter — bringing the total from 6 to 11, each with a real live model-discovery endpoint and live connection test.
+- Two new IOC providers: urlscan.io and Google Safe Browsing.
+- A deterministic, versioned, auditable threat-scoring engine (`app/scoring/engine.py`, `SCORING_ENGINE_VERSION` "1.0"), replacing 100%-AI-generated risk scoring. The AI is given the score as a fixed input and cannot override it — the backend mechanically overwrites the AI's own numbers and re-validates before saving.
+- AI-generation outcome tracking (`success`/`skipped_no_evidence`/`failed`), making an honest "AI success rate" metric possible.
+- A new Executive Dashboard (`/dashboard`) with 7 real KPI tiles and an AI-generated (or plainly-labeled template-fallback) executive summary.
+- A real, historical Provider Health page (replacing a dead, stub-data endpoint) — per-provider status/success-rate/latency/consecutive-failure-streak across 1h/24h/7d/30d windows.
+- Reorganized global navigation into named groups (COMMAND/INTELLIGENCE/ANALYSIS/OPERATIONS/ADMINISTRATION).
+
+### Changed
+- Full visible rebrand to **HORIZON GRID** ("Every Signal. One Operational Picture."). Internal identifiers (data folder name, database name, package names, k8s namespace) deliberately left unchanged for upgrade safety.
+
+### Fixed
+- A provider correctly reporting "nothing found" was miscounted as a failure in Provider Health, making a healthy provider appear degraded.
+- A same-day regression where the new Provider Health response initially dropped a field an existing page depended on.
+- CSV formula-injection and PDF markup-injection/crash vulnerabilities in exported investigation data.
+- An export permission-gate bug (was gated on `lookup:read`, should be `lookup:export`).
+- A real, complete-failure concurrency bug: 25 concurrent Provider Health requests previously failed 100% of the time (timeout); fixed via query consolidation and connection-pool retuning — now completes in ~1.6 seconds at 100% success.
+- A real scoring-manipulation vulnerability: a single free, unprivileged account on a community-sourced provider could flood correlation with fabricated relationship claims to inflate a score.
+- A real Windows installer packaging bug: every prior build silently bundled the local development Python virtualenv, making the installer ~8x larger than necessary.
+
+### Administration
+- A new `dashboard:read` permission, granted to all three roles for broad, read-only operational visibility.
+
+### Testing
+- 31 new unit tests for the 5 new AI backends; full backend suite: 313 passed.
+
+## Earlier history
+
+Pre-0.2.0 work (initial platform build, GitHub scaffolding, early bug fixes) is captured in the git history itself (`9bee96c` onward) rather than a version-numbered changelog entry, since HORIZON GRID's first numbered release is 0.2.0.
