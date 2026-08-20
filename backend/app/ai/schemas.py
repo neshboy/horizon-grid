@@ -279,3 +279,43 @@ class FinalAssessment(BaseModel):
                 "either cite concrete excerpts or shorten threat_assessment to not imply specific findings"
             )
         return self
+
+    @model_validator(mode="after")
+    def _threat_assessment_bare_verdict_must_agree_with_final_verdict(self) -> "FinalAssessment":
+        """A third variant of the same small-local-model self-contradiction
+        class _verdict_must_agree_with_risk already guards against, caught
+        live against a real Ollama/llama3.2:3b investigation of 8.8.8.8:
+        threat_assessment (free narrative text, per this schema) degenerated
+        to a single bare word -- "malicious" -- while final_verdict/risk in
+        the SAME response correctly said "benign"/malicious_probability=0.0.
+        _verdict_must_agree_with_risk only checks final_verdict against the
+        risk numbers; it never looks at threat_assessment's own content, so
+        this exact contradiction validated cleanly and reached the UI, where
+        FinalAssessmentPanel.tsx renders threat_assessment and final_verdict
+        as two separately-labeled tabs ("Threat Assessment" / "Risk &
+        Verdict") an analyst could read one of without the other.
+
+        Deliberately narrow: only fires when threat_assessment, stripped and
+        lowercased, is an EXACT match for one of Verdict's own string values
+        (i.e. the model used it as a bare category label instead of writing
+        a sentence) AND that value's malicious/benign category contradicts
+        final_verdict's. A real narrative -- even one containing the word
+        "malicious" mid-sentence -- never matches this, so ordinary
+        assessments are unaffected.
+        """
+        bare = self.threat_assessment.strip().lower()
+        try:
+            bare_verdict = Verdict(bare)
+        except ValueError:
+            return self
+        if bare_verdict in _MALICIOUS_VERDICTS and self.final_verdict in _BENIGN_VERDICTS:
+            raise ValueError(
+                f"threat_assessment={self.threat_assessment!r} is a bare verdict label that contradicts "
+                f"final_verdict={self.final_verdict.value!r} -- write a real sentence, or make the two agree"
+            )
+        if bare_verdict in _BENIGN_VERDICTS and self.final_verdict in _MALICIOUS_VERDICTS:
+            raise ValueError(
+                f"threat_assessment={self.threat_assessment!r} is a bare verdict label that contradicts "
+                f"final_verdict={self.final_verdict.value!r} -- write a real sentence, or make the two agree"
+            )
+        return self

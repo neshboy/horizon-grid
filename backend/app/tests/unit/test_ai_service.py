@@ -19,7 +19,9 @@ no prompt wording can reliably fix a model that already had the "don't
 fabricate" instruction and ignored it.
 """
 import pytest
+from pydantic import ValidationError
 
+from app.ai.schemas import FinalAssessment
 from app.ai.service import _prune_for_prompt, generate_final_assessment
 from app.correlation.engine import CorrelationResult
 from app.models.lookup import Verdict
@@ -218,6 +220,55 @@ async def test_self_contradictory_verdict_is_retried_and_recovers(monkeypatch):
     assert result.final_verdict == Verdict.MALICIOUS
     assert result.ai_backend == "ollama"
     assert result.risk.malicious_probability == 95
+
+
+_BARE_VERDICT_CONTRADICTION_PAYLOAD = {
+    "ioc_value": "8.8.8.8",
+    "ioc_type": "ipv4",
+    "executive_summary": "Test.",
+    "technical_summary": "Test.",
+    "threat_assessment": "malicious",
+    "relationships_summary": "Test.",
+    "risk": {
+        "overall_risk_score": 0,
+        "confidence_score": 0,
+        "severity": "none",
+        "reputation": "unknown",
+        "malicious_probability": 0,
+        "analyst_confidence": "low",
+    },
+    "final_verdict": "benign",
+    "verdict_rationale": "Test.",
+}
+
+
+def test_bare_verdict_in_threat_assessment_contradicting_final_verdict_is_rejected():
+    """Regression test for a real bug found via live E2E testing against a
+    freshly installed instance: investigating 8.8.8.8 with Ollama
+    (llama3.2:3b) returned threat_assessment="malicious" (a bare one-word
+    verdict label, not a sentence) alongside a correctly-computed
+    final_verdict="benign"/malicious_probability=0 -- two fields in the same
+    response directly contradicting each other, reaching the UI uncaught
+    since _verdict_must_agree_with_risk only checks final_verdict against
+    the risk numbers, never threat_assessment's own content.
+    FinalAssessmentPanel.tsx renders these as two separately-labeled tabs
+    ("Threat Assessment" / "Risk & Verdict"), so an analyst reading one
+    without the other would see a flatly wrong answer."""
+    with pytest.raises(ValidationError, match="threat_assessment.*contradicts final_verdict"):
+        FinalAssessment(**_BARE_VERDICT_CONTRADICTION_PAYLOAD)
+
+
+def test_narrative_threat_assessment_mentioning_malicious_is_not_flagged():
+    """The bare-verdict check must not fire on ordinary narrative prose that
+    happens to contain a verdict-shaped word mid-sentence -- only on
+    threat_assessment being a bare, standalone verdict label."""
+    payload = {
+        **_BARE_VERDICT_CONTRADICTION_PAYLOAD,
+        "threat_assessment": "No provider found evidence that this IP address is malicious; all data points to a benign, well-known public DNS resolver.",
+        "supporting_evidence": ["whois_rdap confirms Google LLC ownership with a clean reputation."],
+    }
+    result = FinalAssessment(**payload)
+    assert result.final_verdict == Verdict.BENIGN
 
 
 @pytest.mark.asyncio
