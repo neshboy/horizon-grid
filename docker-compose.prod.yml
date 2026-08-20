@@ -14,6 +14,14 @@
 services:
   backend:
     volumes: !reset []
+    environment:
+      # Real gap fixed: gates /docs, /redoc, and the raw OpenAPI schema
+      # (see backend/app/main.py's _docs_enabled) -- this is the one place
+      # every real installer's compose invocation actually uses, so it's
+      # the right place to flip this for every real deployment without
+      # affecting the plain `docker-compose.yml`-only dev workflow, where
+      # the interactive docs stay available.
+      ENVIRONMENT: production
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"

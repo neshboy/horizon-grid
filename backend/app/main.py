@@ -62,14 +62,28 @@ _APP_VERSION = "0.2.2"
 # (the FastAPI version= below only ever surfaces via /docs' OpenAPI schema).
 _process_started_at = time.monotonic()
 
+# Real gap fixed: /docs, /redoc, and the raw OpenAPI schema were exposed
+# unconditionally with no environment gate at all -- a full map of every
+# route, request/response shape, and parameter, reachable by anyone who can
+# reach the API at all (this app's real authorization boundary is JWT auth,
+# not network placement, but handing an attacker the API's own blueprint is
+# still real reconnaissance value worth denying by default in production).
+# settings.environment defaults to "development" and is never set to
+# "production" by any real install path except docker-compose.prod.yml's own
+# explicit ENVIRONMENT=production (the override every real installer uses) --
+# so this is a no-op for local dev/CI, where the interactive docs are still
+# genuinely useful.
+_docs_enabled = settings.environment != "production"
+
 app = FastAPI(
     title=settings.app_name,
     version=_APP_VERSION,
     description="Unified threat intelligence workbench: single-search IOC lookup across "
     "dozens of providers, correlated and summarized by a local Ollama model "
     "(or AWS Bedrock/Gemini/Anthropic/Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter, configurable via AI_BACKEND).",
-    openapi_url=f"{settings.api_v1_prefix}/openapi.json",
-    docs_url="/docs",
+    openapi_url=f"{settings.api_v1_prefix}/openapi.json" if _docs_enabled else None,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
 )
 
 # RFC 1918 private ranges + loopback + the literal "localhost", http only
