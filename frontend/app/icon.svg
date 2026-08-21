@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- HORIZON GRID favicon: the mark's favicon-degraded form (horizon line +
+       one diagonal + the filled peak/detection node) on a fixed dark panel
+       background, so it stays legible regardless of the browser's own tab
+       background color. Colors are fixed hex (favicons render with no CSS
+       context) matching the app's real --background/--primary HSL values. -->
+  <rect width="32" height="32" rx="6" fill="#0A1420" />
+  <g transform="translate(4,4)" stroke="#E8E4DA" stroke-width="3" stroke-linecap="square" fill="none">
+    <line x1="2" y1="18" x2="22" y2="18" />
+    <line x1="8" y1="14" x2="13" y2="7" />
+  </g>
+  <circle cx="18" cy="11" r="3" fill="#0CDACC" />
+</svg>

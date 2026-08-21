@@ -69,7 +69,7 @@ function resolveActiveHref(pathname: string | null): string | null {
 
 function pillClass(active: boolean) {
   return cn(
-    "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+    "inline-flex items-center gap-1.5 rounded-tight border px-3 py-1.5 text-xs font-medium transition-colors",
     active
       ? "border-primary bg-primary/10 text-primary"
       : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -78,7 +78,7 @@ function pillClass(active: boolean) {
 
 function captionClass(active: boolean) {
   return cn(
-    "text-[10px] font-semibold uppercase tracking-wide",
+    "font-display text-[10px] font-semibold uppercase tracking-[0.08em]",
     active ? "text-primary" : "text-muted-foreground/70"
   );
 }
@@ -181,7 +181,7 @@ export function WorkspaceNav() {
         <NavLink href="/basket" active={basketActive} icon={Briefcase}>
           Basket
           {basketCount !== null && basketCount > 0 && (
-            <span className="rounded-full bg-primary px-1.5 py-0 text-[10px] text-primary-foreground">
+            <span className="font-data rounded-full bg-primary px-1.5 py-0 text-[10px] tabular-nums text-primary-foreground">
               {basketCount}
             </span>
           )}
@@ -217,7 +217,7 @@ export function WorkspaceNav() {
           {adminMenuOpen && (
             <div
               role="menu"
-              className="absolute left-0 top-[calc(100%+0.25rem)] z-20 flex min-w-[10rem] flex-col gap-1 rounded-md border border-border bg-card p-1.5 shadow-md"
+              className="absolute left-0 top-[calc(100%+0.25rem)] z-20 flex min-w-[10rem] flex-col gap-1 rounded-md border border-border bg-card p-1.5"
             >
               <Link
                 href="/providers"

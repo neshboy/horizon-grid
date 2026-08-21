@@ -2,27 +2,80 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Enterprise SOC dark theme. Only :root (dark) is defined -- this platform is
-   dark-mode-first by design; a light variant can be added under `.light` later
-   without touching component code, since everything reads these variables. */
+/* HORIZON GRID "Datum Signal" identity -- an anodized-steel-instrument-panel
+   palette, not a generic dark-SaaS navy. Only :root (dark) is defined -- this
+   platform is dark-mode-first by design; a light variant can be added under
+   `.light` later without touching component code, since everything reads
+   these variables.
+
+   Shell (background/card/border/muted) is locked to one narrow hue band
+   (217-220 degrees) with saturation capped low (13-22%) and lightness rising
+   in a strict staircase (6% -> 9% -> 13% -> 18%) -- elevation reads as
+   machined panel layers, not a UI-kit gray ramp.
+
+   --primary (176 90% 45%) is deliberately pulled off 199 degrees -- the exact
+   hue zone of countless SaaS login buttons and marketing gradients -- toward
+   the boundary where cyan tips into teal: the phosphor color of legacy CRT
+   sensor displays (sonar scopes, oscilloscope traces, radar repeaters). It is
+   the ONE saturated color in an otherwise near-monochrome shell, so it reads
+   as a single live-signal accent, not a decorative brand color competing
+   with the UI.
+
+   --foreground is a warm, low-saturation off-white (40 15% 94%) rather than
+   the cool blue-white every peer dark-mode dashboard defaults to -- it evokes
+   engraved dial-plate lettering and creates a deliberate warm-text/cool-shell
+   tension, reducing cold-screen fatigue across long SOC shifts.
+
+   --accent (228 28% 60%, slate-blue-violet) is a "channel 2" secondary
+   signal color, far enough in hue from primary AND from every alarm color
+   that it can never be mistaken for either -- used for the DEGRADED status
+   tier, topology-graph secondary series, and source-attribution/TLP tags.
+
+   --destructive/--warning/--success sit in the same neighborhood three
+   independently-produced design proposals converged on without coordination
+   -- a brick-flare red, a sodium-lamp amber, a phosphor-green -- which is
+   itself evidence these are the right alarm hues for this palette. */
 :root {
-  --background: 222 47% 6%;
-  --foreground: 210 40% 96%;
-  --card: 222 39% 10%;
-  --card-foreground: 210 40% 96%;
-  --border: 217 33% 20%;
-  --muted: 217 33% 16%;
-  --muted-foreground: 215 20% 65%;
-  --primary: 199 89% 55%;
-  --primary-foreground: 222 47% 6%;
-  --destructive: 0 72% 55%;
-  --warning: 38 92% 55%;
-  --success: 142 71% 45%;
-  --accent: 262 83% 68%;
+  --background: 220 26% 6%;
+  --foreground: 40 15% 94%;
+  --card: 220 22% 9%;
+  --card-foreground: 40 15% 94%;
+  --border: 218 20% 18%;
+  --muted: 220 18% 13%;
+  --muted-foreground: 217 18% 60%;
+  --primary: 176 90% 45%;
+  --primary-foreground: 220 26% 6%;
+  --destructive: 4 72% 50%;
+  --destructive-foreground: 40 15% 96%;
+  --warning: 34 86% 50%;
+  --success: 152 58% 42%;
+  --success-foreground: 220 26% 6%;
+  --accent: 228 28% 60%;
   --radius: 0.5rem;
+  --radius-tight: 0.25rem;
 }
 
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
+  font-family: var(--font-body);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-data {
+  font-family: var(--font-data);
+}
+
+/* A near-invisible measurement grid on the page canvas only (never on cards)
+   -- reinforces "Grid" in the product name at zero DOM/animation cost. Kept
+   deliberately faint (3% alpha) per the brief's "minimal decorative
+   elements, must stay fast" constraint. */
+.hg-grid-canvas {
+  background-image:
+    linear-gradient(hsl(var(--border) / 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--border) / 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
 }

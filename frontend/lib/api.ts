@@ -609,6 +609,23 @@ export async function getNetworkInfo(): Promise<NetworkInfo> {
   return res.json();
 }
 
+export interface SystemHealth {
+  status: "healthy" | "degraded" | "down" | string;
+  version?: string;
+  dependencies?: Record<string, { ok: boolean; detail?: string }>;
+}
+
+// Unauthenticated, dependency-aware -- used for the header's SYSTEM STATUS
+// indicator. Deliberately calls /health/detailed (not the plain /health
+// liveness check) so it reflects whether Postgres/Redis are genuinely
+// reachable, not just that the backend process itself is up.
+export async function getSystemHealth(): Promise<SystemHealth> {
+  const res = await fetch(`${getApiUrl()}/health/detailed`);
+  // A non-2xx here (e.g. 503 when Postgres is unreachable) is itself a real,
+  // informative status -- the backend's own body still carries status:"down".
+  return res.json();
+}
+
 export async function getCurrentUser(): Promise<CurrentUser> {
   const res = await authedFetch(`${getApiUrl()}/api/v1/auth/me`);
   if (!res.ok) throw new Error("Failed to fetch current user");

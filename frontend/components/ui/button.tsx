@@ -4,7 +4,10 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:pointer-events-none disabled:opacity-50",
+  // rounded-tight (0.25rem), not rounded-md -- the radius-contrast rule:
+  // outer panels keep the softer default radius, interactive controls get a
+  // tighter one, so soft panels visibly contain sharp, precise controls.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-tight text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
