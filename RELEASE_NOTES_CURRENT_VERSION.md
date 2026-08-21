@@ -1,10 +1,18 @@
-# HORIZON GRID v0.2.3 — Release Notes
+# HORIZON GRID v0.2.4 — Release Notes
 
-**Release version:** 0.2.3
-**Release date:** 2026-08-20
-**Focus:** mission-critical deployment hardening for a one-time install at a remote, physically-inaccessible site with no developer access afterward.
+**Release version:** 0.2.4
+**Release date:** 2026-08-21
+**Focus:** an original visual identity and professional branding pass across the entire frontend — presentation-only, no backend/logic changes.
 
-## Major changes
+## v0.2.4: visual identity and branding
+
+The product name and tagline ("Every Signal. One Operational Picture.") were previously barely visible anywhere in the running application. This release adds an original visual identity ("Datum Signal": a CRT-phosphor teal-cyan primary color against a near-black anodized-steel shell), an original geometric logo mark that depicts the tagline itself, a six-state accessible operational-status language used consistently everywhere a status appears, a new `/about` page, and HORIZON GRID branding plus page numbering and Investigation IDs on every exported report. Full detail in `CHANGELOG.md`'s `[0.2.4]` entry and `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md`.
+
+Explicitly verified, not just claimed: a full backend regression run (383 passed, 39 skipped, zero regressions) and a clean frontend `tsc --noEmit` typecheck, both before and after every change in this release. One real bug was self-discovered and fixed during this release's own screenshot QA (a React hydration mismatch on the new `/about` page).
+
+Everything below this line describes the prior v0.2.3 mission-critical hardening release, which v0.2.4 builds on unchanged — none of it was affected by the branding pass.
+
+## Major changes (v0.2.3)
 
 This release closes 18 real reliability and security gaps found during a dedicated review — 2 of them self-discovered during the review itself, not flagged by the initial structured assessment. Every item was confirmed present before the fix (via live reproduction or direct code-path tracing) and confirmed resolved after (a real test, a live re-verification, or both). Full evidence for every claim below is in `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 

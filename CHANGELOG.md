@@ -2,6 +2,75 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.2.4] — 2026-08-21 — Original visual identity and branding pass
+
+A professional branding + UI/UX pass across the entire frontend -- the product name and tagline
+were previously barely visible anywhere in the application. No backend logic, database schema,
+authentication, IOC processing, AI provider logic, provider API logic, port scanner logic, or admin
+permissions were modified; this is presentation-only, verified by a full backend regression run
+(383 passed, 39 skipped, zero regressions) and a clean `tsc --noEmit` frontend typecheck both before
+and after.
+
+### Added
+- An original visual identity ("Datum Signal"): a CRT-phosphor teal-cyan primary color deliberately
+  pulled off the generic-SaaS-blue hue most dashboards default to, a warm off-white foreground
+  against a near-black anodized-steel-panel shell, and a six-state operational status language
+  (OPERATIONAL/DEGRADED/WARNING/CRITICAL/OFFLINE/UNKNOWN) where every state pairs a distinct hue,
+  fill density, border style, AND icon -- never color alone, so a colorblind viewer or a grayscale
+  printout can still tell every state apart.
+- An original, wholly geometric logo mark (`components/Logo.tsx`): a horizon line with two open
+  "signal" nodes converging on one filled "detection" node -- literally depicting the tagline
+  ("Every Signal. One Operational Picture.") rather than just looking generically tactical. No
+  insignia, seal, shield, or existing company/military symbol of any kind. Works as a full lockup
+  (mark + wordmark), a compact lockup (mark + "HG" in a corner-bracket badge), and a favicon
+  (`app/icon.svg`, a 3-primitive degraded form legible at 16px).
+- Three-typeface system: IBM Plex Sans Condensed for headings/wordmark/section labels, IBM Plex
+  Mono for every raw technical value (hashes, IPs, timestamps, coordinates, counts, scores) with
+  tabular numerals, and body text left completely unchanged (zero risk to existing dense data
+  tables).
+- A new, additive `/about` page -- version, live dependency status, supported platforms,
+  documentation links. No existing route was touched to add it.
+- A shared `BrandHeader` component (mark + a live SYSTEM STATUS indicator, read from the real
+  `GET /health/detailed` response, polled every 60s -- never hardcoded) replacing the bare search
+  bar + nav pair every page previously composed individually.
+- HORIZON GRID branding, generation timestamp, and Investigation ID on every exported report (PDF
+  header/footer with real page numbering; CSV and Markdown exports both gained a platform/
+  investigation-ID field).
+
+### Changed
+- The radius-contrast rule: outer panels/cards keep the existing softer corner radius; every
+  interactive/status element (buttons, inputs, badges, chips) tightens to a sharper radius --
+  soft panels visibly containing precise controls, a stronger "operational instrument" signal than
+  any single color choice.
+- Card elevation is now a flat fill bounded by a hairline border; the previous drop-shadow was
+  removed app-wide (one shared component change) so panels read as machined layers rather than
+  "floating" the way a generic Bootstrap-style dashboard does.
+- Section/column headers (`CardTitle`) now render as uppercase, tracked, muted "instrument-panel"
+  labels by default instead of default-case bold headings -- applied once at the shared-component
+  level, so it took effect consistently across every page without a per-page edit.
+- The login and register screens got a full premium treatment: the mark, tagline, and a subtle
+  (3% opacity, zero-animation) grid-and-horizon-line background.
+- Provider health's existing 4-state badge (healthy/degraded/down/unknown) now renders through the
+  same shared six-state status language as the rest of the app, mapped honestly (healthy-
+  >operational, down->offline) -- no new states were invented for data the backend doesn't report.
+
+### Fixed
+- A real hydration-mismatch bug self-discovered while screenshotting the new `/about` page: reading
+  client-only login state directly in a page's render body (rather than via `useState`+`useEffect`)
+  made the server-rendered HTML disagree with the client's first paint whenever a session already
+  existed, producing a genuine React hydration error. Fixed by deferring the check to a post-mount
+  effect, matching the pattern already used correctly elsewhere in this codebase (`WorkspaceNav.tsx`).
+
+### Documentation
+- Fresh screenshots of the live v0.2.4 build (login, dashboard, provider health, AI/IOC provider
+  configuration, admin, about, a full IOC investigation, and a report export) replace the previous
+  release's screenshots wherever the visual identity changed.
+
+### Testing
+- Full backend suite re-run after every change in this release: 383 passed, 39 skipped, zero
+  regressions. Frontend: `tsc --noEmit` clean across the whole app; no automated frontend test
+  suite exists to run (a pre-existing, disclosed gap, not introduced by this release).
+
 ## [0.2.3] — 2026-08-20 — Mission-critical deployment hardening
 
 A dedicated reliability and security review for unattended, remote-site deployment. 18 real gaps found and fixed (2 self-discovered during the review, not flagged by the initial assessment) — every item confirmed present before the fix and confirmed resolved after, via a real test, a live re-verification, or both.

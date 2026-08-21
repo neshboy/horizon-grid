@@ -1,5 +1,15 @@
 # HORIZON GRID — Release Notes
 
+## v0.2.4 — Original visual identity and branding pass
+
+A professional branding + UI/UX pass across the entire application -- previously the product name and tagline ("Every Signal. One Operational Picture.") were barely visible anywhere in the running app. This release is presentation-only: no backend logic, database schema, authentication, IOC processing, AI/provider logic, port scanner logic, or admin permissions were modified, confirmed by a full backend regression run (383 passed, 39 skipped, zero regressions) and a clean frontend typecheck before and after.
+
+New: an original visual identity (a CRT-phosphor teal-cyan primary color against a near-black anodized-steel shell), an original geometric logo mark that depicts the tagline itself (a horizon line with two signal nodes converging on one detection node), a six-state accessible operational-status language used consistently everywhere a status appears, a new `/about` page, and HORIZON GRID branding plus page numbering and Investigation IDs on every exported report (PDF/CSV/Markdown).
+
+One real bug was self-discovered and fixed during this release's own screenshot QA pass: a React hydration mismatch on the new `/about` page, caused by reading client-only session state directly in the render body instead of after mount.
+
+No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
+
 ## v0.2.3 — Mission-critical deployment hardening
 
 A dedicated reliability and security review for a one-time install at a remote, physically-inaccessible site with no developer access afterward. 18 real gaps were found and fixed — 2 of them self-discovered during the review itself. Every service now restarts automatically on a crash (previously only 2 of 8 did), a real dependency-aware health check (`/health/detailed`) backs a new 5-minute watchdog on both platforms, both platforms now auto-start at boot (a self-discovered bug meant Linux's systemd unit was never actually enabled, despite the unit file itself being correct), and both platforms got a real, tested database restore procedure plus scheduled nightly backups — previously only manual/pre-upgrade backups existed, with no restore procedure at all beyond a self-contradictory manual instruction.
@@ -44,7 +54,7 @@ HORIZON GRID is the renamed, significantly extended release of this platform (pr
 
 Re-running the installer on an existing install preserves your configuration, credentials, and all investigation/case/watchlist data — nothing about this release requires starting over. Internal identifiers (data folder location, database name) are unchanged from before the rename specifically so an upgrade is safe.
 
-## Known limitations (current, as of v0.2.3)
+## Known limitations (current, as of v0.2.4 -- unchanged by the v0.2.4 branding pass, which touched presentation only)
 
 - No automated host-disk-space alerting, and no retention/cleanup job for ever-growing investigation tables.
 - No off-host/off-site backup copy option — backups are local-disk-only, which does not protect a genuinely remote site against the host/disk itself failing.
@@ -57,4 +67,4 @@ Re-running the installer on an existing install preserves your configuration, cr
 
 ## Verdict
 
-**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (v0.2.3). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict.
+**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (v0.2.4). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict; the v0.2.4 branding pass changed presentation only and does not affect it.

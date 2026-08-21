@@ -52,7 +52,7 @@ Nothing else needs to change: the orchestrator, correlation engine, evidence bui
 
 ## 2. Adding a New AI Backend
 
-All five existing AI backends (Ollama, Anthropic, Bedrock, Gemini, Groq) expose an identical async contract, defined structurally as the `_AIClient` `Protocol` in `backend/app/ai/service.py`:
+All eleven existing AI backends (Ollama, Anthropic, Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter) expose an identical async contract, defined structurally as the `_AIClient` `Protocol` in `backend/app/ai/service.py`:
 
 ```python
 class _AIClient(Protocol):

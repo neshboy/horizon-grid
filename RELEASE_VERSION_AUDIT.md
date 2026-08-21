@@ -1,5 +1,12 @@
 # HORIZON GRID — Release Version Audit
 
+**Update note (2026-08-21):** the application version has since moved to **0.2.4** (a presentation-
+only branding/UI pass -- see `CHANGELOG.md`'s `[0.2.4]` entry; no backend/database/auth/IOC/AI/
+provider/scanner logic changed). Everything else in this audit document below was captured against
+v0.2.3 and remains accurate for every subsystem it describes, since none of them were touched by the
+v0.2.4 branding pass -- only the version string itself and the four files listed in "Application
+version" below moved from 0.2.3 to 0.2.4.
+
 Audited directly against the current working tree (not against prior documentation, prior CHANGELOG, or prior claims). Every entry below is backed by a file:line citation from a real source-code read performed during this audit.
 
 ## Version identity

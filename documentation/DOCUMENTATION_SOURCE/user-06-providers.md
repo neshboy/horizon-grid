@@ -117,7 +117,7 @@ Expanding a backend's row lets you enter or update its credentials and model. An
 
 **IOC Providers.** This tab covers all 16 built-in providers described earlier in this section — each one configurable, testable, and individually enabled or disabled, right from this screen. Because each provider's row only asks for the exact fields that provider actually needs (a single credential for most, the shared abuse.ch key for URLhaus/ThreatFox/MalwareBazaar, or the Personal Access Token *and* Organization ID pair for Censys), there's no guesswork about what to fill in. Providers that need no credential at all still appear here with an enable/disable toggle, since "on or off" remains a setting worth controlling even when there's nothing to type in.
 
-[FIGURE: 34-manage-providers-ioc-tab.png | The IOC Providers tab, listing all 16 registry providers with their real configured/enabled status.]
+[FIGURE: 34-manage-providers-ioc-tab.png | The IOC Providers tab, listing all 18 registry providers with their real configured/enabled status.]
 
 Expanding an IOC provider's row works the same way as an AI backend's: a masked credential field for exactly the input that provider needs, plus Test Connection, Save, and Enable/Disable controls. The screenshot below shows AbuseIPDB expanded with a key typed in, ready to test or save — the same flow used whether you're setting up a provider for the first time or changing an existing key.
 

@@ -76,7 +76,7 @@ You don't need to configure all 18 providers to get useful results — the platf
 
 Every investigation ends with an AI-written explanation of what was found. HORIZON GRID supports eleven interchangeable AI backends, and you pick one from the same **Providers** page, under the **AI Providers** tab.
 
-[FIGURE: 32-manage-providers-ai-tab.png | The AI Providers tab, listing each of the five supported AI backends with its live configured/active status.]
+[FIGURE: 32-manage-providers-ai-tab.png | The AI Providers tab, listing each of the eleven supported AI backends with its live configured/active status.]
 
 For a genuinely zero-cost way to get started, expand **Ollama**. This runs a small AI model entirely on your own machine — no account, no API key, no per-request cost, and nothing about your investigations ever leaves this computer for the AI step. Click **Test Connection** to confirm it responds, then **Set Active** to make it the backend used for your next investigation. (If you'd rather use a larger, more capable hosted model instead, Anthropic, AWS Bedrock, Google Gemini, and Groq are all supported the same way — each just needs its own API key. You can switch between any of these at any time later with no restart, so this choice is never permanent.)
 

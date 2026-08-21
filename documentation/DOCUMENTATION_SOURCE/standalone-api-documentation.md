@@ -406,7 +406,7 @@ curl -X POST http://localhost:8000/api/v1/providers/abuseipdb/test \
 
 ## 4. AI Configuration — `/api/v1/ai`
 
-The AI-backend analog of §3: live credential testing and model-list discovery, used by the setup wizard and Manage Providers screen for the five supported AI backends (Ollama, Anthropic, AWS Bedrock, Google Gemini, Groq).
+The AI-backend analog of §3: live credential testing and model-list discovery, used by the setup wizard and Manage Providers screen for all eleven supported AI backends (Ollama, Anthropic, AWS Bedrock, Google Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter).
 
 ### `POST /api/v1/ai/test`
 
@@ -726,7 +726,7 @@ The API surface behind the "Manage Providers" screen: configuring and activating
 
 - **Permission:** `provider:manage` (admin only)
 - **Purpose:** Persist a validated credential and/or model choice for one AI backend. Takes effect on the very next AI call platform-wide — no restart.
-- **Path param:** `backend` — one of the five supported backend identifiers.
+- **Path param:** `backend` — one of the eleven supported backend identifiers.
 - **Request body:** `{"credentials": {"api_key": "<YOUR_API_KEY>"}, "model_id": "str | null"}`
 - **Errors:** `400` `"Unknown AI backend '<backend>'"`.
 - **Example:**

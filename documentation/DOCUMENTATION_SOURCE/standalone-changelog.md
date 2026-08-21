@@ -2,6 +2,26 @@
 
 All notable changes for the HORIZON GRID release are listed below, grouped by area. Every entry below reflects a real, tested change — not a planned or aspirational one.
 
+## v0.2.4 — Original visual identity and branding pass
+
+A professional branding + UI/UX pass across the entire frontend, requested because the product name and tagline ("Every Signal. One Operational Picture.") were previously barely visible anywhere in the running application. Presentation-only by design: no backend logic, database schema, authentication, IOC processing, AI provider logic, provider API logic, port scanner logic, or admin permissions were touched, verified by a full backend regression run (383 passed, 39 skipped) and a clean frontend typecheck both before and after every change.
+
+**Visual identity ("Datum Signal"):** a CRT-phosphor teal-cyan primary color, deliberately pulled off the generic-SaaS-blue hue almost every dark-mode dashboard defaults to, against a near-black anodized-steel-panel shell with a warm off-white foreground. Colors are the same set of HSL CSS variables the app already used, so the identity is a drop-in palette change, not an architecture rewrite. A six-state operational status language (OPERATIONAL/DEGRADED/WARNING/CRITICAL/OFFLINE/UNKNOWN) replaces ad-hoc status badges wherever they existed — every state pairs a distinct hue, fill density, border style, AND icon, deliberately never color alone, so removing color entirely (a colorblind viewer, a grayscale printout) still leaves every state distinguishable.
+
+**Logo:** an original, wholly geometric mark — a horizon line with two open "signal" nodes converging on one filled "detection" node — chosen specifically because it's the only concept considered that actually depicts the tagline rather than just looking generically tactical. No insignia, seal, shield, or any existing company/military symbol. Ships as a full lockup (mark + wordmark), a compact lockup (mark + "HG" in a corner-bracket badge — the same bracket motif reused as a UI chrome accent elsewhere), and a favicon.
+
+**Typography:** IBM Plex Sans Condensed for headings/wordmark/section labels, IBM Plex Mono for every raw technical value (hashes, IPs, timestamps, coordinates, counts, scores) with tabular numerals, and the existing body typeface left completely untouched — the highest-risk, lowest-payoff move available (re-tuning every dense data table to a new body face's metrics) was deliberately avoided.
+
+**New page:** `/about` — version, live dependency status (from the real health endpoint, nothing hardcoded), supported platforms, documentation links. Purely additive; no existing route was touched to add it.
+
+**Component-level changes that took effect app-wide from one edit each:** the radius-contrast rule (outer panels keep the existing softer corner radius; every interactive/status element — buttons, inputs, badges, chips — tightens to a sharper radius, so soft panels visibly contain precise controls); dropped card drop-shadows in favor of a flat fill bounded by a hairline border; section/column headers now default to uppercase, tracked, muted "instrument-panel" labels instead of bold sentence-case headings.
+
+**Reports:** every exported PDF now carries a HORIZON GRID header/footer with real page numbering, a generation timestamp, and the Investigation ID; CSV and Markdown exports gained the same platform/Investigation-ID fields.
+
+**Real bug self-discovered during screenshot QA, fixed:** the new `/about` page initially read client-only login state directly in its render body instead of via `useState`+`useEffect`, producing a genuine React hydration-mismatch error whenever a session already existed at first paint. Fixed by deferring the check to a post-mount effect, matching the pattern already used correctly elsewhere in this codebase.
+
+No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
+
 ## v0.2.3 — Mission-critical deployment hardening: 18 real gaps found and fixed
 
 A dedicated reliability and security review for unattended, remote-site deployment (installed once, expected to run correctly for a long time with no developer access afterward). Every item below was confirmed present before the fix (live reproduction or direct code-path tracing) and confirmed resolved after (a real test, a live re-verification, or both) — nothing here was assumed fixed on intention alone. Two gaps were self-discovered during this review, not flagged by the initial structured assessment.
