@@ -82,6 +82,17 @@ def test_render_csv_includes_metadata_and_provider_rows():
     assert "NIST NVD" in csv_text
 
 
+def test_render_csv_includes_platform_and_investigation_id():
+    """Regression test for the branding pass: every export must be
+    traceable back to which platform generated it and which investigation
+    it came from, per the branding brief's own "every report should
+    contain HORIZON GRID / Investigation ID" requirement."""
+    lookup = _fake_lookup()
+    csv_text = _render_csv(lookup)
+    assert "platform,HORIZON GRID" in csv_text
+    assert f"investigation_id,{lookup.id}" in csv_text
+
+
 def test_render_csv_handles_no_provider_results():
     lookup = _fake_lookup(provider_results=[])
     csv_text = _render_csv(lookup)

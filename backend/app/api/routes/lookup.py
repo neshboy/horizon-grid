@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Literal
 from xml.sax import saxutils
 
@@ -571,6 +572,8 @@ def _render_csv(lookup: IOCLookup) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["field", "value"])
+    writer.writerow(["platform", "HORIZON GRID"])
+    writer.writerow(["investigation_id", str(lookup.id)])
     writer.writerow(["ioc_value", _csv_safe(lookup.ioc_value)])
     writer.writerow(["ioc_type", lookup.ioc_type])
     writer.writerow(["final_verdict", lookup.final_verdict.value if lookup.final_verdict else ""])
@@ -640,14 +643,43 @@ def _render_pdf(lookup: IOCLookup) -> bytes:
 
     styles = getSampleStyleSheet()
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
-    story = [Paragraph(f"IOC Assessment: {_pdf_esc(lookup.ioc_value)}", styles["Title"])]
+    # topMargin/bottomMargin leave room for the branded header/footer drawn
+    # directly on the canvas below -- SimpleDocTemplate's flowable story
+    # never overlaps that reserved band on any page.
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=1.0 * inch, bottomMargin=0.85 * inch)
+
+    def _draw_header_footer(canvas, _doc) -> None:
+        """HORIZON GRID branding + page numbering on every page -- drawn
+        directly on the canvas (not part of the flowable story) so it's
+        positioned identically regardless of how many pages the story
+        content spans. Nothing here is attacker-influenced (fixed strings,
+        page count, generation timestamp), so no _pdf_esc() is needed.
+        """
+        canvas.saveState()
+        canvas.setFont("Helvetica-Bold", 9)
+        canvas.drawString(0.75 * inch, letter[1] - 0.5 * inch, "HORIZON GRID")
+        canvas.setFont("Helvetica", 8)
+        canvas.drawString(2.05 * inch, letter[1] - 0.5 * inch, "  --  Every Signal. One Operational Picture.")
+        canvas.line(0.75 * inch, letter[1] - 0.58 * inch, letter[0] - 0.75 * inch, letter[1] - 0.58 * inch)
+        canvas.setFont("Helvetica", 7)
+        canvas.drawString(0.75 * inch, 0.55 * inch, f"Investigation ID: {lookup.id}")
+        canvas.drawRightString(letter[0] - 0.75 * inch, 0.55 * inch, f"Page {canvas.getPageNumber()}")
+        canvas.restoreState()
+
+    story = [
+        Paragraph(f"IOC Assessment: {_pdf_esc(lookup.ioc_value)}", styles["Title"]),
+        Paragraph(
+            f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} &nbsp;&nbsp; "
+            f"Investigation ID: {lookup.id}",
+            styles["BodyText"],
+        ),
+    ]
 
     fa = lookup.final_assessment
     if not fa:
         story.append(Spacer(1, 12))
         story.append(Paragraph("No final assessment is available for this investigation yet.", styles["BodyText"]))
-        doc.build(story)
+        doc.build(story, onFirstPage=_draw_header_footer, onLaterPages=_draw_header_footer)
         return buf.getvalue()
 
     story.append(
@@ -704,7 +736,7 @@ def _render_pdf(lookup: IOCLookup) -> bytes:
             # implementation, which never calls the paraparser at all.
             story.append(Preformatted(rule.get("rule", ""), styles["Code"]))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_header_footer, onLaterPages=_draw_header_footer)
     return buf.getvalue()
 
 

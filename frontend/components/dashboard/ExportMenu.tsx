@@ -26,10 +26,14 @@ function triggerDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function buildMarkdown(assessment: FinalAssessment): string {
+function buildMarkdown(assessment: FinalAssessment, lookupId: string): string {
   const lines: string[] = [];
+  lines.push("**HORIZON GRID** -- Every Signal. One Operational Picture.");
+  lines.push("");
   lines.push(`# IOC Assessment: ${assessment.ioc_value}`);
   lines.push("");
+  lines.push(`**Investigation ID:** ${lookupId}`);
+  lines.push(`**Generated:** ${new Date().toISOString()}`);
   lines.push(`**Type:** ${assessment.ioc_type}`);
   lines.push(`**Final Verdict:** ${assessment.final_verdict}`);
   lines.push(
@@ -125,7 +129,7 @@ export function ExportMenu({ lookupId, assessment }: ExportMenuProps) {
       showMessage("No assessment data available yet.");
       return;
     }
-    const blob = new Blob([buildMarkdown(assessment)], { type: "text/markdown" });
+    const blob = new Blob([buildMarkdown(assessment, lookupId)], { type: "text/markdown" });
     triggerDownload(blob, `ioc-assessment-${lookupId}.md`);
   }, [assessment, lookupId, showMessage]);
 
