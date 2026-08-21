@@ -36,8 +36,7 @@ import { DetectionRulesPanel } from "@/components/dashboard/DetectionRulesPanel"
 import { RecommendedActionsPanel } from "@/components/dashboard/RecommendedActionsPanel";
 import { ExportMenu } from "@/components/dashboard/ExportMenu";
 import { AskAiPanel } from "@/components/dashboard/AskAiPanel";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { EvidencePanel } from "@/components/dashboard/EvidencePanel";
 import { VerdictAnalysisPanel } from "@/components/dashboard/VerdictAnalysisPanel";
 import { PivotPanel } from "@/components/dashboard/PivotPanel";
@@ -156,18 +155,15 @@ export default function LookupDetailPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-7xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         {/* Header bar: IOC value + detected type + verdict badge placeholder */}
         <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              Lookup {lookupId}
+              Lookup <span className="font-data tabular-nums">{lookupId}</span>
             </span>
-            <h1 className="break-all text-xl font-semibold">
+            <h1 className="break-all font-display text-xl font-semibold tracking-wide">
               {loading ? "Loading..." : iocValue || "(no value)"}
             </h1>
           </div>

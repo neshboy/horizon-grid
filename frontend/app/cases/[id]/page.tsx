@@ -7,8 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { cn } from "@/lib/utils";
 import { addCaseNote, getCase, isLoggedIn, updateCase } from "@/lib/api";
 import type { CaseDetail, CaseStatus } from "@/lib/types";
@@ -74,10 +73,7 @@ export default function CaseDetailPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-4xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         {!caseDetail ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
@@ -86,7 +82,7 @@ export default function CaseDetailPage() {
             <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h1 className="text-xl font-semibold">{caseDetail.title}</h1>
+                  <h1 className="text-xl font-semibold font-display tracking-wide">{caseDetail.title}</h1>
                   {caseDetail.description && <p className="mt-1 text-sm text-muted-foreground">{caseDetail.description}</p>}
                 </div>
                 <select
@@ -113,7 +109,9 @@ export default function CaseDetailPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>IOCs ({caseDetail.iocs.length})</CardTitle>
+                <CardTitle>
+                  IOCs (<span className="font-data tabular-nums">{caseDetail.iocs.length}</span>)
+                </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
                 {caseDetail.iocs.length === 0 && (
@@ -124,7 +122,8 @@ export default function CaseDetailPage() {
                 {caseDetail.iocs.map((ioc) => (
                   <div key={ioc.id} className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/20 px-3 py-2">
                     <span className="text-sm text-foreground">
-                      {ioc.ioc_value} <span className="text-[11px] text-muted-foreground">({ioc.ioc_type})</span>
+                      <span className="font-data tabular-nums">{ioc.ioc_value}</span>{" "}
+                      <span className="text-[11px] text-muted-foreground">({ioc.ioc_type})</span>
                     </span>
                     <Button
                       size="sm"
@@ -141,13 +140,15 @@ export default function CaseDetailPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Analyst Notes ({caseDetail.notes.length})</CardTitle>
+                <CardTitle>
+                  Analyst Notes (<span className="font-data tabular-nums">{caseDetail.notes.length}</span>)
+                </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
                 {caseDetail.notes.map((note) => (
                   <div key={note.id} className="rounded-md border border-border bg-muted/20 px-3 py-2">
                     <p className="text-sm text-foreground">{note.body}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">{new Date(note.created_at).toLocaleString()}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground font-data tabular-nums">{new Date(note.created_at).toLocaleString()}</p>
                   </div>
                 ))}
                 <form onSubmit={handleAddNote} className="flex items-center gap-2">

@@ -7,8 +7,7 @@ import { useRouter } from "next/navigation";
 import { FolderKanban, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { cn } from "@/lib/utils";
 import { createCase, isLoggedIn, listCases } from "@/lib/api";
 import type { CaseSummary } from "@/lib/types";
@@ -80,13 +79,10 @@ export default function CasesPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         <div className="flex items-center justify-between">
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
+          <h1 className="flex items-center gap-2 font-display text-sm uppercase tracking-[0.08em] text-muted-foreground">
             <FolderKanban className="h-5 w-5" aria-hidden="true" />
             Cases
           </h1>
@@ -158,7 +154,7 @@ export default function CasesPage() {
                 <div className="flex flex-col">
                   <span className="text-sm font-medium text-foreground">{c.title}</span>
                   <span className="text-[11px] text-muted-foreground">
-                    {new Date(c.created_at).toLocaleString()}
+                    <span className="font-data tabular-nums">{new Date(c.created_at).toLocaleString()}</span>
                     {c.tags.length > 0 ? ` · ${c.tags.join(", ")}` : ""}
                   </span>
                 </div>

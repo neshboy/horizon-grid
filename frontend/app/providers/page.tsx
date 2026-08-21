@@ -11,8 +11,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as Tabs from "@radix-ui/react-tabs";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { ProviderConfigRow } from "@/components/dashboard/ProviderConfigRow";
 import { NetworkAccessPanel } from "@/components/dashboard/NetworkAccessPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -78,13 +77,12 @@ export default function ProvidersPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         <div>
-          <h1 className="text-xl font-semibold">Manage Providers</h1>
+          <h1 className="font-display text-sm uppercase tracking-[0.08em] text-muted-foreground">
+            Manage Providers
+          </h1>
           <p className="text-sm text-muted-foreground">
             Configure AI backends and threat-intelligence providers. Every change here takes
             effect on the next investigation immediately -- no restart, no editing files.
@@ -196,7 +194,7 @@ export default function ProvidersPage() {
                   {auditLog.length === 0 && <li className="text-muted-foreground">No changes recorded yet.</li>}
                   {auditLog.map((entry) => (
                     <li key={entry.id} className="border-b border-border/50 pb-2 last:border-none">
-                      <span className="text-xs text-muted-foreground">
+                      <span className="font-data tabular-nums text-xs text-muted-foreground">
                         {new Date(entry.timestamp).toLocaleString()}
                       </span>
                       {" -- "}

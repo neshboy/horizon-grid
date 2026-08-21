@@ -11,8 +11,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, Scale, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { clearBasket, compareBasketIOCs, isLoggedIn, listBasket, removeFromBasket } from "@/lib/api";
 import type { BasketItem, IOCComparisonResponse } from "@/lib/types";
 
@@ -87,13 +86,10 @@ export default function BasketPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">IOC Basket</h1>
+          <h1 className="font-display uppercase tracking-[0.08em] text-sm text-muted-foreground">IOC Basket</h1>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={handleInvestigateAll} disabled={selected.size === 0}>
               Investigate Selected
@@ -118,7 +114,10 @@ export default function BasketPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Collected IOCs {items ? `(${items.length})` : ""}</CardTitle>
+            <CardTitle>
+              Collected IOCs{" "}
+              {items ? <span className="font-data tabular-nums">({items.length})</span> : ""}
+            </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {!items && <p className="text-sm text-muted-foreground">Loading...</p>}
@@ -140,7 +139,9 @@ export default function BasketPage() {
                     className="h-4 w-4"
                   />
                   <div className="flex flex-col">
-                    <span className="text-sm font-medium text-foreground">{item.ioc_value}</span>
+                    <span className="text-sm font-medium text-foreground font-data tabular-nums">
+                      {item.ioc_value}
+                    </span>
                     <span className="text-[11px] text-muted-foreground">
                       {item.ioc_type} {item.latest_lookup_id ? "· has completed lookup" : "· not yet investigated"}
                       {item.note ? ` · ${item.note}` : ""}
@@ -196,10 +197,12 @@ export default function BasketPage() {
                           (row.ioc_value === comparison.narrative.most_dangerous_ioc_value ? " bg-destructive/10" : "")
                         }
                       >
-                        <td className="py-2 pr-3 font-medium text-foreground">{row.ioc_value}</td>
+                        <td className="py-2 pr-3 font-medium text-foreground font-data tabular-nums">
+                          {row.ioc_value}
+                        </td>
                         <td className="py-2 pr-3 capitalize">{row.verdict.replace(/_/g, " ")}</td>
-                        <td className="py-2 pr-3">{row.risk_score?.toFixed(0) ?? "—"}</td>
-                        <td className="py-2 pr-3">{row.asn.join(", ") || "—"}</td>
+                        <td className="py-2 pr-3 font-data tabular-nums">{row.risk_score?.toFixed(0) ?? "—"}</td>
+                        <td className="py-2 pr-3 font-data tabular-nums">{row.asn.join(", ") || "—"}</td>
                         <td className="py-2 pr-3">{row.malware_families.join(", ") || "—"}</td>
                         <td className="py-2 pr-3">{row.threat_actors.join(", ") || "—"}</td>
                       </tr>

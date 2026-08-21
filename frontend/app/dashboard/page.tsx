@@ -27,8 +27,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { ProviderHealthStatusBadge } from "@/components/dashboard/ProviderHealthStatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -126,13 +125,12 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         <div>
-          <h1 className="text-xl font-semibold">Executive Dashboard</h1>
+          <h1 className="font-display text-sm uppercase tracking-[0.08em] text-muted-foreground">
+            Executive Dashboard
+          </h1>
           <p className="text-sm text-muted-foreground">
             Platform-wide status at a glance -- investigations, cases, provider health, and AI
             performance.
@@ -243,7 +241,7 @@ export default function DashboardPage() {
                     {HEALTH_ORDER.map((status) => (
                       <div key={status} className="flex items-center gap-1.5">
                         <ProviderHealthStatusBadge status={status} />
-                        <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                        <span className="text-xs font-medium font-data tabular-nums text-muted-foreground">
                           {healthCounts[status]}
                         </span>
                       </div>

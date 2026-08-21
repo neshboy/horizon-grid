@@ -76,7 +76,7 @@ export default function HomePage() {
       </div>
 
       <div className="flex flex-col items-center gap-2 text-center">
-        <h1 className="text-3xl font-bold tracking-tight">HORIZON GRID</h1>
+        <h1 className="text-3xl font-bold font-display tracking-wide">HORIZON GRID</h1>
         <p className="text-sm text-muted-foreground">Every Signal. One Operational Picture.</p>
         <p className="max-w-xl text-sm text-muted-foreground">
           Enter any indicator of compromise. We query every configured provider in
@@ -113,7 +113,7 @@ export default function HomePage() {
           <button
             key={example}
             onClick={() => setValue(example)}
-            className="rounded-md border border-border px-3 py-1.5 hover:bg-muted"
+            className="rounded-md border border-border px-3 py-1.5 font-data tabular-nums hover:bg-muted"
           >
             {example}
           </button>

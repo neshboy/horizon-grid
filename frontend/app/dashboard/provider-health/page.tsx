@@ -15,8 +15,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { ProviderHealthStatusBadge } from "@/components/dashboard/ProviderHealthStatusBadge";
 import { Card, CardContent } from "@/components/ui/card";
 import { getProviderHealth, isLoggedIn } from "@/lib/api";
@@ -47,13 +46,13 @@ function WindowDetailCard({ label, window }: { label: string; window: ProviderHe
       </div>
       <dl className="grid grid-cols-2 gap-y-1 text-xs">
         <dt className="text-muted-foreground">Success rate</dt>
-        <dd className="text-right tabular-nums">{formatPercent(window?.success_rate ?? null)}</dd>
+        <dd className="text-right font-data tabular-nums">{formatPercent(window?.success_rate ?? null)}</dd>
         <dt className="text-muted-foreground">Avg latency</dt>
-        <dd className="text-right tabular-nums">{formatLatency(window?.avg_latency_ms ?? null)}</dd>
+        <dd className="text-right font-data tabular-nums">{formatLatency(window?.avg_latency_ms ?? null)}</dd>
         <dt className="text-muted-foreground">Consecutive failures</dt>
-        <dd className="text-right tabular-nums">{window?.consecutive_failures ?? "N/A"}</dd>
+        <dd className="text-right font-data tabular-nums">{window?.consecutive_failures ?? "N/A"}</dd>
         <dt className="text-muted-foreground">Rate-limited count</dt>
-        <dd className="text-right tabular-nums">{window?.rate_limited_count ?? "N/A"}</dd>
+        <dd className="text-right font-data tabular-nums">{window?.rate_limited_count ?? "N/A"}</dd>
       </dl>
     </div>
   );
@@ -86,13 +85,12 @@ export default function ProviderHealthPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         <div>
-          <h1 className="text-xl font-semibold">Provider Health</h1>
+          <h1 className="font-display text-sm uppercase tracking-[0.08em] text-muted-foreground">
+            Provider Health
+          </h1>
           <p className="text-sm text-muted-foreground">
             Status, success rate, latency, and failure streaks for every IOC provider. Defaults to
             the 24-hour window -- click a row for 1h/24h/7d/30d side by side.
@@ -159,13 +157,13 @@ export default function ProviderHealthPage() {
                         <td className="px-4 py-2">
                           <ProviderHealthStatusBadge status={window24h?.status} />
                         </td>
-                        <td className="px-4 py-2 tabular-nums text-muted-foreground">
+                        <td className="px-4 py-2 font-data tabular-nums text-muted-foreground">
                           {formatPercent(window24h?.success_rate ?? null)}
                         </td>
-                        <td className="px-4 py-2 tabular-nums text-muted-foreground">
+                        <td className="px-4 py-2 font-data tabular-nums text-muted-foreground">
                           {formatLatency(window24h?.avg_latency_ms ?? null)}
                         </td>
-                        <td className="px-4 py-2 tabular-nums text-muted-foreground">
+                        <td className="px-4 py-2 font-data tabular-nums text-muted-foreground">
                           {window24h?.consecutive_failures ?? "N/A"}
                         </td>
                       </tr>

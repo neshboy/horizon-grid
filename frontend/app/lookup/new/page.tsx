@@ -29,8 +29,7 @@ import { DetectionRulesPanel } from "@/components/dashboard/DetectionRulesPanel"
 import { RecommendedActionsPanel } from "@/components/dashboard/RecommendedActionsPanel";
 import { ExportMenu } from "@/components/dashboard/ExportMenu";
 import { AskAiPanel } from "@/components/dashboard/AskAiPanel";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { EvidencePanel } from "@/components/dashboard/EvidencePanel";
 import { VerdictAnalysisPanel } from "@/components/dashboard/VerdictAnalysisPanel";
 import { PivotPanel } from "@/components/dashboard/PivotPanel";
@@ -154,16 +153,13 @@ function LookupNewPageInner() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-7xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar initialValue={rawValue} />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader searchBarInitialValue={rawValue} />
 
         {/* Header bar: IOC value + detected type + verdict badge placeholder */}
         <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-muted-foreground">Investigating</span>
-            <h1 className="break-all text-xl font-semibold">{iocValue || "(no value)"}</h1>
+            <h1 className="break-all text-xl font-semibold font-display tracking-wide">{iocValue || "(no value)"}</h1>
           </div>
           <div className="flex items-center gap-3">
             <span className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground">
@@ -252,7 +248,7 @@ function LookupNewPageInner() {
                   {eventLog.length === 0 && <li>Waiting for events...</li>}
                   {eventLog.map((entry) => (
                     <li key={entry.id} className="border-b border-border/50 pb-1 last:border-none">
-                      <span className="text-muted-foreground/70">{entry.at}</span> {entry.label}
+                      <span className="font-data tabular-nums text-muted-foreground/70">{entry.at}</span> {entry.label}
                     </li>
                   ))}
                 </ul>

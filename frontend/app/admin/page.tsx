@@ -14,8 +14,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as Tabs from "@radix-ui/react-tabs";
-import { WorkspaceNav } from "@/components/dashboard/WorkspaceNav";
-import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
+import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { UsersManagementPanel } from "@/components/dashboard/UsersManagementPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -72,13 +71,10 @@ export default function AdminPage() {
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <div className="flex items-center justify-between gap-4">
-          <TopSearchBar />
-          <WorkspaceNav />
-        </div>
+        <BrandHeader />
 
         <div>
-          <h1 className="text-xl font-semibold">Administration</h1>
+          <h1 className="font-display text-sm uppercase tracking-[0.08em] text-muted-foreground">Administration</h1>
           <p className="text-sm text-muted-foreground">
             Manage user accounts, review the fixed role/permission matrix, and audit every configuration and
             account change. Signed in as {currentUser.email} ({currentUser.role}).
@@ -114,19 +110,19 @@ export default function AdminPage() {
                   <CardHeader>
                     <CardTitle className="text-xs text-muted-foreground">Total Users</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-2xl font-semibold">{stats.total_users}</CardContent>
+                  <CardContent className="font-data tabular-nums text-2xl font-semibold">{stats.total_users}</CardContent>
                 </Card>
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-xs text-muted-foreground">Active</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-2xl font-semibold text-success">{stats.active_users}</CardContent>
+                  <CardContent className="font-data tabular-nums text-2xl font-semibold text-success">{stats.active_users}</CardContent>
                 </Card>
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-xs text-muted-foreground">Disabled</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-2xl font-semibold text-destructive">
+                  <CardContent className="font-data tabular-nums text-2xl font-semibold text-destructive">
                     {stats.disabled_users}
                   </CardContent>
                 </Card>
@@ -134,7 +130,7 @@ export default function AdminPage() {
                   <CardHeader>
                     <CardTitle className="text-xs text-muted-foreground">Admins</CardTitle>
                   </CardHeader>
-                  <CardContent className="text-2xl font-semibold">{stats.by_role["admin"] ?? 0}</CardContent>
+                  <CardContent className="font-data tabular-nums text-2xl font-semibold">{stats.by_role["admin"] ?? 0}</CardContent>
                 </Card>
               </div>
             )}
@@ -150,7 +146,7 @@ export default function AdminPage() {
                   {stats?.recent_logins.map((entry, i) => (
                     <li key={`${entry.email}-${i}`} className="flex justify-between border-b border-border/50 pb-2 last:border-none">
                       <span>{entry.email}</span>
-                      <span className="text-muted-foreground">{new Date(entry.last_login_at).toLocaleString()}</span>
+                      <span className="font-data tabular-nums text-muted-foreground">{new Date(entry.last_login_at).toLocaleString()}</span>
                     </li>
                   ))}
                 </ul>
@@ -197,7 +193,7 @@ export default function AdminPage() {
                   {auditLog.length === 0 && <li className="text-muted-foreground">No changes recorded yet.</li>}
                   {auditLog.map((entry) => (
                     <li key={entry.id} className="border-b border-border/50 pb-2 last:border-none">
-                      <span className="text-xs text-muted-foreground">
+                      <span className="font-data tabular-nums text-xs text-muted-foreground">
                         {new Date(entry.timestamp).toLocaleString()}
                       </span>
                       {" -- "}
