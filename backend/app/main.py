@@ -56,7 +56,7 @@ structlog.configure(processors=[structlog.processors.JSONRenderer()])
 
 settings = get_settings()
 
-_APP_VERSION = "0.2.3"
+_APP_VERSION = "0.2.4"
 # Process start time, for /health's uptime field -- confirmed live that no
 # version or uptime indicator was visible anywhere an operator would look
 # (the FastAPI version= below only ever surfaces via /docs' OpenAPI schema).
