@@ -52,7 +52,7 @@ Diagram: Installer file-copy vs. Setup Wizard Docker/registration steps. Everyth
 | App | `debug` | `True` -- undeclared `DEBUG=false` means CORS is restricted to only `http://localhost:3000` regardless of the real frontend host |
 | Security | `jwt_secret_key`, `encryption_master_key` | `jwt_secret_key` defaults to the placeholder `"change-me-in-production"`; `encryption_master_key` falls back to an HKDF-derived key from the JWT secret if unset |
 | Datastores/Celery | `database_url`, `redis_url`, `neo4j_*`, `opensearch_url`, `celery_broker_url`/`celery_result_backend` | Redis DB `1`/`2` for broker/result, DB `0` for app cache/rate-limiter |
-| AI backends | `ai_backend` + per-backend key/model fields (Ollama/Anthropic/Bedrock/Gemini/Groq) | `ai_backend` defaults to `"ollama"` |
+| AI backends | `ai_backend` + per-backend key/model fields (Ollama/Anthropic/Bedrock/Gemini/Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter) | `ai_backend` defaults to `"ollama"` |
 | IOC providers | one `..._api_key` per keyed provider (Censys needs a token + org ID pair) | All unset by default -- keyed providers report `not_configured` until set |
 | Provider execution | `provider_timeout_seconds`, `provider_max_retries`, `provider_cache_ttl_seconds` | `20`, `2`, `3600` |
 | Rate limiting | `lookup_rate_limit_max_calls`, `lookup_rate_limit_window_seconds` | `10`, `60` |

@@ -2,11 +2,11 @@
 
 This section describes how HORIZON GRID's backend (`backend/app/ai/`) uses large language models to summarize and score an **IOC** (Indicator of Compromise — a hash, IP, domain, URL, CVE, etc. submitted for lookup) once raw provider data has been collected. It assumes the reader is technically literate but new to this codebase, so product-specific components — `ProviderResult`, `CorrelationResult`, `AISummaryRecord`, `IOCLookup`, `EvidenceItem` — are defined at first use.
 
-All facts below are traceable to `backend/app/ai/service.py`, `schemas.py`, `analysis_service.py`, `hunting_service.py`, `analysis_schemas.py`, `ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, and `groq_client.py`.
+All facts below are traceable to `backend/app/ai/service.py`, `schemas.py`, `analysis_service.py`, `hunting_service.py`, `analysis_schemas.py`, `ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, `groq_client.py`, `openai_client.py`, `kimi_client.py`, `deepseek_client.py`, `xai_client.py`, `mistral_client.py`, and `openrouter_client.py`.
 
 ## 1. Supported AI Backends and Selection
 
-The active backend is a single configuration value, `ai_backend` (`app/core/config.py` line 69), defaulting to `"ollama"`. Five backends are implemented:
+The active backend is a single configuration value, `ai_backend` (`app/core/config.py` line 69), defaulting to `"ollama"`. Eleven backends are implemented:
 
 | Backend | Config value | Mode | Auth / connection detail |
 |---|---|---|---|
@@ -15,10 +15,16 @@ The active backend is a single configuration value, `ai_backend` (`app/core/conf
 | AWS Bedrock | `bedrock` | Cloud | Bedrock Converse API for Claude; supports bearer-token or IAM access-key/secret auth |
 | Google Gemini | `gemini` | Cloud | Gemini `generateContent` REST endpoint; JSON-schema response mode |
 | Groq | `groq` | Cloud, fast inference | OpenAI-compatible chat-completions API at `api.groq.com`; Bearer-token auth; default model `llama-3.3-70b-versatile` |
+| OpenAI | `openai` | Cloud | OpenAI's own chat-completions API at `api.openai.com`; Bearer-token auth; forced tool-calling for structured output |
+| Kimi (Moonshot AI) | `kimi` | Cloud | OpenAI-compatible chat-completions API at `api.moonshot.ai`; Bearer-token auth |
+| DeepSeek | `deepseek` | Cloud | OpenAI-compatible chat-completions API at `api.deepseek.com`; Bearer-token auth |
+| xAI | `xai` | Cloud | OpenAI-compatible chat-completions API at `api.x.ai`; Bearer-token auth |
+| Mistral | `mistral` | Cloud | Chat-completions API at `api.mistral.ai`; Bearer-token auth; forced tool-calling for structured output |
+| OpenRouter | `openrouter` | Cloud, meta-router | OpenAI-compatible chat-completions API at `openrouter.ai`, routing to many underlying model vendors; Bearer-token auth |
 
-All five client classes expose the **same** async method signature — `call_claude_json(system_prompt, user_prompt, json_schema, tool_name, max_tokens)` — so `app/ai/service.py`'s internal `_get_ai_client()` never has to branch on which backend is active (service.py lines 42-78). This is a straightforward adapter pattern: swapping backends is a config change, not a code change. `groq_client.py` fits this pattern by targeting Groq's `/openai/v1/chat/completions` endpoint and using the same forced-single-tool-call technique the other backends use to coerce a structured JSON response, rather than a bespoke prompt format.
+All eleven client classes expose the **same** async method signature — `call_claude_json(system_prompt, user_prompt, json_schema, tool_name, max_tokens)` — so `app/ai/service.py`'s internal `_get_ai_client()` never has to branch on which backend is active (service.py lines 42-78). This is a straightforward adapter pattern: swapping backends is a config change, not a code change. `groq_client.py` and the five clients modeled on it (`openai_client.py`, `kimi_client.py`, `deepseek_client.py`, `xai_client.py`, `mistral_client.py`, `openrouter_client.py`) fit this pattern by targeting their vendor's own OpenAI-compatible chat-completions endpoint and using the same forced-single-tool-call technique the other backends use to coerce a structured JSON response, rather than a bespoke prompt format.
 
-Unlike the other four backends, Groq's available-model list is not hardcoded in the codebase. Because Groq's hosted model lineup changes over time, the platform instead discovers it **live** from Groq's own `GET /v1/models` endpoint (exposed to the setup wizard and API consumers via `POST /api/v1/ai/groq/models`), so the model dropdown always reflects the account's real, currently-available models rather than a list that can silently go stale as Groq deprecates or introduces models.
+Model-list handling now splits into two groups rather than "Groq vs. everyone else": Anthropic, Gemini, and Bedrock still use a hardcoded/static model list in the codebase. Every other backend discovers its model list **live** instead — Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, and OpenRouter each query their own vendor `GET /models` endpoint (exposed to the setup wizard and API consumers via the shared `POST /api/v1/ai/{backend}/models` route), and Ollama lists whatever is actually pulled locally via `GET {base_url}/api/tags`. For the seven vendor-hosted live-discovery backends, this means the model dropdown always reflects the account's real, currently-available models rather than a list that can silently go stale as a vendor deprecates or introduces models.
 
 Selection is **fail-fast**: if the currently selected backend's `is_configured` check returns `False` (e.g. `anthropic` selected with no API key present), the service raises a `RuntimeError` immediately rather than letting the request proceed into a confusing low-level HTTP failure.
 

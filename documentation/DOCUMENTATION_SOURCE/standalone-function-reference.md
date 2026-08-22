@@ -145,7 +145,7 @@ Not a clickable function, but a real, observable background behavior worth docum
 | Field | Detail |
 |---|---|
 | **Location** | `/`, `components/dashboard/AiQuickSwitch.tsx` -- shown only when logged in, directly beneath the search box. |
-| **Purpose** | Choose which AI backend (Ollama, Claude/Anthropic, AWS Bedrock, Gemini, or Groq) will analyze the *next* investigation started anywhere in the app, with no restart. |
+| **Purpose** | Choose which AI backend (Ollama, Claude/Anthropic, AWS Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, or OpenRouter) will analyze the *next* investigation started anywhere in the app, with no restart. |
 | **Role Required** | Effectively **ADMIN only**, even though the control itself is visible to every logged-in role. See **Error Conditions**. |
 | **Input** | Select a backend from the dropdown. |
 | **Output** | A colored dot next to the dropdown indicates whether the selected backend is configured (green) or not (gray). A "Manage" link jumps to `/providers` for full credential setup. |
@@ -994,7 +994,7 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 | Field | Detail |
 |---|---|
 | **Location** | `/providers`, AI Providers tab, `components/dashboard/ProviderConfigRow.tsx`. |
-| **Purpose** | Enter or update the credentials for one AI backend (Ollama, Anthropic/Claude, AWS Bedrock, Gemini, Groq). |
+| **Purpose** | Enter or update the credentials for one AI backend (Ollama, Anthropic/Claude, AWS Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, or OpenRouter). |
 | **Role Required** | **ADMIN** (`provider:manage`). |
 | **Input** | Click a provider's row to expand it; type into the credential field(s) specific to that backend (e.g. `api_key` for Anthropic/Gemini/Groq; `base_url` for Ollama; `bedrock_api_key`/`aws_access_key_id`/`aws_secret_access_key`/`aws_region` for Bedrock) and, if applicable, a model ID. |
 | **Output** | An expanded form with password-masked input fields, pre-filled with a masked placeholder (e.g. `sk-...ab12`) if a credential is already saved -- never the real stored value. |

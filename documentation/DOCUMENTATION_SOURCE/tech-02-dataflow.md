@@ -8,7 +8,7 @@ The entry point for a lookup is a single endpoint: `POST /api/v1/lookup/stream` 
 
 1. **Rate limit check.** A Redis-backed fixed-window rate limiter (`RateLimiter`, `app/core/cache.py`) rejects the request if the calling user has exceeded the configured quota — 10 calls per 60 seconds per user by default (`app/core/config.py`), both values configurable.
 
-2. **IOC type detection.** `detect_ioc_type()` (`app/ioc/detector.py`) classifies the raw input string using ordered regex and heuristic checks into one of 31 `IOCType` enum values (`app/ioc/types.py`) — for example, distinguishing an IPv4 address from a domain from a SHA256 hash.
+2. **IOC type detection.** `detect_ioc_type()` (`app/ioc/detector.py`) classifies the raw input string using ordered regex and heuristic checks into one of 32 `IOCType` enum values (`app/ioc/types.py`) — for example, distinguishing an IPv4 address from a domain from a SHA256 hash.
 
 3. **Lookup record created.** An `IOCLookup` row is created in Postgres immediately, with `status = RUNNING`. This is the row that will later be updated with the final verdict and risk scores.
 
