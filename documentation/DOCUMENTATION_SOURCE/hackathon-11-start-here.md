@@ -40,6 +40,7 @@ Windows: run `05_INSTALLERS/HORIZON-GRID-Setup-0.2.4.exe` and follow the guided 
 | Architecture diagrams | `09_ARCHITECTURE/` |
 | Version history | `10_CHANGELOG/` |
 | License / third-party notices | `11_LICENSE_AND_NOTICES/` |
+| The exact prompts used to build this submission | `00_START_HERE/MISSION_PROMPTS_USED.md` |
 
 ## Recommended Reading Order
 
