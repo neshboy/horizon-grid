@@ -151,6 +151,13 @@ export default function LookupDetailPage() {
 
   const verdict = finalAssessment?.final_verdict ?? null;
   const isCompleted = status === "completed";
+  // Security Assessment doesn't read `finalAssessment` at all (see its props
+  // below) -- it only needs the IOC itself, so a failed *AI* final-assessment
+  // call (e.g. the configured AI backend being unreachable) shouldn't hide a
+  // feature that has nothing to do with that call. Gating it on `isCompleted`
+  // alone silently removed the whole panel, with no explanation, any time the
+  // investigation ended in FAILED even though every provider had succeeded.
+  const investigationFinished = status === "completed" || status === "failed";
 
   return (
     <main className="min-h-screen px-4 py-8">
@@ -220,8 +227,11 @@ export default function LookupDetailPage() {
                 <PivotPanel lookupId={lookupId} />
                 <HuntingCenterPanel lookupId={lookupId} />
                 <InvestigationCopilot lookupId={lookupId} onShowReceipts={setHighlightedEvidenceIds} />
-                {iocValue && <SecurityAssessmentPanel lookupId={lookupId} iocValue={iocValue} iocType={iocType} />}
               </>
+            )}
+
+            {investigationFinished && lookupId && iocValue && (
+              <SecurityAssessmentPanel lookupId={lookupId} iocValue={iocValue} iocType={iocType} />
             )}
           </div>
 
