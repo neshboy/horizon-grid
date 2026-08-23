@@ -2,6 +2,36 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.2.5] — 2026-08-23 — Security Assessment panel visibility and friction fixes
+
+Two real bugs found and fixed while live-testing the Security Assessment Toolkit (the port
+scanner UI) against a fresh install. Both are frontend-only; no backend logic, database schema,
+or API contract changed.
+
+### Fixed
+- The entire Security Assessment panel -- including its "Run" trigger form -- silently
+  disappeared with no explanation whenever an investigation's overall status ended up `FAILED`,
+  even when every provider had succeeded. Root cause: the panel was gated on
+  `status === "completed"` alongside other panels that genuinely depend on a successful AI final
+  assessment, but Security Assessment doesn't read `finalAssessment` at all. A failed final-AI-call
+  (e.g. the configured AI backend being temporarily unreachable) has nothing to do with whether an
+  unrelated active-scan feature should be available. The panel now renders on either terminal
+  state (`completed` or `failed`); the panels that do depend on a successful final assessment
+  (Verdict Analysis, Evidence, Pivot, Hunting Center, Copilot) keep the original gate.
+- The target-confirmation field required retyping the exact IOC value with zero feedback on any
+  mismatch (no trim, no case-insensitivity, no error message) -- a single stray space silently
+  kept the "Run Security Assessment" button disabled forever, indistinguishable from a real bug.
+  The retype step added friction without adding real protection the existing authorization
+  checkbox didn't already provide, since the backend already scopes every run to the specific
+  investigation's own IOC regardless of what's typed. Replaced the input with a plain read-only
+  "Target: `<value>`" line; the one authorization checkbox is now the sole confirmation gate.
+
+### Testing
+Both fixes reproduced live against a real investigation and a real Nmap scan (not just unit
+tests): confirmed the panel was actually missing before the fix, confirmed it renders and a scan
+completes successfully after. Full backend regression suite re-run clean after each change:
+383 passed, 39 skipped, zero regressions.
+
 ## [0.2.4] — 2026-08-21 — Original visual identity and branding pass
 
 A professional branding + UI/UX pass across the entire frontend -- the product name and tagline
