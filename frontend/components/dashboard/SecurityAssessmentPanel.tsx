@@ -3,11 +3,16 @@
 /**
  * Security Assessment Toolkit UI -- active checks (Nmap/DNS/TLS/HTTP-header/
  * hash-metadata) against the investigation's own target, gated by a
- * mandatory, explicit scope/authorization confirmation before any run
- * starts. The real enforcement is server-side (backend/app/api/routes/
- * security_assessment.py's require_permission("security_assessment:create")
- * and its own target/authorization checks) -- this panel only avoids
- * showing a viewer a run form that would 403.
+ * mandatory authorization checkbox before any run starts. The target itself
+ * is shown as plain read-only text (not a retype-to-confirm field) since the
+ * backend already scopes every run to this exact investigation's IOC --
+ * requiring the user to also retype it added friction without adding any
+ * real protection the checkbox didn't already provide, and silently failed
+ * with zero feedback on the smallest mismatch (whitespace, case). The real
+ * enforcement is server-side (backend/app/api/routes/security_assessment.py's
+ * require_permission("security_assessment:create") and its own target/
+ * authorization checks) -- this panel only avoids showing a viewer a run
+ * form that would 403.
  *
  * Only `nmap` has more than one profile (quick/standard/web); every other
  * tool only defines "standard". Since one run request sends a single
@@ -22,7 +27,6 @@ import * as React from "react";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
@@ -66,7 +70,6 @@ export function SecurityAssessmentPanel({ lookupId, iocValue, iocType }: Securit
 
   const [selectedTools, setSelectedTools] = React.useState<Set<string>>(new Set());
   const [selectedProfile, setSelectedProfile] = React.useState<string>("");
-  const [targetConfirmation, setTargetConfirmation] = React.useState("");
   const [authorizationConfirmed, setAuthorizationConfirmed] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
   const [cancellingRunId, setCancellingRunId] = React.useState<string | null>(null);
@@ -136,7 +139,6 @@ export function SecurityAssessmentPanel({ lookupId, iocValue, iocType }: Securit
   const canSubmit =
     selectedTools.size > 0 &&
     selectedProfile !== "" &&
-    targetConfirmation === iocValue &&
     authorizationConfirmed &&
     !starting;
 
@@ -144,8 +146,7 @@ export function SecurityAssessmentPanel({ lookupId, iocValue, iocType }: Securit
     setStarting(true);
     setError(null);
     try {
-      await runSecurityAssessment(lookupId, [...selectedTools], selectedProfile, targetConfirmation, authorizationConfirmed);
-      setTargetConfirmation("");
+      await runSecurityAssessment(lookupId, [...selectedTools], selectedProfile, iocValue, authorizationConfirmed);
       setAuthorizationConfirmed(false);
       refreshRuns();
     } catch (err) {
@@ -231,11 +232,9 @@ export function SecurityAssessmentPanel({ lookupId, iocValue, iocType }: Securit
               </select>
             )}
 
-            <Input
-              value={targetConfirmation}
-              onChange={(e) => setTargetConfirmation(e.target.value)}
-              placeholder={`Type "${iocValue}" to confirm the target`}
-            />
+            <p className="text-xs text-muted-foreground">
+              Target: <span className="font-mono text-foreground">{iocValue}</span>
+            </p>
 
             <label className="flex items-start gap-2 text-xs text-muted-foreground">
               <input
