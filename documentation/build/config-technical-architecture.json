@@ -1,0 +1,12 @@
+{
+  "docName": "HORIZON_GRID_TECHNICAL_ARCHITECTURE",
+  "title": "HORIZON GRID",
+  "subtitle": "Technical Architecture",
+  "kicker": "Architecture & Design",
+  "files": [
+    "tech-01-architecture.md",
+    "tech-02-dataflow.md",
+    "tech-05-database-architecture.md",
+    "standalone-linux-architecture-addendum.md"
+  ]
+}

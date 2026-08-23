@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_WINDOWS_INSTALLATION",
+  "title": "HORIZON GRID",
+  "subtitle": "Windows Installation Guide",
+  "kicker": "Installation",
+  "files": [
+    "standalone-windows-installation.md"
+  ]
+}

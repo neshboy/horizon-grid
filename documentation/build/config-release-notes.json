@@ -1,0 +1,10 @@
+{
+  "docName": "HORIZON_GRID_RELEASE_NOTES",
+  "title": "HORIZON GRID",
+  "subtitle": "Release Notes",
+  "kicker": "Release Notes",
+  "files": [
+    "standalone-release-notes.md",
+    "standalone-linux-release-notes-addendum.md"
+  ]
+}

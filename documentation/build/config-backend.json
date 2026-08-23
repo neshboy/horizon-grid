@@ -1,0 +1,17 @@
+{
+  "docName": "HORIZON_GRID_BACKEND_DOCUMENTATION",
+  "title": "HORIZON GRID",
+  "subtitle": "Backend / System Architecture Documentation",
+  "kicker": "Backend Documentation",
+  "files": [
+    "backend-01-overview-and-lifecycle.md",
+    "backend-02-api-reference.md",
+    "backend-03-database-reference.md",
+    "backend-04-provider-and-ai-integrations.md",
+    "backend-05-runtime-configuration-architecture.md",
+    "backend-06-security-architecture.md",
+    "backend-07-background-processing-and-caching.md",
+    "backend-08-deployment-and-troubleshooting.md",
+    "backend-09-security-assessment-toolkit.md"
+  ]
+}

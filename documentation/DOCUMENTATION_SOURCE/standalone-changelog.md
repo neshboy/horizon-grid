@@ -2,6 +2,16 @@
 
 All notable changes for the HORIZON GRID release are listed below, grouped by area. Every entry below reflects a real, tested change — not a planned or aspirational one.
 
+## v0.2.5 — Security Assessment panel visibility and friction fixes
+
+Two real bugs found and fixed while live-testing the Security Assessment Toolkit (the port scanner UI) against a fresh install. Both frontend-only: no backend logic, database schema, or API contract changed.
+
+**Panel visibility:** the entire Security Assessment panel — including its "Run" trigger form — silently disappeared with no explanation whenever an investigation's overall status ended up `FAILED`, even when every provider had succeeded. It was gated on `status === "completed"` alongside other panels (Verdict Analysis, Evidence, Pivot, Hunting Center, Copilot) that genuinely depend on a successful AI final assessment — but Security Assessment doesn't read `finalAssessment` at all, so a failed final-AI-call (e.g. the configured AI backend being temporarily unreachable) had nothing to do with whether this unrelated active-scan feature should be available. Now renders on either terminal state (`completed` or `failed`); the panels that do depend on the final assessment keep the original gate.
+
+**Confirmation friction:** the target-confirmation field required retyping the exact IOC value with zero feedback on any mismatch (no trim, no case-insensitivity, no error message) — a single stray space silently kept the "Run Security Assessment" button disabled forever, indistinguishable from a real bug. The retype step added friction without adding real protection beyond the existing authorization checkbox, since the backend already scopes every run to the specific investigation's own IOC regardless of what's typed. Replaced the input with a plain read-only "Target: `<value>`" line; the one authorization checkbox is now the sole confirmation gate.
+
+**Testing:** both bugs reproduced live against a real investigation and a real Nmap scan (not just unit tests) — confirmed broken before the fix, confirmed working (panel visible, scan runs and completes with zero typing) after. Full backend regression suite re-run clean after each change: 383 passed, 39 skipped, zero regressions. The Windows installer was verified via an isolated silent install confirming the fix is actually packaged into the shipped frontend source, then fully cleaned up (uninstalled, registry entry removed).
+
 ## v0.2.4 — Original visual identity and branding pass
 
 A professional branding + UI/UX pass across the entire frontend, requested because the product name and tagline ("Every Signal. One Operational Picture.") were previously barely visible anywhere in the running application. Presentation-only by design: no backend logic, database schema, authentication, IOC processing, AI provider logic, provider API logic, port scanner logic, or admin permissions were touched, verified by a full backend regression run (383 passed, 39 skipped) and a clean frontend typecheck both before and after every change.

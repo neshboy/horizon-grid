@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_LINUX_INSTALLATION",
+  "title": "HORIZON GRID",
+  "subtitle": "Linux Installation Guide",
+  "kicker": "User Documentation",
+  "files": [
+    "standalone-linux-installation.md"
+  ]
+}

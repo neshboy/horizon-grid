@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_MISSION_CRITICAL_OPERATIONS_MANUAL",
+  "title": "HORIZON GRID",
+  "subtitle": "Mission-Critical Operations Manual",
+  "kicker": "Mission-Critical Deployment",
+  "files": [
+    "standalone-mission-critical-operations-manual.md"
+  ]
+}

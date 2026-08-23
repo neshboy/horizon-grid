@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_FUNCTION_REFERENCE",
+  "title": "HORIZON GRID",
+  "subtitle": "Function Reference",
+  "kicker": "Complete Function Catalog",
+  "files": [
+    "standalone-function-reference.md"
+  ]
+}

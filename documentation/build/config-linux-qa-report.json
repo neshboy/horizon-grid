@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_LINUX_QA_REPORT",
+  "title": "HORIZON GRID",
+  "subtitle": "Linux Release QA Report",
+  "kicker": "Release Certification",
+  "files": [
+    "standalone-linux-qa-report.md"
+  ]
+}

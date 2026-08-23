@@ -21,8 +21,19 @@ out/
 *.tsbuildinfo
 npm-debug.log*
 
-# --- Generated documentation build pipeline (regenerate via documentation/build/build-doc-generic.js) ---
-documentation/build/
+# --- Documentation build pipeline: the scripts/configs under documentation/build/
+# ARE tracked (they're the only way to regenerate every PDF/DOCX in documentation/
+# from a fresh clone) -- only their generated intermediate output is ignored here.
+documentation/build/node_modules/
+documentation/build/*.html
+documentation/build/*-pass1.pdf
+documentation/build/pass1.pdf
+documentation/build/sections.json
+documentation/build/raw-screenshots/
+documentation/build/tmp_*.js
+documentation/build/walkthrough*.js
+documentation/build/chaos-*.js
+documentation/build/verify-dashboard-ws7.js
 documentation/pages_png/
 documentation/manual.txt
 

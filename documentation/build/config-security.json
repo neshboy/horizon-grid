@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_SECURITY",
+  "title": "HORIZON GRID",
+  "subtitle": "Security Documentation",
+  "kicker": "Security",
+  "files": [
+    "standalone-security.md"
+  ]
+}

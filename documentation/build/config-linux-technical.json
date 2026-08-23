@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_LINUX_TECHNICAL_DOCUMENTATION",
+  "title": "HORIZON GRID",
+  "subtitle": "Linux Technical Documentation",
+  "kicker": "Technical Documentation",
+  "files": [
+    "standalone-linux-technical.md"
+  ]
+}

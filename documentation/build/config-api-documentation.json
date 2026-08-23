@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_API_DOCUMENTATION",
+  "title": "HORIZON GRID",
+  "subtitle": "API Documentation",
+  "kicker": "API Reference",
+  "files": [
+    "standalone-api-documentation.md"
+  ]
+}

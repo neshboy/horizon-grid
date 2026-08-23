@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_TROUBLESHOOTING",
+  "title": "HORIZON GRID",
+  "subtitle": "Troubleshooting Guide",
+  "kicker": "Troubleshooting",
+  "files": [
+    "standalone-troubleshooting.md"
+  ]
+}

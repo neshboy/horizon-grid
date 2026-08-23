@@ -1,16 +1,24 @@
-# HORIZON GRID v0.2.4 — Release Notes
+# HORIZON GRID v0.2.5 — Release Notes
 
-**Release version:** 0.2.4
-**Release date:** 2026-08-21
-**Focus:** an original visual identity and professional branding pass across the entire frontend — presentation-only, no backend/logic changes.
+**Release version:** 0.2.5
+**Release date:** 2026-08-23
+**Focus:** two real Security Assessment (port scanner) UI bugs found and fixed via live testing — frontend-only, no backend/logic changes.
 
-## v0.2.4: visual identity and branding
+## v0.2.5: Security Assessment panel visibility and friction fixes
 
-The product name and tagline ("Every Signal. One Operational Picture.") were previously barely visible anywhere in the running application. This release adds an original visual identity ("Datum Signal": a CRT-phosphor teal-cyan primary color against a near-black anodized-steel shell), an original geometric logo mark that depicts the tagline itself, a six-state accessible operational-status language used consistently everywhere a status appears, a new `/about` page, and HORIZON GRID branding plus page numbering and Investigation IDs on every exported report. Full detail in `CHANGELOG.md`'s `[0.2.4]` entry and `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md`.
+Two bugs were found while live-testing the Security Assessment Toolkit against a fresh install. First, the entire Security Assessment panel — including its "Run" trigger form — silently disappeared with no explanation whenever an investigation's overall status ended up `FAILED`, even when every provider had succeeded; it was gated on `status === "completed"` alongside panels that genuinely depend on a successful AI final assessment, but Security Assessment doesn't read that data at all. Second, the target-confirmation field required retyping the exact IOC value with zero feedback on any mismatch — a stray space silently kept the Run button disabled forever. Full detail in `CHANGELOG.md`'s `[0.2.5]` entry and `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md`.
 
-Explicitly verified, not just claimed: a full backend regression run (383 passed, 39 skipped, zero regressions) and a clean frontend `tsc --noEmit` typecheck, both before and after every change in this release. One real bug was self-discovered and fixed during this release's own screenshot QA (a React hydration mismatch on the new `/about` page).
+Explicitly verified, not just claimed: both bugs were reproduced live against a real investigation and a real Nmap scan (not just unit tests) — confirmed broken before the fix, confirmed working after. Full backend regression suite re-run clean after each change: 383 passed, 39 skipped, zero regressions. The Windows installer was verified via an isolated silent install confirming the fix is actually packaged, then fully cleaned up.
 
-Everything below this line describes the prior v0.2.3 mission-critical hardening release, which v0.2.4 builds on unchanged — none of it was affected by the branding pass.
+Everything below this line describes the prior v0.2.4 branding pass and v0.2.3 mission-critical hardening release, which v0.2.5 builds on unchanged — neither was affected by these two UI fixes.
+
+## Major changes (v0.2.4)
+
+The product name and tagline ("Every Signal. One Operational Picture.") were previously barely visible anywhere in the running application. v0.2.4 added an original visual identity ("Datum Signal": a CRT-phosphor teal-cyan primary color against a near-black anodized-steel shell), an original geometric logo mark that depicts the tagline itself, a six-state accessible operational-status language used consistently everywhere a status appears, a new `/about` page, and HORIZON GRID branding plus page numbering and Investigation IDs on every exported report. Full detail in `CHANGELOG.md`'s `[0.2.4]` entry.
+
+Explicitly verified at the time: a full backend regression run (383 passed, 39 skipped, zero regressions) and a clean frontend `tsc --noEmit` typecheck, both before and after every change in that release. One real bug was self-discovered and fixed during that release's own screenshot QA (a React hydration mismatch on the new `/about` page).
+
+Everything below this line describes the prior v0.2.3 mission-critical hardening release, which v0.2.4 built on unchanged — none of it was affected by the branding pass.
 
 ## Major changes (v0.2.3)
 

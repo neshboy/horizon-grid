@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_PROVIDER_GUIDE",
+  "title": "HORIZON GRID",
+  "subtitle": "Provider Guide",
+  "kicker": "Intelligence Providers",
+  "files": [
+    "standalone-provider-guide.md"
+  ]
+}

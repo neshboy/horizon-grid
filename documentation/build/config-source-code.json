@@ -1,0 +1,16 @@
+{
+  "docName": "HORIZON_GRID_SOURCE_CODE_GUIDE",
+  "title": "HORIZON GRID",
+  "subtitle": "Source Code / Developer Documentation",
+  "kicker": "Developer Documentation",
+  "files": [
+    "dev-01-overview-stack-repo-structure.md",
+    "dev-02-frontend-architecture.md",
+    "dev-03-backend-architecture-and-request-flow.md",
+    "dev-04-provider-and-ai-architecture.md",
+    "dev-05-runtime-configuration-and-credentials.md",
+    "dev-06-testing-and-build.md",
+    "dev-07-extension-points.md",
+    "dev-08-developer-troubleshooting.md"
+  ]
+}

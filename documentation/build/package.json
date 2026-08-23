@@ -1,0 +1,19 @@
+{
+  "name": "ioc-intel-doc-build",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local build tooling for rendering the final PDF/DOCX documentation deliverables. Not part of the product.",
+  "type": "commonjs",
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.10",
+    "docx": "^9.7.1",
+    "html-to-docx": "^1.8.0",
+    "image-size": "^2.0.2",
+    "jszip": "^3.10.1",
+    "marked": "^18.0.9",
+    "mermaid": "^11.16.1",
+    "pdf-parse": "^2.4.5",
+    "puppeteer-core": "^25.6.0",
+    "sharp": "^0.35.3"
+  }
+}

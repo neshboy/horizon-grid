@@ -1,0 +1,10 @@
+{
+  "docName": "HORIZON_GRID_README",
+  "title": "HORIZON GRID",
+  "subtitle": "Product Overview",
+  "kicker": "README",
+  "files": [
+    "standalone-readme.md",
+    "standalone-linux-readme-addendum.md"
+  ]
+}

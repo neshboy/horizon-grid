@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_AI_GUIDE",
+  "title": "HORIZON GRID",
+  "subtitle": "AI Guide",
+  "kicker": "AI Configuration & Architecture",
+  "files": [
+    "standalone-ai-guide.md"
+  ]
+}

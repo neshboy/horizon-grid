@@ -1,5 +1,13 @@
 # HORIZON GRID — Release Notes
 
+## v0.2.5 — Security Assessment panel visibility and friction fixes
+
+Two real bugs found and fixed while live-testing the Security Assessment Toolkit (the port scanner UI) against a fresh install. Both frontend-only: no backend logic, database schema, or API contract changed, confirmed by a full backend regression run (383 passed, 39 skipped, zero regressions) before and after.
+
+The Security Assessment panel -- including its "Run" trigger form -- was silently disappearing with no explanation whenever an investigation's overall status ended up `FAILED`, even when every provider had succeeded, because it was incorrectly gated alongside panels that genuinely need a successful AI final assessment. It now renders whenever the investigation reached either terminal state. Separately, the target-confirmation field required retyping the exact IOC value with zero feedback on a mismatch, silently disabling the Run button on a single stray space -- replaced with a plain read-only target display, keeping the one authorization checkbox as the sole confirmation gate.
+
+Both bugs were reproduced live against a real investigation and a real Nmap scan, not just caught by unit tests. No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
+
 ## v0.2.4 — Original visual identity and branding pass
 
 A professional branding + UI/UX pass across the entire application -- previously the product name and tagline ("Every Signal. One Operational Picture.") were barely visible anywhere in the running app. This release is presentation-only: no backend logic, database schema, authentication, IOC processing, AI/provider logic, port scanner logic, or admin permissions were modified, confirmed by a full backend regression run (383 passed, 39 skipped, zero regressions) and a clean frontend typecheck before and after.
@@ -54,7 +62,7 @@ HORIZON GRID is the renamed, significantly extended release of this platform (pr
 
 Re-running the installer on an existing install preserves your configuration, credentials, and all investigation/case/watchlist data — nothing about this release requires starting over. Internal identifiers (data folder location, database name) are unchanged from before the rename specifically so an upgrade is safe.
 
-## Known limitations (current, as of v0.2.4 -- unchanged by the v0.2.4 branding pass, which touched presentation only)
+## Known limitations (current, as of v0.2.5 -- unchanged by the v0.2.5 fixes or the v0.2.4 branding pass, both of which touched presentation only)
 
 - No automated host-disk-space alerting, and no retention/cleanup job for ever-growing investigation tables.
 - No off-host/off-site backup copy option — backups are local-disk-only, which does not protect a genuinely remote site against the host/disk itself failing.
@@ -67,4 +75,4 @@ Re-running the installer on an existing install preserves your configuration, cr
 
 ## Verdict
 
-**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (v0.2.4). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict; the v0.2.4 branding pass changed presentation only and does not affect it.
+**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (as of v0.2.3, unchanged through v0.2.4 and v0.2.5). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict; neither the v0.2.4 branding pass nor the v0.2.5 fixes touched anything this verdict covers.

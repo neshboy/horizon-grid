@@ -1,0 +1,9 @@
+{
+  "docName": "HORIZON_GRID_THREAT_SCORING",
+  "title": "HORIZON GRID",
+  "subtitle": "Threat Scoring",
+  "kicker": "Scoring Engine",
+  "files": [
+    "standalone-threat-scoring.md"
+  ]
+}

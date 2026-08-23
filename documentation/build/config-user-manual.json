@@ -1,0 +1,22 @@
+{
+  "docName": "HORIZON_GRID_USER_MANUAL",
+  "title": "HORIZON GRID",
+  "subtitle": "End-User Manual",
+  "kicker": "User Documentation",
+  "files": [
+    "user-01-front-matter.md",
+    "user-02-user-journey.md",
+    "user-03-installation.md",
+    "user-04-first-run.md",
+    "user-05-ioc-investigation.md",
+    "user-06-providers.md",
+    "user-07-ai-analysis.md",
+    "user-08-evidence-correlation.md",
+    "user-09-cases-basket.md",
+    "user-10-export-reporting.md",
+    "user-11-soc-workflow.md",
+    "user-12-health-troubleshooting.md",
+    "user-13-security-data-handling.md",
+    "user-14-faq-best-practices-quick-reference.md"
+  ]
+}

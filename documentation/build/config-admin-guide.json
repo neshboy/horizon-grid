@@ -1,0 +1,10 @@
+{
+  "docName": "HORIZON_GRID_ADMIN_GUIDE",
+  "title": "HORIZON GRID",
+  "subtitle": "Administrator Guide",
+  "kicker": "Administration",
+  "files": [
+    "standalone-admin-guide.md",
+    "standalone-linux-admin-addendum.md"
+  ]
+}

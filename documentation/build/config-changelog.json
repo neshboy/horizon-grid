@@ -1,0 +1,10 @@
+{
+  "docName": "HORIZON_GRID_CHANGELOG",
+  "title": "HORIZON GRID",
+  "subtitle": "Changelog",
+  "kicker": "Changelog",
+  "files": [
+    "standalone-changelog.md",
+    "standalone-linux-changelog-addendum.md"
+  ]
+}

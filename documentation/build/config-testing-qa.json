@@ -1,0 +1,10 @@
+{
+  "docName": "HORIZON_GRID_TESTING_QA",
+  "title": "HORIZON GRID",
+  "subtitle": "Testing & QA Documentation",
+  "kicker": "Testing & QA",
+  "files": [
+    "standalone-testing-qa.md",
+    "standalone-linux-testing-addendum.md"
+  ]
+}
