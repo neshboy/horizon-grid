@@ -132,7 +132,7 @@ Matching standard Windows conventions:
 
 Re-run the installer with a newer version, or launch **Configuration** from
 the Start Menu on an existing install. The wizard detects an existing
-configuration automatically ("Reconfigure IOC Intelligence Platform" instead
+configuration automatically ("Reconfigure HORIZON GRID" instead
 of "Welcome") and:
 
 - Pre-fills every setting with your current values.

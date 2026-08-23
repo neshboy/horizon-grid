@@ -1,4 +1,4 @@
-# IOC Intelligence Platform -- Kubernetes manifests
+# HORIZON GRID -- Kubernetes manifests
 
 Plain-YAML, kustomize-compatible manifests under `k8s/base/` -- a direct
 translation of `docker-compose.yml` (postgres, redis, neo4j, opensearch,
