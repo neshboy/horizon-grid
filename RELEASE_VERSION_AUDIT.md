@@ -1,5 +1,15 @@
 # HORIZON GRID — Release Version Audit
 
+**Update note (2026-08-24):** the application version has since moved to **0.3.0** — unlike every
+prior update note below, this one is NOT a no-op for the subsystems this audit describes: v0.3.0 adds
+a wholly new backend module (`backend/app/pentest/`), three new database tables plus a fourth added in
+a follow-up migration, five new permission strings, and two new API route files. None of it modifies
+anything this audit already covers (IOC investigation, AI/provider architecture, the existing Security
+Assessment Toolkit, RBAC for the roles/permissions already listed below all remain exactly as audited).
+For the new subsystem itself, see `docs/PENTEST_SUITE.md`, `documentation/DOCUMENTATION_SOURCE/
+backend-10-pentest-suite.md`, and the Security documentation's new §13 -- not duplicated here, since
+this file's own scope is a point-in-time audit of the codebase as it stood before that work began.
+
 **Update note (2026-08-23):** the application version has since moved to **0.2.5** (two frontend-only
 Security Assessment UI fixes -- see `CHANGELOG.md`'s `[0.2.5]` entry; no backend/database/auth/IOC/AI/
 provider/scanner logic changed). Everything else in this audit document below remains accurate, since

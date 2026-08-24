@@ -172,6 +172,31 @@ evidence/correlation/AI pipeline used by ordinary provider lookups, and a
 refresh re-runs the deterministic scoring engine using the new finding
 severities as a floor on the risk score.
 
+### Pentest Suite
+
+A standalone, scope-enforced assessment lifecycle (`backend/app/pentest/`) —
+DISCOVER → ENUMERATE → ASSESS → CORRELATE → PRIORITIZE → REPORT — distinct
+from the Security Assessment Toolkit above, which stays tightly bound to a
+single investigation's own IOC. Declare a scope (CIDR ranges/domains — an
+empty scope authorizes nothing), add targets inside it, and run an automated
+scan pipeline with full pause/resume/cancel/emergency-stop control plus a
+global, admin-only kill switch. Findings carry a confidence rating
+(`Confirmed`/`Likely`/`Potential`/`Informational`) alongside severity, and an
+AI Security Analyst can explain any finding or summarize a whole assessment,
+grounded strictly in real data.
+
+For administrators only: **Exploit Validation**, a real, self-hosted
+Metasploit Framework connection baked into the backend's own Docker image.
+Reachable only for a finding with a matched CVE, only after manually
+selecting one specific module, and real execution requires an explicit
+confirmation on every single request — the target host is always locked to
+the finding's own real target regardless of what's entered in the options
+form. This is genuine exploit-module execution, not a simulation; see
+[docs/PENTEST_SUITE.md](docs/PENTEST_SUITE.md) for the full safety model,
+including the five independent gates between "an assessment exists" and "a
+real exploit ran," and only ever point it at systems you own or are
+explicitly authorized to test.
+
 ### Reliability and mission-critical deployment
 
 Hardened for a one-time install at a remote site with no developer access
@@ -202,7 +227,7 @@ afterward (full detail in the Mission-Critical Operations Manual):
 | Code/package signing | Not code-signed — SmartScreen will warn; click "Run anyway" | Not signed (standard for `.deb` packages) |
 | Uninstall (keep data) | "Remove Application" — stops containers, no volume deletion | `apt remove horizon-grid` — stops containers, no volume deletion |
 | Uninstall (delete everything) | "Remove Everything" — requires typing `DELETE`; deletes volumes and all config/data | `apt purge horizon-grid` — force-removes containers/volumes and deletes all config/data |
-| Current version | 0.2.3 | 0.2.3 |
+| Current version | 0.3.0 | 0.3.0 |
 
 ## Architecture
 
@@ -245,8 +270,8 @@ administrator privileges; 64-bit Windows only.
 ### Linux package
 
 Built via `linux/build-deb.sh` (requires a Debian/Ubuntu host; produces
-`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.2.3_amd64.deb`).
-Install with `sudo dpkg -i horizon-grid_0.2.3_amd64.deb`, then run the
+`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.3.0_amd64.deb`).
+Install with `sudo dpkg -i horizon-grid_0.3.0_amd64.deb`, then run the
 terminal setup wizard as root to configure the admin account, AI backend,
 providers, and ports; the platform is then managed via the `horizon-grid`
 systemd-backed CLI (`start` / `stop` / `restart`).

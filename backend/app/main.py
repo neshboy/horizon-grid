@@ -22,6 +22,8 @@ from app.api.routes import (
     dashboard,
     hunting,
     lookup,
+    pentest,
+    pentest_exploit,
     pivot,
     providers,
     runtime,
@@ -56,7 +58,7 @@ structlog.configure(processors=[structlog.processors.JSONRenderer()])
 
 settings = get_settings()
 
-_APP_VERSION = "0.2.5"
+_APP_VERSION = "0.3.0"
 # Process start time, for /health's uptime field -- confirmed live that no
 # version or uptime indicator was visible anywhere an operator would look
 # (the FastAPI version= below only ever surfaces via /docs' OpenAPI schema).
@@ -180,6 +182,8 @@ app.include_router(cases.router, prefix=settings.api_v1_prefix)
 app.include_router(runtime.router, prefix=settings.api_v1_prefix)
 app.include_router(admin.router, prefix=settings.api_v1_prefix)
 app.include_router(security_assessment.router, prefix=settings.api_v1_prefix)
+app.include_router(pentest.router, prefix=settings.api_v1_prefix)
+app.include_router(pentest_exploit.router, prefix=settings.api_v1_prefix)
 app.include_router(dashboard.router, prefix=settings.api_v1_prefix)
 
 
@@ -201,6 +205,21 @@ async def _warn_if_jwt_secret_is_a_placeholder() -> None:
             "Every access/refresh token this server issues can be forged by anyone who "
             "knows this default. Generate a real random secret and set it in .env before "
             "exposing this instance to anything but localhost."
+        )
+
+
+@app.on_event("startup")
+async def _warn_if_msf_rpc_password_is_a_placeholder() -> None:
+    """Same reasoning as the JWT-secret warning above, for the Metasploit
+    RPC password (app/pentest/exploit.py's gated real-exploit-validation
+    feature) -- mitigated by msfrpcd being bound to 127.0.0.1 only (nothing
+    outside this container can reach it regardless), but a fresh install
+    that never overrode MSF_RPC_PASSWORD should still know that."""
+    if settings.msf_rpc_password == "horizon-grid-msf-rpc-local":
+        logging.getLogger(__name__).warning(
+            "MSF_RPC_PASSWORD is still set to its default placeholder value. This only "
+            "matters if msfrpcd is ever reachable from outside this container (it isn't, "
+            "by default -- bound to 127.0.0.1) -- override it in .env if that ever changes."
         )
 
 

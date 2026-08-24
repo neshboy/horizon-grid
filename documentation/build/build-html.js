@@ -4,10 +4,10 @@ const path = require('path');
 const OUT_DIR = __dirname;
 const { frontSections, techSections } = JSON.parse(fs.readFileSync(path.join(OUT_DIR, 'sections.json'), 'utf8'));
 
-const TODAY = '2026-08-23';
-const VERSION = '0.2.5';
+const TODAY = '2026-08-24';
+const VERSION = '0.3.0';
 const INSTALLER_FILENAME = `HORIZON-GRID-Setup-${VERSION}.exe`;
-const INSTALLER_SHA256 = '98dee90cfb16a9c9b2bd56611ba024225fa0261c20386765171fe79e01d198c2';
+const INSTALLER_SHA256 = '8faeb24586cde4a737d57e84ff3c836b48f2631cadab4526f0d6461403209def';
 
 const CSS = `
   @page { size: A4; margin: 135px 45px 80px 45px; }

@@ -1,10 +1,22 @@
-# HORIZON GRID v0.2.5 — Release Notes
+# HORIZON GRID v0.3.0 — Release Notes
 
-**Release version:** 0.2.5
-**Release date:** 2026-08-23
-**Focus:** two real Security Assessment (port scanner) UI bugs found and fixed via live testing — frontend-only, no backend/logic changes.
+**Release version:** 0.3.0
+**Release date:** 2026-08-24
+**Focus:** a new, standalone Pentest Suite (scope-enforced assessments, DISCOVER→ENUMERATE→ASSESS→REPORT) plus a heavily gated, real Metasploit exploit-validation capability for administrators.
 
-## v0.2.5: Security Assessment panel visibility and friction fixes
+## v0.3.0: Pentest Suite — scope-enforced assessments and gated real-exploit validation
+
+A new assessment subsystem, separate from the existing per-investigation Security Assessment Toolkit (untouched by this release): declare a scope, add targets inside it, run an automated discovery/enumeration/vulnerability-assessment pipeline, review findings with a confidence rating alongside severity, and get an AI-written executive summary grounded strictly in real findings. Full pause/resume/cancel/emergency-stop control, plus a global admin-only kill switch.
+
+The one genuinely new, real capability: administrators can run an actual Metasploit exploit module against a finding that has a matched CVE. This is real execution, not a simulation, gated by five independent checks with no shortcut past any of them — a declared scope, a target inside it, a completed scan producing a CVE-matched finding, a manually selected specific module, and (for real execution, not the safe non-exploiting "check" mode) an explicit confirmation on every single request. The target host is always locked to the finding's own real target regardless of what's entered in the options form.
+
+A dedicated adversarial security review ran before release specifically to try to break these guarantees. It found and closed one real confidentiality bug (exploit-attempt transcripts — which can contain genuine post-exploitation output — were briefly readable by the Analyst/Viewer roles instead of admin-only) and hardened several defense-in-depth points (a redundant role check inside the service layer, and the global kill switch now aborting an in-flight run within about a second instead of only blocking the next one). Two further real bugs were found and fixed during live testing against an actual running Metasploit instance: a message-encoding mismatch that permanently made Metasploit look unreachable even while running correctly, and a shared UI dialog component with no scroll handling that could hide a long module's own action buttons below the screen. Full detail in `CHANGELOG.md`'s `[0.3.0]` entry, `docs/PENTEST_SUITE.md`, and the Security documentation's new §13.
+
+Explicitly verified, not just claimed: the backend test suite grew from 404 to 432 passing tests, zero regressions. Verified live end-to-end against a real, running Metasploit installation — a real module search by CVE, real module metadata retrieval, and a real non-exploiting check run against an authorized test target, honestly reporting what it actually found. This subsystem requires the backend's Docker image to include Metasploit Framework at build time (a large, ~1-2 GB addition); a fresh install that hasn't finished that build degrades gracefully — the feature reports itself unavailable rather than failing.
+
+Everything below this line describes the prior v0.2.5 UI-fix release and earlier, which v0.3.0 builds on unchanged — none of it was affected by this release's work.
+
+## Major changes (v0.2.5)
 
 Two bugs were found while live-testing the Security Assessment Toolkit against a fresh install. First, the entire Security Assessment panel — including its "Run" trigger form — silently disappeared with no explanation whenever an investigation's overall status ended up `FAILED`, even when every provider had succeeded; it was gated on `status === "completed"` alongside panels that genuinely depend on a successful AI final assessment, but Security Assessment doesn't read that data at all. Second, the target-confirmation field required retyping the exact IOC value with zero feedback on any mismatch — a stray space silently kept the Run button disabled forever. Full detail in `CHANGELOG.md`'s `[0.2.5]` entry and `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md`.
 

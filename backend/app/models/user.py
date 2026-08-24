@@ -53,6 +53,12 @@ ROLE_PERMISSIONS: dict[Role, set[str]] = {
         "basket:manage", "case:create", "case:read", "case:write", "case:close",
         "security_assessment:create", "security_assessment:read",
         "dashboard:read",
+        "pentest:create", "pentest:read", "pentest:validate", "pentest:admin",
+        # Deliberately ADMIN-only, not granted to ANALYST like the other
+        # pentest:* permissions above -- this gates real exploit-module
+        # execution (app/pentest/exploit.py), materially more dangerous
+        # than pentest:validate's non-destructive re-check catalog.
+        "pentest:exploit",
     },
     Role.ANALYST: {
         "lookup:create", "lookup:read", "lookup:export",
@@ -60,9 +66,11 @@ ROLE_PERMISSIONS: dict[Role, set[str]] = {
         "basket:manage", "case:create", "case:read", "case:write", "case:close",
         "security_assessment:create", "security_assessment:read",
         "dashboard:read",
+        "pentest:create", "pentest:read", "pentest:validate",
     },
     Role.VIEWER: {
         "lookup:read", "evidence:read", "case:read", "security_assessment:read",
         "dashboard:read",
+        "pentest:read",
     },
 }

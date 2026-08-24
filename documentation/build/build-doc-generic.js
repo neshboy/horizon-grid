@@ -16,8 +16,8 @@ const SRC = 'C:\\Users\\User\\ioc-intel-platform\\documentation\\DOCUMENTATION_S
 const SHOTS_DIR = 'C:\\Users\\User\\ioc-intel-platform\\documentation\\SCREENSHOTS';
 const DIAGRAMS_DIR = 'C:\\Users\\User\\ioc-intel-platform\\documentation\\ARCHITECTURE_DIAGRAMS';
 const OUT_DIR = 'C:\\Users\\User\\ioc-intel-platform\\documentation';
-const TODAY = '2026-08-23';
-const VERSION = '0.2.5';
+const TODAY = '2026-08-24';
+const VERSION = '0.3.0';
 
 const CONTENT_WIDTH_PX = 700;
 const CONTENT_HEIGHT_PX = 860;

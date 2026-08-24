@@ -146,10 +146,19 @@ services:
     # concurrent scans in security_assessment.py, a belt-and-suspenders
     # pair -- the cap bounds how many can run at once, this limits the
     # damage if that cap is ever raised or a single run is unusually heavy).
-    mem_limit: 2g
+    # Bumped 2g -> 4g for the Metasploit Framework install + its own
+    # msfrpcd daemon (started below) -- a full Ruby-based exploit
+    # framework's module cache and RPC server add real memory footprint on
+    # top of everything already listed above.
+    mem_limit: 4g
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ioc}:${POSTGRES_PASSWORD:-ioc}@postgres:5432/${POSTGRES_DB:-ioc_intel}
+      # Metasploit RPC daemon credentials -- msfrpcd (started below, bound to
+      # 127.0.0.1 only) is reachable from nowhere but this container's own
+      # backend process, so exposure risk from a guessable default is low,
+      # but still overridable via .env like every other credential here.
+      MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-horizon-grid-msf-rpc-local}
       # app-backend is the ONLY process that serves concurrent user-facing HTTP
       # traffic (celery_worker/celery_beat below deliberately do NOT set these,
       # falling back to config.py's much smaller defaults -- see that file's
@@ -205,11 +214,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      # Bumped 30s -> 60s: msfrpcd (started below) now also needs to come up
+      # before this container is "ready" in any meaningful sense, even
+      # though /health/detailed itself never checks it directly.
+      start_period: 60s
     volumes:
       - ./backend:/app
     command: >
-      sh -c "alembic upgrade head &&
+      sh -c "msfrpcd -f -P \"$$MSF_RPC_PASSWORD\" -S -a 127.0.0.1 -p 55553 -U msf &
+             alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
 

@@ -42,6 +42,7 @@ import {
   Activity,
   Briefcase,
   ChevronDown,
+  Crosshair,
   FolderKanban,
   LayoutDashboard,
   Settings2,
@@ -58,7 +59,7 @@ function matchesRoute(pathname: string | null, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-const NAV_HREFS = ["/dashboard", "/dashboard/provider-health", "/basket", "/cases", "/providers", "/admin"];
+const NAV_HREFS = ["/dashboard", "/dashboard/provider-health", "/basket", "/cases", "/pentest", "/providers", "/admin"];
 
 /** Longest (most specific) href that matches the current pathname, if any. */
 function resolveActiveHref(pathname: string | null): string | null {
@@ -164,6 +165,7 @@ export function WorkspaceNav() {
   const basketActive = activeHref === "/basket";
   const casesActive = activeHref === "/cases";
   const providerHealthActive = activeHref === "/dashboard/provider-health";
+  const pentestActive = activeHref === "/pentest";
   const providersActive = activeHref === "/providers";
   const adminActive = activeHref === "/admin";
   const intelligenceActive = basketActive || matchesRoute(pathname, "/lookup");
@@ -197,6 +199,12 @@ export function WorkspaceNav() {
       <NavGroup label="Operations" active={providerHealthActive}>
         <NavLink href="/dashboard/provider-health" active={providerHealthActive} icon={Activity}>
           Provider Health
+        </NavLink>
+      </NavGroup>
+
+      <NavGroup label="Pentest" active={pentestActive}>
+        <NavLink href="/pentest" active={pentestActive} icon={Crosshair}>
+          Pentest
         </NavLink>
       </NavGroup>
 

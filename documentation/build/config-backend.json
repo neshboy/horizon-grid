@@ -12,6 +12,7 @@
     "backend-06-security-architecture.md",
     "backend-07-background-processing-and-caching.md",
     "backend-08-deployment-and-troubleshooting.md",
-    "backend-09-security-assessment-toolkit.md"
+    "backend-09-security-assessment-toolkit.md",
+    "backend-10-pentest-suite.md"
   ]
 }

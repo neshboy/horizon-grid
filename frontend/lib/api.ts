@@ -19,6 +19,14 @@ import type {
   IntelligenceGaps,
   IOCComparisonResponse,
   NetworkInfo,
+  PentestAssessment,
+  PentestExploitAttempt,
+  PentestExploitModuleCandidate,
+  PentestExploitModuleOptions,
+  PentestFinding,
+  PentestFindingExplanation,
+  PentestAssessmentSummaryReport,
+  PentestValidationChecks,
   PivotSuggestion,
   ProviderResult,
   ProviderSummary,
@@ -787,6 +795,268 @@ export async function cancelSecurityAssessmentRun(runId: string): Promise<{ run_
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || "Failed to cancel security assessment run");
+  }
+  return res.json();
+}
+
+// --- Pentest Suite ---
+// See backend/app/api/routes/pentest.py. Distinct from the Security
+// Assessment Toolkit above -- a standalone, scope-enforced assessment
+// workflow, not tied to a single IOC lookup.
+
+export async function getPentestKillSwitch(): Promise<{ engaged: boolean }> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/kill-switch`);
+  if (!res.ok) throw new Error("Failed to fetch pentest kill switch status");
+  return res.json();
+}
+
+export async function engagePentestKillSwitch(): Promise<{ engaged: boolean }> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/kill-switch/engage`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to engage the pentest kill switch");
+  }
+  return res.json();
+}
+
+export async function disengagePentestKillSwitch(): Promise<{ engaged: boolean }> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/kill-switch/disengage`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to disengage the pentest kill switch");
+  }
+  return res.json();
+}
+
+export async function getPentestValidationChecks(): Promise<PentestValidationChecks> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/validation-checks`);
+  if (!res.ok) throw new Error("Failed to fetch pentest validation checks");
+  return res.json();
+}
+
+export async function createPentestAssessment(
+  name: string,
+  profile: string,
+  scopeDefinition: Record<string, unknown>,
+  description?: string,
+  maxRuntimeMinutes?: number,
+  maxRequests?: number
+): Promise<PentestAssessment> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name,
+      description: description ?? null,
+      profile,
+      scope_definition: scopeDefinition,
+      ...(maxRuntimeMinutes !== undefined ? { max_runtime_minutes: maxRuntimeMinutes } : {}),
+      ...(maxRequests !== undefined ? { max_requests: maxRequests } : {}),
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to create pentest assessment");
+  }
+  return res.json();
+}
+
+export async function listPentestAssessments(): Promise<PentestAssessment[]> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments`);
+  if (!res.ok) throw new Error("Failed to fetch pentest assessments");
+  return res.json();
+}
+
+export async function getPentestAssessment(assessmentId: string): Promise<PentestAssessment> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}`);
+  if (!res.ok) throw new Error("Failed to fetch pentest assessment");
+  return res.json();
+}
+
+export async function updatePentestScope(
+  assessmentId: string,
+  scopeDefinition: Record<string, unknown>
+): Promise<PentestAssessment> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/scope`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope_definition: scopeDefinition }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to update assessment scope");
+  }
+  return res.json();
+}
+
+export async function addPentestTarget(
+  assessmentId: string,
+  targetType: string,
+  value: string,
+  options?: { port?: number; assetLabel?: string; environment?: string; targetGroup?: string }
+): Promise<PentestAssessment["targets"][number]> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/targets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      target_type: targetType,
+      value,
+      port: options?.port ?? null,
+      asset_label: options?.assetLabel ?? null,
+      environment: options?.environment ?? null,
+      target_group: options?.targetGroup ?? null,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to add pentest target");
+  }
+  return res.json();
+}
+
+export async function startPentestAssessment(assessmentId: string, toolIds?: string[]): Promise<Record<string, unknown>> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool_ids: toolIds ?? null }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to start pentest assessment");
+  }
+  return res.json();
+}
+
+export async function pausePentestAssessment(assessmentId: string): Promise<Record<string, unknown>> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/pause`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to pause pentest assessment");
+  }
+  return res.json();
+}
+
+export async function resumePentestAssessment(assessmentId: string): Promise<Record<string, unknown>> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/resume`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to resume pentest assessment");
+  }
+  return res.json();
+}
+
+export async function cancelPentestAssessment(assessmentId: string): Promise<Record<string, unknown>> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/cancel`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to cancel pentest assessment");
+  }
+  return res.json();
+}
+
+export async function emergencyStopPentestAssessment(assessmentId: string): Promise<Record<string, unknown>> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/emergency-stop`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to emergency-stop pentest assessment");
+  }
+  return res.json();
+}
+
+export async function listPentestFindings(assessmentId: string): Promise<PentestFinding[]> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/findings`);
+  if (!res.ok) throw new Error("Failed to fetch pentest findings");
+  return res.json();
+}
+
+export async function getPentestAssessmentSummary(assessmentId: string): Promise<PentestAssessmentSummaryReport> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/summary`);
+  if (!res.ok) throw new Error("Failed to fetch pentest assessment summary");
+  return res.json();
+}
+
+export async function validatePentestFinding(findingId: string, checkId: string): Promise<PentestFinding> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/findings/${findingId}/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ check_id: checkId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to validate pentest finding");
+  }
+  return res.json();
+}
+
+export async function explainPentestFinding(findingId: string): Promise<PentestFindingExplanation> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/findings/${findingId}/explain`);
+  if (!res.ok) throw new Error("Failed to fetch pentest finding explanation");
+  return res.json();
+}
+
+// --- Pentest Suite: gated real-exploit validation (Metasploit) ---
+// See backend/app/api/routes/pentest_exploit.py. pentest:exploit is
+// ADMIN-only server-side; every mode="exploit" call requires confirmed=true
+// on every single request -- never cached/remembered client-side.
+
+export async function getMsfHealth(): Promise<{ available: boolean }> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/msf/health`);
+  if (!res.ok) throw new Error("Failed to fetch Metasploit health");
+  return res.json();
+}
+
+export async function searchExploitModulesForFinding(findingId: string): Promise<PentestExploitModuleCandidate[]> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/findings/${findingId}/exploit/modules`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to search exploit modules");
+  }
+  return res.json();
+}
+
+export async function getExploitModuleOptions(moduleFullname: string): Promise<PentestExploitModuleOptions> {
+  const res = await authedFetch(
+    `${getApiUrl()}/api/v1/pentest/exploit/modules/options?module_fullname=${encodeURIComponent(moduleFullname)}`
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to fetch module options");
+  }
+  return res.json();
+}
+
+export async function runExploitAttempt(
+  findingId: string,
+  moduleFullname: string,
+  options: Record<string, unknown>,
+  mode: "check" | "exploit",
+  confirmed: boolean
+): Promise<PentestExploitAttempt> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/findings/${findingId}/exploit/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ module_fullname: moduleFullname, options, mode, confirmed }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to run exploit action");
+  }
+  return res.json();
+}
+
+export async function listExploitAttempts(assessmentId: string): Promise<PentestExploitAttempt[]> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/assessments/${assessmentId}/exploit-attempts`);
+  if (!res.ok) throw new Error("Failed to fetch exploit attempts");
+  return res.json();
+}
+
+export async function stopExploitSession(attemptId: string): Promise<{ stopped: boolean; session_id: number }> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/pentest/exploit-attempts/${attemptId}/stop-session`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to stop session");
   }
   return res.json();
 }

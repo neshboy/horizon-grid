@@ -20,6 +20,19 @@ from app.models.security_assessment import (
     SecurityAssessmentRunStatus,
     Severity,
 )
+from app.models.pentest import (
+    PentestAssessment,
+    PentestTarget,
+    PentestFinding,
+    PentestAssessmentStatus,
+    PentestProfile,
+    PentestTargetStatus,
+    PentestFindingConfidence,
+    PentestFindingStatus,
+    PentestExploitAttempt,
+    PentestExploitMode,
+    PentestExploitStatus,
+)
 
 __all__ = [
     "Base",
@@ -48,4 +61,15 @@ __all__ = [
     "SecurityAssessmentFinding",
     "SecurityAssessmentRunStatus",
     "Severity",
+    "PentestAssessment",
+    "PentestTarget",
+    "PentestFinding",
+    "PentestAssessmentStatus",
+    "PentestProfile",
+    "PentestTargetStatus",
+    "PentestFindingConfidence",
+    "PentestFindingStatus",
+    "PentestExploitAttempt",
+    "PentestExploitMode",
+    "PentestExploitStatus",
 ]

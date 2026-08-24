@@ -213,6 +213,72 @@ This platform's own release process treats "known limitation, disclosed" as a ma
 
 Two positive, verified findings from the same release round out this section honestly: a full cross-cutting RBAC sweep of every mission-touched route came back clean (§2), and a dedicated red-team review found **no SQL injection risk in any query** in the same body of work (every query is parameterized via SQLAlchemy Core), **no auth bypass, no privilege escalation, no cross-user data leak, no credential leak, no command injection, and no database corruption** anywhere in that release's surface. The scoring-engine correlation-flood fix (§8), in particular, has progressed all the way from "found, fixed, unit-tested" to fully live-verified end-to-end on a fresh, real, user-installed instance -- it is not carried in this list as an open item, precisely because it no longer is one.
 
+## 13. Pentest Suite: Scope-Enforced Assessment and Gated Exploit Validation
+
+The Pentest Suite (full architecture: `backend-10-pentest-suite.md`; user-facing
+reference: [PENTEST_SUITE.md](PENTEST_SUITE.md)) is this platform's only subsystem
+capable of real exploit execution, so its safety model is documented here
+explicitly rather than folded into a general feature description.
+
+**Scope enforcement is the root control.** Every assessment starts with an empty
+`scope_definition` (`{"cidrs": [...], "domains": [...]}`), and an empty scope
+authorizes nothing -- a target outside the declared scope is rejected outright, with
+no code path that expands scope automatically at scan time. This is checked by one
+shared `_is_in_scope()` function that both the autonomous scan pipeline and the
+exploit-validation feature import and call identically, so scope semantics cannot
+drift between the two.
+
+**Exploit execution has five independent gates, all of which must be satisfied in
+order, with no shortcut past any of them:** an explicitly declared scope; a target
+added inside it; a completed scan that produced a finding with a real CVE; an
+`ADMIN` manually searching and selecting one specific Metasploit module for that one
+finding; and, for real execution (not the non-exploiting `check` mode), an explicit
+`confirmed: true` on that exact request, required fresh every single time -- there is
+no way to set this once and have it apply to a later call.
+
+**The one hard technical guarantee: RHOSTS is always the finding's real target,
+never a caller-supplied value.** `_lock_rhosts()` strips any caller-supplied
+`RHOST`/`RHOSTS` (case-insensitively) and re-inserts the real target value last --
+since the console-write loop iterates the options dict in insertion order, the real
+target is always the final `set RHOSTS ...` line sent to Metasploit, regardless of
+what a caller tries to smuggle in first. This was specifically adversarially
+re-verified, including against homoglyph/whitespace key tricks, and held. It is a
+narrower guarantee than "network activity can only touch the target," stated
+precisely as such: `LHOST`/`SRVHOST` and similar reverse-payload/listener options are
+deliberately not locked, since an `ADMIN` legitimately needs those pointed at their
+own infrastructure.
+
+**Every option value is checked for embedded newlines before being sent to a real
+msfconsole session**, closing a console-command-injection path a crafted option
+value could otherwise use to inject an unintended additional command.
+
+**`pentest:exploit` is its own, `ADMIN`-only permission** -- distinct from
+`pentest:create`/`pentest:read`/`pentest:validate`, which `ANALYST` also holds -- and
+gates not only running a module but *reading back* a past attempt's transcript, since
+a real exploit's output (which can contain dumped credentials or session banners) is
+exactly as privileged as the action that produced it. An adversarial review found this
+list-read route briefly gated on the broader `pentest:read` instead; it was fixed
+before release and is now covered by a regression test asserting `ANALYST` gets `403`
+while `ADMIN` gets `200`.
+
+**No auto-classification of results.** Neither the non-exploiting `check` mode nor a
+real `run` ever gets its output parsed into a computed vulnerable/not-vulnerable
+verdict -- module output text is too inconsistent across thousands of real Metasploit
+modules to parse reliably, so the verbatim transcript is stored and shown, and the
+human operator reads it directly. The one exception is a *positive, observed* fact,
+not an inference: if a real session opens, that finding is promoted to `CONFIRMED`
+confidence, because an opened session is a directly observed outcome, not a
+text-parsed guess.
+
+**Disclosed limitation, not yet hardened:** the global pentest kill switch
+(`is_global_kill_switch_engaged()`) is an in-memory, process-local flag, not backed by
+the database or a shared store. This is correct today only because the shipped
+deployment (`docker-compose.yml`/`docker-compose.prod.yml`) runs a single backend
+process with no `--workers` flag; if this were ever scaled to multiple worker
+processes or replicas, engaging the kill switch in the process handling that request
+would not propagate to the others. Flagged here as a latent deployment-topology risk
+found during adversarial review, not a currently exploitable one.
+
 ## Summary
 
 | Area | Strongest control in place | Most significant disclosed gap |
@@ -225,5 +291,6 @@ Two positive, verified findings from the same release round out this section hon
 | AI / scoring | Score computed before any AI call, mechanically re-applied to AI output; correlation-flood corroboration discount closes a real found vulnerability, now live-verified end-to-end | The residual, non-blocking `NaN`/`Infinity` vote-parsing hardening item (§8) |
 | Rate limiting | Redis fixed-window limiter on the one genuinely expensive endpoint (`/lookup/stream`) | No coverage on authentication endpoints |
 | Audit logging | Actor-attributed, append-only log of every credential/config/user-management/login event, admin-only read | No case/basket/lookup activity coverage; test-result rows lack actor attribution |
+| Pentest / Exploit Validation | Five independent gates before any real exploit runs; RHOSTS always the real target (adversarially verified); `pentest:exploit` (ADMIN-only) gates both running a module and reading past transcripts | Global kill switch is in-memory/process-local -- correct only under the shipped single-process deployment |
 
 None of the items in §12 are release-blocking on their own; they are the concrete, code-verified list a production hardening pass would work through next, stated plainly rather than smoothed into marketing language.

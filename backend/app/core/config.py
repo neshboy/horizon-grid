@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     neo4j_password: str = "changeme-neo4j"
     opensearch_url: str = "http://opensearch:9200"
 
+    # --- Metasploit RPC (Pentest Suite gated exploit-validation feature --
+    # see app/pentest/exploit.py) ---. Started as msfrpcd bound to
+    # 127.0.0.1 by docker-compose.yml's backend `command:` -- reachable
+    # from nowhere but this same container's own backend process.
+    msf_rpc_host: str = "127.0.0.1"
+    msf_rpc_port: int = 55553
+    msf_rpc_user: str = "msf"
+    msf_rpc_password: str = Field(default="horizon-grid-msf-rpc-local")
+
     # --- Celery ---
     celery_broker_url: str = "redis://redis:6379/1"
     celery_result_backend: str = "redis://redis:6379/2"

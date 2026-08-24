@@ -2,6 +2,25 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.0] — 2026-08-24 — Pentest Suite: scope-enforced assessments and gated real-exploit validation
+
+A new, standalone assessment subsystem — DISCOVER → ENUMERATE → ASSESS → CORRELATE → PRIORITIZE → REPORT — distinct from the existing per-investigation Security Assessment Toolkit, which is untouched. Multiple targets, a declared scope, a live pause/resume/kill-switch-controlled control panel, and, for administrators only, a genuinely new capability: real Metasploit exploit-module execution, heavily gated.
+
+### Added
+- **Pentest assessments**: create an assessment with a profile (Passive/Low Impact/Standard/Comprehensive/Custom), declare a scope (CIDR ranges and/or domains — empty scope authorizes nothing), add targets inside that scope, and run an autonomous scan pipeline that reuses the same tool adapters (Nmap, DNS, TLS, HTTP headers, hash analysis) the Security Assessment Toolkit already provides. Pause/resume/cancel/emergency-stop, plus a global admin-only kill switch, all built on the same conditional-update concurrency guard the Security Assessment Toolkit's own cancellation fix established.
+- **Findings with a confidence rating** (`Confirmed`/`Likely`/`Potential`/`Informational`) separate from severity, plus a non-destructive "Intrusive Validation" re-check that can promote a finding to `Confirmed` without ever sending a payload.
+- **AI Security Analyst**: grounded finding explanations and an assessment-wide executive summary — never invents a finding or number not present in the real data it was given.
+- **Exploit Validation (Metasploit)**: a real, self-hosted Metasploit Framework connection (baked into the backend's Docker image), reachable only by administrators, only for a finding with a real matched CVE, only after manually searching and selecting one specific module. A non-exploiting `check` mode drives Metasploit's own real `check` command; a real `exploit` mode genuinely runs the module and requires an explicit confirmation on every single request. The target host is always force-locked to the finding's own real target, regardless of what's supplied in the options form. Full detail in `docs/PENTEST_SUITE.md` and the Security documentation's new §13.
+
+### Fixed (found during this work, not pre-existing regressions)
+- A Metasploit RPC client bug where every response field decoded as raw bytes instead of text (an old-spec msgpack encoding quirk on Metasploit's own side), permanently reporting Metasploit as unreachable even when it was running correctly.
+- A missing `gnupg`/`apt-transport-https`/`lsb-release` dependency that silently broke Metasploit's own apt-key verification during the Docker image build.
+- A shared `Dialog` UI component had no scroll handling — a real Metasploit module's full option list (dozens of fields) could push its action buttons below the viewport with no way to reach them. Fixed at the component level; benefits every dialog in the app, not just this feature.
+- An adversarial security review before release found one real, confirmed bug (exploit-attempt transcripts, which can contain real post-exploitation output, were readable by the Analyst/Viewer roles via the broader `pentest:read` permission instead of the intended admin-only `pentest:exploit`) and hardened several defense-in-depth gaps (a redundant role check inside the service layer itself, and the global kill switch now aborting an in-flight exploit run within about a second instead of only blocking the next one). All fixed and covered by new regression tests before release.
+
+### Testing
+Backend test suite grew from 404 to 432 passing tests (39 pre-existing skips, 2 pre-existing collection-time non-test errors, both unrelated to this release — see the Security/QA documentation for detail); zero regressions. Verified live against a real, running Metasploit instance (real module search by CVE, real module options, a real non-exploiting check run against an authorized test target), not only against mocks.
+
 ## [0.2.5] — 2026-08-23 — Security Assessment panel visibility and friction fixes
 
 Two real bugs found and fixed while live-testing the Security Assessment Toolkit (the port

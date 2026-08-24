@@ -497,6 +497,137 @@ export interface SecurityAssessmentRun {
   findings: SecurityAssessmentFinding[];
 }
 
+// --- Pentest Suite (mirrors backend/app/schemas/pentest.py) ---
+
+export type PentestAssessmentStatus = "draft" | "active" | "paused" | "completed" | "cancelled" | "expired";
+export type PentestProfile = "passive" | "low_impact" | "standard" | "comprehensive" | "custom";
+export type PentestTargetStatus =
+  | "pending"
+  | "discovering"
+  | "enumerating"
+  | "assessing"
+  | "completed"
+  | "failed"
+  | "out_of_scope";
+export type PentestFindingConfidence = "confirmed" | "likely" | "potential" | "informational";
+export type PentestFindingStatus = "open" | "validated" | "false_positive" | "remediated" | "accepted_risk";
+
+export interface PentestScopeDefinition {
+  cidrs?: string[];
+  domains?: string[];
+}
+
+export interface PentestTarget {
+  id: string;
+  assessment_id: string;
+  target_type: string;
+  value: string;
+  port: number | null;
+  asset_label: string | null;
+  environment: string | null;
+  target_group: string | null;
+  status: PentestTargetStatus;
+  created_at: string;
+}
+
+export interface PentestFindingEvidenceEntry {
+  captured_at: string;
+  tool_id: string;
+  data: Record<string, unknown>;
+}
+
+export interface PentestFinding {
+  id: string;
+  assessment_id: string;
+  target_id: string;
+  tool_id: string;
+  finding_type: string;
+  severity: Severity;
+  confidence: PentestFindingConfidence;
+  cvss_score: number | null;
+  cve_ids: string[];
+  title: string;
+  description: string;
+  remediation: string | null;
+  status: PentestFindingStatus;
+  evidence: PentestFindingEvidenceEntry[];
+  created_at: string;
+}
+
+export interface PentestAssessment {
+  id: string;
+  name: string;
+  description: string | null;
+  status: PentestAssessmentStatus;
+  profile: PentestProfile;
+  scope_definition: PentestScopeDefinition;
+  max_runtime_minutes: number;
+  max_requests: number;
+  emergency_stopped: boolean;
+  started_at: string | null;
+  expires_at: string | null;
+  created_by: string;
+  created_at: string;
+  targets: PentestTarget[];
+  findings: PentestFinding[];
+}
+
+export type PentestValidationChecks = Record<string, string>;
+
+export interface PentestFindingExplanation {
+  finding_id: string;
+  plain_language_summary: string;
+  why_it_matters: string;
+  likely_false_positive_reasons: string | null;
+}
+
+export interface PentestAssessmentSummaryReport {
+  executive_summary: string;
+  technical_summary: string;
+  top_priorities: string[];
+  overall_risk_narrative: string;
+}
+
+// --- Pentest Suite: gated real-exploit validation (Metasploit) --
+// mirrors backend/app/api/routes/pentest_exploit.py. Deliberately separate
+// from the automatic DISCOVER/ENUMERATE/ASSESS pipeline above -- every
+// action here is a manually-selected module the operator explicitly ran.
+
+export type PentestExploitMode = "check" | "exploit";
+export type PentestExploitStatus = "pending" | "running" | "succeeded" | "session_opened" | "failed" | "error";
+
+export interface PentestExploitModuleCandidate {
+  fullname: string;
+  name: string;
+  module_type: string;
+  rank: string;
+  disclosure_date: string | null;
+  matched_cve: string;
+}
+
+export interface PentestExploitModuleOptions {
+  fullname: string;
+  description: string | null;
+  rank: string | null;
+  references: [string, string][];
+  options: Record<string, { type?: string; required?: boolean; advanced?: boolean; desc?: string; default?: unknown }>;
+}
+
+export interface PentestExploitAttempt {
+  id: string;
+  assessment_id: string;
+  finding_id: string;
+  target_id: string;
+  module_fullname: string;
+  module_options: Record<string, unknown>;
+  mode: PentestExploitMode;
+  status: PentestExploitStatus;
+  result_transcript: string;
+  session_id: number | null;
+  requested_by: string;
+  created_at: string;
+}
+
 // --- Executive Dashboard (mirrors backend GET /dashboard/kpis and
 // GET /dashboard/executive-summary) ---
 
