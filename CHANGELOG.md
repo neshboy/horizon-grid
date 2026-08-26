@@ -2,6 +2,18 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.1] — 2026-08-26 — Ollama null-response crash, Watchdog task registration, and a misleading "Sign-in required" during fresh installs
+
+Three real bugs found reproducing a failed self-hosted install report, all fixed.
+
+### Fixed
+- Ollama returning a literal `{"models": null}` (some versions/proxies do this when nothing is pulled yet) or `{"message": null}` crashed the AI-backend model-listing and connection-test endpoints with an uncaught error instead of failing gracefully. `.get(key, default)`'s default only applies when the key is absent, not when it's present but `null`.
+- The Watchdog scheduled task failed to register with `Register-ScheduledTask : The task XML contains a value which is incorrectly formatted or out of range.` — `[TimeSpan]::MaxValue` serializes to an ISO-8601 duration that exceeds Task Scheduler's own valid range. Replaced with a 10-year repetition duration, effectively unlimited for a 5-minute watchdog.
+- Every "Test Connection" button on the AI Configuration and Provider Configuration wizard pages showed "Sign-in required: enter your existing administrator email and password" even when the operator had already typed both correctly — because those pages appear *before* "Start Installation" ever runs docker compose, so the backend genuinely isn't reachable yet at that point in a fresh install, and the wizard couldn't distinguish "backend not up yet" from "you haven't entered credentials" from "wrong credentials." All three now get their own clear, correct message; the expected-during-fresh-install case explains itself instead of looking like a configuration mistake.
+
+### Testing
+Added regression tests for both null-response shapes (8 new tests); the Ollama tags-parsing logic was extracted into a small, directly-testable function. The new backend-reachability check was verified directly against both a real open port (the running backend) and closed ports.
+
 ## [0.3.0] — 2026-08-24 — Pentest Suite: scope-enforced assessments and gated real-exploit validation
 
 A new, standalone assessment subsystem — DISCOVER → ENUMERATE → ASSESS → CORRELATE → PRIORITIZE → REPORT — distinct from the existing per-investigation Security Assessment Toolkit, which is untouched. Multiple targets, a declared scope, a live pause/resume/kill-switch-controlled control panel, and, for administrators only, a genuinely new capability: real Metasploit exploit-module execution, heavily gated.

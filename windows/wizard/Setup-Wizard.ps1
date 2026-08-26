@@ -259,9 +259,44 @@ if ($State.IsUpgrade) {
 # existing admin email + password on the Administrator Account page, with no
 # need to visit the Summary page at all.
 # ---------------------------------------------------------------------------
+# On a brand-new install, the AI Configuration and Provider Configuration
+# pages appear BEFORE "Start Installation" ever runs docker compose --
+# confirmed against this file's own top-of-file docstring, which documents
+# Test Connection as only meaningful "once the stack is running." Before
+# this fix, a Test Connection click on a fresh install (backend not
+# reachable at all yet) fell into the exact same "return $null" path as
+# "you haven't typed your admin email/password yet", so the operator saw
+# "Sign-in required: enter your existing administrator email and password"
+# even when they'd already typed both correctly -- a real, confusing,
+# reported bug: the message told them to do something they'd already done,
+# with no way to tell the actual problem (backend genuinely isn't up yet,
+# which is normal and expected at this point) from a real credentials
+# mistake. $script:LastSessionFailureReason lets the caller (every Test
+# Connection button) show the correct, specific message for each case.
+$script:LastSessionFailureReason = $null
+
+function Test-BackendPortOpen {
+    param([int]$Port, [int]$TimeoutMs = 800)
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $connectTask = $client.ConnectAsync("localhost", $Port)
+        $completed = $connectTask.Wait($TimeoutMs)
+        $client.Close()
+        return $completed -and -not $connectTask.IsFaulted
+    } catch {
+        return $false
+    }
+}
+
 function Get-OrCreateWizardSession {
+    $script:LastSessionFailureReason = $null
     if ($State.AccessToken) { return $State.AccessToken }
+    if (-not (Test-BackendPortOpen -Port $State.Settings.PortBackend)) {
+        $script:LastSessionFailureReason = "backend_unreachable"
+        return $null
+    }
     if (-not $State.AdminEmail -or -not $State.AdminPassword) {
+        $script:LastSessionFailureReason = "no_credentials"
         return $null
     }
     try {
@@ -272,8 +307,27 @@ function Get-OrCreateWizardSession {
         Write-SetupLog "Signed in to obtain a test session for $($State.AdminEmail)."
         return $State.AccessToken
     } catch {
+        $script:LastSessionFailureReason = "auth_failed"
         Write-SetupLog "Get-OrCreateWizardSession: sign-in failed: $($_.Exception.Message)" "WARN"
         return $null
+    }
+}
+
+# One consistent message per $script:LastSessionFailureReason, used by every
+# Test Connection button (AI Configuration and Providers pages) instead of
+# each one guessing/repeating "Sign-in required" regardless of the real
+# cause -- see Get-OrCreateWizardSession's comment for the bug this closes.
+function Get-SessionRequiredMessage {
+    switch ($script:LastSessionFailureReason) {
+        "backend_unreachable" {
+            return "The platform hasn't started yet -- that's expected at this point in a fresh install. Your settings will be verified automatically once you click Start Installation. (If you're reconfiguring an already-installed platform and see this, make sure it's running.)"
+        }
+        "no_credentials" {
+            return "Enter your existing administrator email and password on the Administrator Account page first, then return here to test."
+        }
+        default {
+            return "Sign-in failed -- check your administrator email and password on the Administrator Account page."
+        }
     }
 }
 
@@ -501,7 +555,7 @@ function Add-AiTestConnectionRow {
         $token = Get-OrCreateWizardSession
         if (-not $token) {
             $lblStatus.ForeColor = $ErrorColor
-            $lblStatus.Text = "Sign-in required: enter your existing administrator email and password on the Administrator Account page, then return here to test."
+            $lblStatus.Text = Get-SessionRequiredMessage
             return
         }
         $creds = & $GetCredentials
@@ -1169,7 +1223,7 @@ $Pages += @{
 
                 if (-not (Get-OrCreateWizardSession)) {
                     $ctrls.Status.ForeColor = $ErrorColor
-                    $ctrls.Status.Text = "Sign-in required to test live: go back to the Administrator Account page and enter your existing email and password (this only signs you in for this session -- it will not change your account), then return here."
+                    $ctrls.Status.Text = Get-SessionRequiredMessage
                     return
                 }
 
