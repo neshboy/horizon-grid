@@ -11,6 +11,9 @@ All notable changes to HORIZON GRID are documented here. Every entry reflects a 
 ### Testing
 Added `test_plaintext_credential_field_is_not_masked` (integration, uses a synthetic provider id rather than touching the real `ollama` row) confirming the allow-listed field returns in cleartext while an ordinary secret field on the same synthetic provider still masks correctly. Full existing `test_runtime_config_persistence.py` suite re-run and passing (6/6).
 
+### Why real investigations kept working even while this bug was live
+This bug never affected actual IOC analysis. `app/ai/service.py`'s `_get_ai_client()` resolves the active AI backend via `get_active_ai_config()` -- a fresh, direct read of the real, correctly-stored, correctly-decrypted credentials from the database on every call. It never goes anywhere near the `/providers` page's edit form. The masking bug only broke that one page's "Test Connection" button, whose form intentionally starts blank (correct behavior for real secrets like API keys) and resends whatever's currently typed -- Ollama's `base_url` getting swept into that same blanket blanking, despite not being a secret, is what broke it specifically. So "real investigations using Ollama work" and "clicking Test Connection fails" were both true simultaneously, on two genuinely separate code paths, not a contradiction.
+
 ## [0.3.6] — 2026-08-26 — "Test Connection" showed a raw connection error instead of "platform hasn't started yet"
 
 ### Fixed
