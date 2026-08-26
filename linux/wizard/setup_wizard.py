@@ -147,6 +147,65 @@ def require_root():
         fail("This wizard needs root privileges (it writes %s and manages containers). Re-run with sudo." % CONFIG_DIR)
 
 
+def _detect_host_gateway_override():
+    """Python equivalent of linux/scripts/common.sh's
+    hg_detect_host_gateway_override -- see that function's own comment for
+    the full root-cause story. Short version: docker-compose.yml's
+    "host-gateway" extra_hosts value (Compose's own special
+    host.docker.internal target) resolves to the wrong place under WSL2
+    running its own native docker-ce (get.docker.com inside the WSL2
+    distro, as opposed to Docker Desktop's WSL2 integration) -- "the host"
+    from dockerd's point of view there is the WSL2 VM itself, one hop
+    short of the real Windows machine where a host-run service (e.g.
+    Ollama) actually listens. The WSL2 VM's own default-route gateway
+    DOES reach the outer Windows host (the standard, documented way to do
+    so from inside WSL2), so this returns that IP specifically when WSL2
+    is detected, and "" (meaning: leave HOST_GATEWAY_TARGET unset, keep
+    plain "host-gateway") in every other case -- real bare-metal Linux
+    docker-ce (no WSL), Docker Desktop, or any failure along the way.
+
+    Computed fresh on every call (never cached/written to .env): WSL2's
+    NAT default-route gateway IP is not guaranteed stable across host
+    reboots.
+    """
+    is_wsl2 = False
+    try:
+        with open("/proc/version", "r", encoding="utf-8", errors="ignore") as f:
+            if "microsoft" in f.read().lower():
+                is_wsl2 = True
+    except OSError:
+        pass
+    if not is_wsl2:
+        try:
+            with open("/proc/sys/kernel/osrelease", "r", encoding="utf-8", errors="ignore") as f:
+                osrelease = f.read().lower()
+            if "microsoft" in osrelease or "wsl2" in osrelease:
+                is_wsl2 = True
+        except OSError:
+            pass
+    if not is_wsl2:
+        return ""
+
+    # Parsed in Python rather than shelling out to awk (portable/testable):
+    # a real `ip route` default line looks like
+    # "default via 172.30.192.1 dev eth0 proto kernel", so the gateway is
+    # the token right after "via" on the "default" line.
+    try:
+        result = subprocess.run(
+            ["ip", "route"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0 or not result.stdout:
+        return ""
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "default" and parts[1] == "via":
+            return parts[2]
+    return ""
+
+
 def run_prerequisite_checks():
     """Real gap fixed: check-prerequisites.sh (Docker Engine installed and
     running, Compose v2, root, disk space -- every HARD check the postinst
@@ -799,10 +858,20 @@ class Wizard:
 
         print("Starting Docker containers (this can take several minutes on first run "
               "while images build)...")
+        # Local dict, not a mutation of the real os.environ -- only this one
+        # subprocess call needs HOST_GATEWAY_TARGET, and only when
+        # _detect_host_gateway_override() actually found a WSL2 override
+        # (see its own comment for the full story). Every other caller/run
+        # of this wizard is unaffected.
+        compose_env = os.environ.copy()
+        host_gateway_override = _detect_host_gateway_override()
+        if host_gateway_override:
+            compose_env["HOST_GATEWAY_TARGET"] = host_gateway_override
         result = subprocess.run(
             ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.prod.yml",
              "--env-file", ENV_FILE, "up", "-d", "--build"],
             cwd=APP_REPO_DIR,
+            env=compose_env,
         )
         if result.returncode != 0:
             fail("docker compose exited with code %d -- see %s for details." % (result.returncode, LOG_DIR))

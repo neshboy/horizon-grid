@@ -196,8 +196,27 @@ services:
     # daemon is explicitly told to map it, which Compose has supported since
     # Docker Engine 20.10 via the special "host-gateway" value. Harmless and
     # redundant on Docker Desktop, where it already resolves natively.
+    #
+    # "host-gateway" alone is NOT enough under WSL2 + native docker-ce
+    # (i.e. `docker compose` running against dockerd installed via
+    # get.docker.com *inside* a WSL2 distro, as opposed to Docker Desktop's
+    # own WSL2 integration) -- confirmed live: from dockerd's point of view
+    # in that setup, "the host" is the WSL2 VM itself, one hop short of the
+    # real Windows machine where a host-run Ollama actually listens.
+    # "host-gateway" there resolves to the WSL VM's own docker bridge
+    # gateway (172.17.0.1 in the live repro), where nothing is listening,
+    # not the WSL VM's default-route gateway (172.30.192.1 in the same
+    # repro, i.e. `ip route`'s "default via ..." target) that actually
+    # reaches the outer Windows host. HOST_GATEWAY_TARGET lets a caller
+    # that has detected this specific WSL2 case (see
+    # linux/scripts/common.sh's hg_detect_host_gateway_override and
+    # linux/wizard/setup_wizard.py's _detect_host_gateway_override) override
+    # just the right-hand side with that real gateway IP; every other
+    # caller never sets it, so this is unchanged from plain "host-gateway"
+    # on Docker Desktop and on bare-metal Linux docker-ce (no WSL hop, so
+    # the docker bridge gateway IS a real interface on the literal host).
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:${HOST_GATEWAY_TARGET:-host-gateway}"
     ports:
       - "${HOST_PORT_BACKEND:-8000}:8000"
     depends_on:
@@ -238,10 +257,11 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
     # See the backend service's own comment above -- same native-Linux
-    # host.docker.internal gap, added here too since this process can also
-    # run AI-calling background jobs (scheduled OSINT/reanalysis).
+    # host.docker.internal gap (and the same WSL2 HOST_GATEWAY_TARGET
+    # override), added here too since this process can also run
+    # AI-calling background jobs (scheduled OSINT/reanalysis).
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:${HOST_GATEWAY_TARGET:-host-gateway}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -262,8 +282,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+    # See the backend service's own comment above -- same WSL2
+    # HOST_GATEWAY_TARGET override applies here too.
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:${HOST_GATEWAY_TARGET:-host-gateway}"
     depends_on:
       redis:
         condition: service_healthy

@@ -2,6 +2,40 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.7] — 2026-08-26 — Ollama base_url masked like a secret, breaking re-test of an already-working connection (Windows + Linux)
+
+### Fixed
+- The Manage Providers page (`/providers`) masked every AI backend's credential field identically, including Ollama's `base_url` -- which isn't a secret at all. The edit form's fields all start blank by design (never pre-filling real secrets), but that meant re-testing an already-configured, genuinely working Ollama connection without retyping the exact base URL from memory sent an empty value, producing a false "Ollama base URL and model are both required" error. Backend now returns a narrow, explicit allow-list of non-secret fields (currently just Ollama's `base_url`) in cleartext instead of masked; the frontend pre-fills those fields from that value (matching how the model field already worked) and renders them as plain text instead of a password field. True secrets (API keys, tokens) are completely unaffected -- still never returned in cleartext, still blank by default. Verified against the real, running stack: the exact same `test_ai_connection("ollama", ...)` call that previously failed now returns `ok=True, message="Connected. Model replied: 'pong'"`.
+- This is shared backend/frontend code, not Windows-specific -- affects both the Windows installer and the Linux package equally.
+
+### Testing
+Added `test_plaintext_credential_field_is_not_masked` (integration, uses a synthetic provider id rather than touching the real `ollama` row) confirming the allow-listed field returns in cleartext while an ordinary secret field on the same synthetic provider still masks correctly. Full existing `test_runtime_config_persistence.py` suite re-run and passing (6/6).
+
+## [0.3.6] — 2026-08-26 — "Test Connection" showed a raw connection error instead of "platform hasn't started yet"
+
+### Fixed
+- Introduced in 0.3.4's own fix: the new bootstrap check for whether the backend is reachable read `$script:LastSessionFailureReason` directly inline inside the Test Connection button's closure -- the exact same GetNewClosure() scoping defect fixed everywhere else in 0.3.3/0.3.5, live-confirmed via isolated repro (bare inline check returns the wrong value; the identical check wrapped in a plain function returns correctly). The check now goes through a small function (`Test-LastSessionFailureIsBackendUnreachable`), consistent with how `Get-SessionRequiredMessage` already had to be a function for the same reason. Before this fix, testing Ollama against a not-yet-started backend surfaced a raw "Unable to connect to the remote server" instead of the intended "the platform hasn't started yet" message.
+
+## [0.3.5] — 2026-08-26 — Remaining "Cannot index into a null array" sites in the Setup Wizard
+
+### Fixed
+- The same GetNewClosure()-inside-an-invoked-Build-block scoping defect fixed in 0.3.3/0.3.4 for `$Form`/`$NextButton`/`$BackButton`/`$script:AiGetters` also affected `$script:AiTestState` (crashed live clicking "Test Connection" on the AI Configuration page) and, latently, `$script:ProviderTestState` and `$script:SetupLogPath` on the Providers and Summary pages. All are now captured as plain locals before their respective closures, consistent with the established remedy. A full sweep of every `$script:`-scoped variable in the file was done this time to catch any remaining instance rather than fixing them one at a time as each was hit live.
+
+## [0.3.4] — 2026-08-26 — AI Configuration "Test Connection" required a sign-in that couldn't exist yet
+
+### Fixed
+- The AI Configuration page's "Test Connection" button always required an authenticated admin session before it would even attempt the call, even when the platform's backend was already reachable but no admin account existed yet (or the credentials just typed didn't match one) -- a real chicken-and-egg gap on any install where the backend had already started from an earlier attempt. `POST /api/v1/ai/test` now allows an unauthenticated call ONLY while zero user accounts exist in the database (the same bootstrap window `/auth/register` already uses for the very first admin), closing automatically and permanently the moment any account is created. The wizard now attempts the call unauthenticated in this case instead of showing "sign-in required" outright; a genuinely unreachable backend still reports honestly, since there is nothing to test in that case regardless of auth.
+
+## [0.3.3] — 2026-08-26 — Setup Wizard "Enabled property not found" / null Form on Start Installation
+
+### Fixed
+- Clicking "Start Installation" (and, latently, any AI/Provider "Test Connection" button) could crash with `The property 'Enabled' cannot be found on this object` / `You cannot call a method on a null-valued expression`, live-reproduced against a real install. Same root cause class as 0.3.2's `$script:AiGetters` bug: bare top-level `$Form`/`$NextButton`/`$BackButton` are not reliably visible inside a `.GetNewClosure()` scriptblock nested inside a page's own invoked `Build` block. Fixed at all three affected sites (the AI backend "Test Connection" button, the per-provider "Test" button, and the Summary page's Start Installation handler) by capturing each as a plain local before the closure, matching the already-established remedy for the `$script:`-scoped cases.
+
+## [0.3.2] — 2026-08-26 — Setup Wizard "Cannot index into a null array" during post-install AI validation
+
+### Fixed
+- The Setup Wizard's post-install "Validating the configured AI backend..." step crashed with `Cannot index into a null array` on the `$aiGetters = $script:AiGetters[...]` line: the Install button's click handler is a `GetNewClosure()` scriptblock lexically nested inside the Summary page's own invoked `Build` scriptblock, and `$script:`-qualified variable reads resolve to `$null` inside that specific nesting pattern (the same closure-scoping defect already worked around for `$script:AppRepoDir`/`$script:EnvFilePath`/`$script:LogsDir`/`$script:SetupCompleteMarker`, but never applied to the later-added `$script:AiGetters` lookup). Fixed by capturing `$script:AiGetters` as a plain local (`$aiGettersRegistry`) before the closure, matching the existing pattern, plus a null-safe read so this crash class can't resurface even if the registry is ever unpopulated; the pre-existing graceful-warning fallback and non-blocking "Setup complete" behavior are unchanged.
+
 ## [0.3.1] — 2026-08-26 — Ollama null-response crash, Watchdog task registration, and a misleading "Sign-in required" during fresh installs
 
 Three real bugs found reproducing a failed self-hosted install report, all fixed.

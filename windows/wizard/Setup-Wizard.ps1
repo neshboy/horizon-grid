@@ -313,6 +313,20 @@ function Get-OrCreateWizardSession {
     }
 }
 
+# Plain function, not a bare $script: read inside a closure -- callers that
+# need to branch on the reason (not just display Get-SessionRequiredMessage's
+# text) must go through a function too, for the same reason every other
+# $script:-scoped value on this page had to be captured as a local or read
+# via a function: a bare $script:LastSessionFailureReason check written
+# directly inside a Test Connection button's GetNewClosure()'d handler
+# resolved to $null (live-confirmed: it caused a real backend-unreachable
+# case to fall through into attempting the actual HTTP call anyway, surfacing
+# a raw "Unable to connect to the remote server" instead of the intended
+# friendly message).
+function Test-LastSessionFailureIsBackendUnreachable {
+    return $script:LastSessionFailureReason -eq "backend_unreachable"
+}
+
 # One consistent message per $script:LastSessionFailureReason, used by every
 # Test Connection button (AI Configuration and Providers pages) instead of
 # each one guessing/repeating "Sign-in required" regardless of the real
@@ -547,13 +561,29 @@ function Add-AiTestConnectionRow {
     $Panel.Controls.Add($btn)
     $Panel.Controls.Add($lblStatus)
 
+    # $Form is a bare top-level variable, but this closure is defined inside a
+    # FUNCTION (Add-AiTestConnectionRow) invoked from inside a page's own
+    # invoked Build block -- confirmed live this extra layer of nesting is
+    # enough to make GetNewClosure() lose it too, same failure class as the
+    # already-documented $script:-scoped cases elsewhere on this page. Capture
+    # as a plain local first. $script:AiTestState hits the exact same defect
+    # (confirmed live: "Cannot index into a null array" writing to it from
+    # inside this same closure) -- captured as a local too, and since
+    # hashtables are reference types, mutating the local mutates the same
+    # underlying object $script:AiTestState already points to.
+    $formRef = $Form
+    $aiTestStateRef = $script:AiTestState
+
     $btn.Add_Click({
         $lblStatus.ForeColor = $MutedColor
         $lblStatus.Text = "Testing..."
-        $Form.Refresh()
+        $formRef.Refresh()
 
         $token = Get-OrCreateWizardSession
-        if (-not $token) {
+        if (-not $token -and (Test-LastSessionFailureIsBackendUnreachable)) {
+            # Nothing to test against at all yet (the platform's own backend,
+            # which hosts /api/v1/ai/test, isn't running) -- no auth story
+            # changes that.
             $lblStatus.ForeColor = $ErrorColor
             $lblStatus.Text = Get-SessionRequiredMessage
             return
@@ -561,23 +591,32 @@ function Add-AiTestConnectionRow {
         $creds = & $GetCredentials
         $model = & $GetModel
         $body = @{ backend = $BackendId; credentials = $creds; model = $model } | ConvertTo-Json -Compress
+        # Backend is reachable but we have no session (no admin account
+        # exists yet, or the credentials just typed don't match one) --
+        # attempt the call anyway, unauthenticated. The backend's own
+        # /api/v1/ai/test allows this ONLY while zero users exist in its
+        # database (see _require_provider_manage_or_bootstrap in
+        # ai_config.py); if an admin already exists, it correctly rejects
+        # this with a real 401/403 instead, which the catch block below
+        # reports honestly rather than masking as "sign-in required".
+        $headers = if ($token) { @{ Authorization = "Bearer $token" } } else { @{} }
         try {
             $resp = Invoke-RestMethod -Uri "http://localhost:$($State.Settings.PortBackend)/api/v1/ai/test" `
                 -Method Post -Body $body -ContentType "application/json" `
-                -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 30
+                -Headers $headers -TimeoutSec 30
             if ($resp.ok) {
                 $lblStatus.ForeColor = $SuccessColor
                 $lblStatus.Text = "OK: $($resp.message) (model: $($resp.model), $($resp.latency_ms) ms)"
-                $script:AiTestState[$BackendId] = @{ Signature = $body; Ok = $true }
+                $aiTestStateRef[$BackendId] = @{ Signature = $body; Ok = $true }
             } else {
                 $lblStatus.ForeColor = $ErrorColor
                 $lblStatus.Text = "FAILED: $($resp.message)"
-                $script:AiTestState[$BackendId] = @{ Signature = $body; Ok = $false }
+                $aiTestStateRef[$BackendId] = @{ Signature = $body; Ok = $false }
             }
         } catch {
             $lblStatus.ForeColor = $ErrorColor
             $lblStatus.Text = "FAILED: $(Get-FriendlyHttpError $_)"
-            $script:AiTestState[$BackendId] = @{ Signature = $body; Ok = $false }
+            $aiTestStateRef[$BackendId] = @{ Signature = $body; Ok = $false }
         }
     }.GetNewClosure())
 }
@@ -1165,6 +1204,13 @@ $Pages += @{
 
         $y = 0
         $rowControls = @{}
+        # Same GetNewClosure()-inside-an-invoked-Build-block scoping defect
+        # documented elsewhere on the AI Configuration and Summary pages --
+        # bare $Form and $script:ProviderTestState are not reliably visible
+        # inside each row's Test button closure. Capture both as plain
+        # locals once, outside the loop.
+        $formRef = $Form
+        $providerTestStateRef = $script:ProviderTestState
         foreach ($providerId in $ProviderDefs.Keys) {
             $def = $ProviderDefs[$providerId]
             $card = New-Object System.Windows.Forms.Panel
@@ -1219,7 +1265,7 @@ $Pages += @{
                 $ctrls = $rowControls[$pid0]
                 $ctrls.Status.ForeColor = $MutedColor
                 $ctrls.Status.Text = "Testing..."
-                $Form.Refresh()
+                $formRef.Refresh()
 
                 if (-not (Get-OrCreateWizardSession)) {
                     $ctrls.Status.ForeColor = $ErrorColor
@@ -1241,16 +1287,16 @@ $Pages += @{
                     if ($resp.ok) {
                         $ctrls.Status.ForeColor = $SuccessColor
                         $ctrls.Status.Text = "OK: $($resp.message) ($($resp.latency_ms) ms)"
-                        $script:ProviderTestState[$pid0] = @{ Signature = $body; Ok = $true }
+                        $providerTestStateRef[$pid0] = @{ Signature = $body; Ok = $true }
                     } else {
                         $ctrls.Status.ForeColor = $ErrorColor
                         $ctrls.Status.Text = "FAILED: $($resp.message)"
-                        $script:ProviderTestState[$pid0] = @{ Signature = $body; Ok = $false }
+                        $providerTestStateRef[$pid0] = @{ Signature = $body; Ok = $false }
                     }
                 } catch {
                     $ctrls.Status.ForeColor = $ErrorColor
                     $ctrls.Status.Text = "FAILED: $(Get-FriendlyHttpError $_)"
-                    $script:ProviderTestState[$pid0] = @{ Signature = $body; Ok = $false }
+                    $providerTestStateRef[$pid0] = @{ Signature = $body; Ok = $false }
                 }
             }.GetNewClosure())
 
@@ -1418,30 +1464,48 @@ $Pages += @{
         $btnInstall = New-StyledButton -Text "Start Installation" -X 0 -Y 400 -W 200 -Primary $true
         $p.Controls.Add($btnInstall)
 
+        # Real gap found live (user-reported "The property 'Enabled' cannot
+        # be found on this object" / "cannot call a method on a null-valued
+        # expression" at Start Installation): bare top-level $Form/$NextButton
+        # /$BackButton are ALSO not reliably visible inside a .GetNewClosure()
+        # scriptblock nested inside this page's own invoked Build block --
+        # the "plain lexical captures work fine" assumption this comment used
+        # to make (based on $addLine below) was wrong; $addLine hits the exact
+        # same null $Form via its own $Form.Refresh() call. Capture all three
+        # as plain locals before either closure is created, same remedy
+        # already proven for the $script:-scoped variables just below.
+        $formRef = $Form
+        $nextButtonRef = $NextButton
+        $backButtonRef = $BackButton
+
         $addLine = {
             param($text)
             $progressList.Items.Add($text)
             $progressList.TopIndex = $progressList.Items.Count - 1
-            $Form.Refresh()
+            $formRef.Refresh()
         }.GetNewClosure()
 
         # $script:-scoped variables do not resolve inside a .GetNewClosure()
         # scriptblock when that scriptblock is itself defined inside another
         # invoked scriptblock (this page's own Build block) -- confirmed by
         # isolated repro. Capture everything the click handler needs as plain
-        # locals here instead; plain lexical captures work fine through
-        # GetNewClosure (see $addLine above, and $btnTest's closure elsewhere
-        # on this page).
+        # locals here instead.
         $appRepoDir = $script:AppRepoDir
         $envFilePath = $script:EnvFilePath
         $logsDir = $script:LogsDir
         $setupCompleteMarker = $script:SetupCompleteMarker
+        $setupLogPath = $script:SetupLogPath
         $backupScriptPath = Join-Path $ScriptsDir "Backup-Database.ps1"
+        # Same GetNewClosure()-inside-an-invoked-scriptblock scoping defect as
+        # above -- $script:AiGetters (populated by AI Configuration's Build,
+        # see Add-AiTestConnectionRow) is not visible by its $script: name
+        # inside this handler. Capture it as a plain local too.
+        $aiGettersRegistry = $script:AiGetters
 
         $btnInstall.Add_Click({
             $btnInstall.Enabled = $false
-            $NextButton.Enabled = $false
-            $BackButton.Enabled = $false
+            $nextButtonRef.Enabled = $false
+            $backButtonRef.Enabled = $false
 
             # Everything below runs inside a WinForms button-click event handler --
             # an uncaught exception here does not crash the process or print
@@ -1453,7 +1517,7 @@ $Pages += @{
                     & $addLine "ERROR: Application files not found at $appRepoDir -- the installer did not copy them correctly. Try reinstalling."
                     Write-SetupLog "AppRepoDir missing: $appRepoDir" "ERROR"
                     $btnInstall.Enabled = $true
-                    $BackButton.Enabled = $true
+                    $backButtonRef.Enabled = $true
                     return
                 }
 
@@ -1470,7 +1534,7 @@ $Pages += @{
                     if ($LASTEXITCODE -eq 0) {
                         & $addLine "Backup step finished (see the Backups folder, or the Diagnostics bundle, if you need to confirm a snapshot was actually taken)."
                     } else {
-                        & $addLine "WARNING: Database backup failed (exit code $LASTEXITCODE) -- continuing with the upgrade anyway. See $script:SetupLogPath for details."
+                        & $addLine "WARNING: Database backup failed (exit code $LASTEXITCODE) -- continuing with the upgrade anyway. See $setupLogPath for details."
                         Write-SetupLog "Pre-upgrade backup failed with exit code $LASTEXITCODE" "WARN"
                     }
                 }
@@ -1521,7 +1585,7 @@ $Pages += @{
                     & $addLine "ERROR: docker compose exited with code $exitCode -- see $logsDir for details."
                     Write-SetupLog "docker compose up failed with exit code $exitCode" "ERROR"
                     $btnInstall.Enabled = $true
-                    $BackButton.Enabled = $true
+                    $backButtonRef.Enabled = $true
                     return
                 }
                 & $addLine "Containers started."
@@ -1536,7 +1600,7 @@ $Pages += @{
                     & $addLine "ERROR: Backend did not become healthy within 3 minutes. Check Docker Desktop and try again, or view logs from the Start Menu."
                     Write-SetupLog "Backend health check timed out" "ERROR"
                     $btnInstall.Enabled = $true
-                    $BackButton.Enabled = $true
+                    $backButtonRef.Enabled = $true
                     return
                 }
                 & $addLine "Backend is healthy."
@@ -1597,7 +1661,7 @@ $Pages += @{
                             & $addLine "Account creation failed: $friendlyMsg"
                             & $addLine "Setup finished, but no administrator account exists yet -- fix the email/password above (Back) and click Start Installation again, or register one manually once the platform opens."
                             Write-SetupLog "Account creation failed: $_" "ERROR"
-                            $BackButton.Enabled = $true
+                            $backButtonRef.Enabled = $true
                         }
                     }
                 } else {
@@ -1624,7 +1688,7 @@ $Pages += @{
                 if ($State.AccessToken) {
                     & $addLine "Validating the configured AI backend ($($State.Settings.AiBackend))..."
                     try {
-                        $aiGetters = $script:AiGetters[$State.Settings.AiBackend]
+                        $aiGetters = if ($aiGettersRegistry) { $aiGettersRegistry[$State.Settings.AiBackend] } else { $null }
                         $aiCreds = if ($aiGetters) { & $aiGetters.Creds } else { @{} }
                         $aiModel = if ($aiGetters) { & $aiGetters.Model } else { $null }
                         $aiTestBody = @{ backend = $State.Settings.AiBackend; credentials = $aiCreds; model = $aiModel } | ConvertTo-Json -Compress
@@ -1647,12 +1711,12 @@ $Pages += @{
 
                 New-Item -ItemType File -Path $setupCompleteMarker -Force | Out-Null
                 $State.SetupSucceeded = $true
-                $NextButton.Enabled = $true
+                $nextButtonRef.Enabled = $true
             } catch {
                 & $addLine "ERROR: Setup failed unexpectedly -- $($_.Exception.Message)"
                 Write-SetupLog "Unhandled exception in install handler: $_" "ERROR"
                 $btnInstall.Enabled = $true
-                $BackButton.Enabled = $true
+                $backButtonRef.Enabled = $true
             }
         }.GetNewClosure())
 

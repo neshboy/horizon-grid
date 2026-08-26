@@ -6,13 +6,18 @@ test before this).
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import deepseek_client, groq_client, kimi_client, mistral_client, openai_client, openrouter_client, xai_client
 from app.ai.connection_test import test_ai_connection
-from app.auth.rbac import CurrentUser, require_permission
+from app.auth.rbac import CurrentUser, bearer_scheme, get_current_user, require_permission
+from app.core.db import get_db
 from app.core.url_safety import assert_safe_outbound_url
+from app.models.user import ROLE_PERMISSIONS, User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -56,10 +61,38 @@ class AITestRequest(BaseModel):
     model: str | None = None
 
 
+async def _require_provider_manage_or_bootstrap(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> CurrentUser | None:
+    """Same bootstrap window as /auth/register: before the very first admin
+    account exists, nobody could possibly hold a valid session, yet the
+    wizard's own AI Configuration page needs exactly this endpoint to work at
+    that point (a real fresh install cannot "sign in" before Start
+    Installation ever creates that first account). Allow through
+    unauthenticated ONLY while zero users exist -- this closes permanently
+    and automatically the moment the first account is created, matching the
+    exact same real-world security boundary /auth/register already commits
+    to; unauthenticated forever would be a real SSRF-shaped hole (arbitrary
+    outbound requests to a caller-supplied base_url/credentials), which is
+    why this is not simply removing auth from the route.
+    """
+    result = await db.execute(select(User.id))
+    if result.first() is None:
+        return None
+    user = await get_current_user(credentials, db)
+    if "provider:manage" not in ROLE_PERMISSIONS.get(user.role, set()):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Role '{user.role.value}' lacks permission 'provider:manage'",
+        )
+    return user
+
+
 @router.post("/test")
 async def ai_test_connection(
     payload: AITestRequest,
-    user: CurrentUser = Depends(require_permission("provider:manage")),
+    user: CurrentUser | None = Depends(_require_provider_manage_or_bootstrap),
 ):
     """Live credential check for any AI backend (Ollama/Anthropic/Bedrock/
     Gemini/Groq/OpenAI) -- makes one real, minimal chat request with the candidate

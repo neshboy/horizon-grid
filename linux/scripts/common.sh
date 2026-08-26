@@ -39,6 +39,13 @@ HORIZON_GRID_DATA_DIR="${HORIZON_GRID_DATA_DIR:-/var/lib/horizon-grid}"
 HORIZON_GRID_BACKUPS_DIR="${HORIZON_GRID_BACKUPS_DIR:-$HORIZON_GRID_DATA_DIR/backups}"
 HORIZON_GRID_LOG_DIR="${HORIZON_GRID_LOG_DIR:-/var/log/horizon-grid}"
 HORIZON_GRID_ENV_FILE="${HORIZON_GRID_ENV_FILE:-$HORIZON_GRID_CONFIG_DIR/.env}"
+
+# Same override pattern as above, for hg_detect_host_gateway_override's own
+# WSL2 check below -- lets test/test_host_gateway_detection.sh point at a
+# stubbed file instead of the real /proc, without needing to actually run
+# inside WSL2 (or even Linux) to exercise the WSL2-detected branch.
+HORIZON_GRID_PROC_VERSION_FILE="${HORIZON_GRID_PROC_VERSION_FILE:-/proc/version}"
+HORIZON_GRID_OSRELEASE_FILE="${HORIZON_GRID_OSRELEASE_FILE:-/proc/sys/kernel/osrelease}"
 HORIZON_GRID_SETUP_LOG="${HORIZON_GRID_SETUP_LOG:-$HORIZON_GRID_LOG_DIR/setup.log}"
 
 hg_log() {
@@ -139,13 +146,72 @@ hg_sync_compose_env_file() {
     fi
 }
 
+hg_detect_host_gateway_override() {
+    # Detects the one case where docker-compose.yml's "host-gateway"
+    # extra_hosts value (see its own comment there) resolves to the WRONG
+    # place: WSL2 running its own native docker-ce (get.docker.com inside
+    # the WSL2 distro), as opposed to Docker Desktop's WSL2 integration.
+    # In that setup, "the host" from dockerd's point of view is the WSL2
+    # VM itself, one hop short of the real Windows machine where a
+    # host-run service (e.g. Ollama) actually listens -- "host-gateway"
+    # there resolves to the WSL VM's own docker bridge gateway (confirmed
+    # live: 172.17.0.1), where nothing is listening, not the WSL VM's
+    # default-route gateway (confirmed live: 172.30.192.1, i.e. `ip
+    # route`'s "default via ..." target) that actually reaches the outer
+    # Windows host -- the standard, documented way to reach Windows-hosted
+    # services from inside WSL2.
+    #
+    # WSL2 check: /proc/version carries "Microsoft" on every WSL2 kernel
+    # seen in the wild; /proc/sys/kernel/osrelease is checked too (some
+    # kernel builds put it there instead, and recent ones literally
+    # contain "WSL2") so this doesn't depend on either string alone. Real
+    # bare-metal Linux docker-ce (no WSL) matches neither -- correctly
+    # falls through to the empty-output path below, which leaves
+    # HOST_GATEWAY_TARGET unset and preserves today's plain "host-gateway"
+    # behavior there and on Docker Desktop.
+    local is_wsl2=false
+    if grep -qi microsoft "$HORIZON_GRID_PROC_VERSION_FILE" 2>/dev/null; then
+        is_wsl2=true
+    elif [ -r "$HORIZON_GRID_OSRELEASE_FILE" ] && grep -qi 'microsoft\|wsl2' "$HORIZON_GRID_OSRELEASE_FILE" 2>/dev/null; then
+        is_wsl2=true
+    fi
+    [ "$is_wsl2" = true ] || return 0
+
+    # Computed fresh on every call (never cached/written to .env): WSL2's
+    # NAT default-route gateway IP is not guaranteed stable across host
+    # reboots. No default route, or `ip` missing/failing, means empty
+    # output here -- same default-preserving fallback as the non-WSL2 case.
+    # Explicit `return 0` at the end regardless of whether a gateway was
+    # found: this must never surface a non-zero exit status just because
+    # there was nothing to print (`[ -n "$gw" ] && echo "$gw"` alone would,
+    # since `&&` short-circuits to a false/1 exit when $gw is empty) --
+    # callers like hg_invoke_docker_compose only care about this
+    # function's stdout, but a stray non-zero exit here would still be a
+    # footgun for any future caller checking $? or running under `set -e`.
+    local gw
+    gw=$(ip route 2>/dev/null | awk '/^default via/ {print $3; exit}')
+    if [ -n "$gw" ]; then
+        echo "$gw"
+    fi
+    return 0
+}
+
 hg_invoke_docker_compose() {
     # Mirrors Common.ps1's Invoke-DockerCompose -- always the same working
     # directory, always the same --env-file, so no caller can accidentally
     # run against the wrong .env or the wrong compose project.
     hg_sync_compose_env_file
+    local host_gateway_override
+    host_gateway_override="$(hg_detect_host_gateway_override)"
     (
         cd "$HORIZON_GRID_APP_REPO_DIR" || exit 1
+        # Only export when non-empty -- an empty/unset HOST_GATEWAY_TARGET
+        # leaves docker-compose.yml's ${HOST_GATEWAY_TARGET:-host-gateway}
+        # default in effect, identical to today's behavior on Docker
+        # Desktop and bare-metal Linux.
+        if [ -n "$host_gateway_override" ]; then
+            export HOST_GATEWAY_TARGET="$host_gateway_override"
+        fi
         docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file "$HORIZON_GRID_ENV_FILE" "$@"
     )
 }

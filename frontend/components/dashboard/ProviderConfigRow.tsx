@@ -27,6 +27,11 @@ export interface ProviderConfigRowProps {
   onSetActive?: () => Promise<void>;
   showModelField?: boolean;
   modelOptions?: string[];
+  /** Fields that are real config (e.g. Ollama's base_url), not secrets --
+   * the backend returns these in masked_credentials unmasked, so pre-fill
+   * the edit form from them (matching how modelId already pre-fills below)
+   * instead of leaving them blank like a true credential. */
+  plaintextFields?: string[];
 }
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -51,9 +56,19 @@ export function ProviderConfigRow({
   onSetActive,
   showModelField,
   modelOptions,
+  plaintextFields,
 }: ProviderConfigRowProps) {
+  const plaintextInitialValues = () => {
+    const initial: Record<string, string> = {};
+    for (const field of plaintextFields ?? []) {
+      const current = provider.masked_credentials?.[field];
+      if (current) initial[field] = current;
+    }
+    return initial;
+  };
+
   const [expanded, setExpanded] = useState(false);
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>(plaintextInitialValues);
   const [modelId, setModelId] = useState(provider.model_id ?? "");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -63,7 +78,11 @@ export function ProviderConfigRow({
     setSaving(true);
     try {
       await onSave(values, showModelField ? modelId : undefined);
-      setValues({});
+      // Clear true secrets just entered, but keep plaintext fields (e.g.
+      // Ollama's base_url) filled in -- otherwise the very next Test click
+      // would send it blank again, the exact bug this component was fixed
+      // for.
+      setValues(plaintextInitialValues());
     } finally {
       setSaving(false);
     }
@@ -116,20 +135,23 @@ export function ProviderConfigRow({
           {fields.length === 0 ? (
             <p className="text-xs text-muted-foreground">This provider needs no API key.</p>
           ) : (
-            fields.map((field) => (
-              <label key={field} className="flex flex-col gap-1 text-xs">
-                <span className="capitalize text-muted-foreground">{field.replace(/_/g, " ")}</span>
-                <input
-                  type="password"
-                  value={values[field] ?? ""}
-                  onChange={(e) => setValues((prev) => ({ ...prev, [field]: e.target.value }))}
-                  placeholder={
-                    provider.masked_credentials?.[field] ? provider.masked_credentials[field] : "Not set"
-                  }
-                  className="rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-primary"
-                />
-              </label>
-            ))
+            fields.map((field) => {
+              const isPlaintext = plaintextFields?.includes(field) ?? false;
+              return (
+                <label key={field} className="flex flex-col gap-1 text-xs">
+                  <span className="capitalize text-muted-foreground">{field.replace(/_/g, " ")}</span>
+                  <input
+                    type={isPlaintext ? "text" : "password"}
+                    value={values[field] ?? ""}
+                    onChange={(e) => setValues((prev) => ({ ...prev, [field]: e.target.value }))}
+                    placeholder={
+                      provider.masked_credentials?.[field] ? provider.masked_credentials[field] : "Not set"
+                    }
+                    className="rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                  />
+                </label>
+              );
+            })
           )}
 
           {showModelField && (

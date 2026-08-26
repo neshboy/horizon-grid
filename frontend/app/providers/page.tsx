@@ -117,6 +117,7 @@ export default function ProvidersPage() {
                 key={p.provider_id}
                 provider={p}
                 fields={AI_CREDENTIAL_FIELDS[p.provider_id] ?? ["api_key"]}
+                plaintextFields={p.provider_id === "ollama" ? ["base_url"] : []}
                 showModelField
                 onSave={async (credentials, modelId) => {
                   try {

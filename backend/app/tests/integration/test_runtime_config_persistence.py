@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import new_session
+from app.core import runtime_config as runtime_config_module
 from app.core.runtime_config import get_ai_config, upsert_ai_provider, upsert_ioc_provider
 from app.models.runtime_config import ProviderKind, ProviderRuntimeConfig
 
@@ -105,6 +106,31 @@ async def test_upsert_ai_provider_empty_save_preserves_credential_end_to_end():
         assert result["configured"] is True
         assert result["masked_credentials"].get("api_key")
     finally:
+        await _cleanup(provider_id, ProviderKind.AI)
+
+
+@pytest.mark.asyncio
+async def test_plaintext_credential_field_is_not_masked():
+    """Real bug found live: Ollama's base_url is plain config, not a secret,
+    but was masked identically to every real credential -- leaving the
+    frontend no way to pre-fill it for re-testing an already-configured
+    connection without the operator retyping the exact URL from memory (a
+    blank retype sent an empty base_url, producing a false "both required"
+    error against a genuinely-configured, working connection). Uses a
+    synthetic provider_id registered into _PLAINTEXT_CREDENTIAL_FIELDS for
+    the duration of this test only, rather than touching the real "ollama"
+    row this app actually uses."""
+    provider_id = _unique_provider_id("qa-plaintext")
+    original = dict(runtime_config_module._PLAINTEXT_CREDENTIAL_FIELDS)
+    runtime_config_module._PLAINTEXT_CREDENTIAL_FIELDS = {**original, provider_id: {"base_url"}}
+    try:
+        result = await upsert_ai_provider(
+            provider_id, {"base_url": "http://host.docker.internal:11434", "api_key": "real-secret"}, "some-model"
+        )
+        assert result["masked_credentials"]["base_url"] == "http://host.docker.internal:11434"
+        assert result["masked_credentials"]["api_key"] != "real-secret"
+    finally:
+        runtime_config_module._PLAINTEXT_CREDENTIAL_FIELDS = original
         await _cleanup(provider_id, ProviderKind.AI)
 
 

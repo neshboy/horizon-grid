@@ -139,11 +139,30 @@ def _is_fully_configured(provider_id: str, creds: dict) -> bool:
     return bool(creds and any(creds.values()))
 
 
+# Real gap found live: Ollama's "credential" is a base_url, not a secret --
+# masking it like an API key meant the UI could only ever show
+# "****...1434", with no way for the frontend to pre-fill it for re-testing
+# an already-configured connection without the operator retyping the exact
+# URL from memory (confirmed: retesting with the field left blank sent an
+# empty base_url, producing a "both required" error even though a real,
+# correctly-stored base_url already existed). Everywhere else in this system
+# every credential-shaped field really is a secret (API keys, tokens); this
+# is deliberately a narrow, explicit allow-list rather than a general
+# "some fields aren't secrets" policy change.
+_PLAINTEXT_CREDENTIAL_FIELDS: dict[str, set[str]] = {
+    "ollama": {"base_url"},
+}
+
+
 def _row_to_public_dict(row: ProviderRuntimeConfig) -> dict:
-    """Never returns a real credential value -- only masked previews, for
-    API responses and the audit-adjacent "what's configured" UI."""
+    """Never returns a real SECRET value -- only masked previews for those,
+    for API responses and the audit-adjacent "what's configured" UI. Fields
+    listed in _PLAINTEXT_CREDENTIAL_FIELDS for this provider are not secrets
+    at all (e.g. Ollama's base_url) and are returned as-is so the frontend
+    can pre-fill them for editing/re-testing."""
     creds = _decrypt_credentials(row)
-    masked = {k: mask_secret(v) for k, v in creds.items()}
+    plaintext_fields = _PLAINTEXT_CREDENTIAL_FIELDS.get(row.provider_id, set())
+    masked = {k: (v if k in plaintext_fields else mask_secret(v)) for k, v in creds.items()}
     return {
         "provider_id": row.provider_id,
         "provider_name": row.provider_name,
