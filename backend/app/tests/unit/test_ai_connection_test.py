@@ -514,6 +514,22 @@ async def test_ollama_model_not_pulled_is_clear_error():
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_ollama_literal_null_message_does_not_crash():
+    # Real-world finding: some Ollama versions/proxies return a literal
+    # `{"message": null}` instead of omitting the key or using `{}`.
+    # `.get("message", {})`'s default only applies when the key is absent,
+    # so this used to raise an uncaught AttributeError instead of a clean
+    # AITestResult.
+    respx.post("http://localhost:11434/api/chat").mock(
+        return_value=httpx.Response(200, json={"message": None})
+    )
+    result = await check_ai_connection("ollama", {"base_url": "http://localhost:11434"}, model="llama3.2:3b")
+    assert result.ok is True
+    assert result.message  # doesn't crash; reply is just empty
+
+
+@pytest.mark.asyncio
 async def test_ollama_connect_error_is_reported_cleanly():
     # Deliberately unreachable port -- exercises the real httpx.ConnectError
     # path without needing respx (no mock installed, so the connection

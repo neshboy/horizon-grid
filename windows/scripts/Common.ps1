@@ -434,7 +434,14 @@ function Register-BootAndWatchdogTasks {
 
     $action2 = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptsDir\Watchdog.ps1`""
-    $trigger2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
+    # [TimeSpan]::MaxValue looks like the right way to say "repeat forever",
+    # but it serializes to an ISO-8601 duration ("P99999999DT23H59M59S")
+    # that exceeds what Task Scheduler's own XML schema actually accepts --
+    # Register-ScheduledTask fails with "The task XML contains a value
+    # which is incorrectly formatted or out of range." confirmed against a
+    # real install. 10 years is effectively "forever" for a 5-minute
+    # watchdog and stays well inside the schema's valid range.
+    $trigger2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
 
     Unregister-ScheduledTask -TaskName $script:WatchdogTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $script:WatchdogTaskName -Action $action2 -Trigger $trigger2 `

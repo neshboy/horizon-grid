@@ -356,7 +356,12 @@ async def _check_ollama(base_url: str, model: str) -> AITestResult:
             return AITestResult(ok=False, message=f"Could not reach Ollama at {base_url} -- is it running? ({exc})")
     if r.status_code == 200:
         payload = r.json()
-        reply = payload.get("message", {}).get("content", "")
+        # Same null-vs-missing-key trap as ai_config.py's model listing:
+        # `.get("message", {})`'s default only applies when the key is
+        # absent. If Ollama (or a proxy in front of it) returns a literal
+        # `{"message": null}`, `.get` returns None as-is, and chaining
+        # `.get("content", "")` onto that raises an uncaught AttributeError.
+        reply = (payload.get("message") or {}).get("content", "")
         return AITestResult(ok=True, message=f"Connected. Model replied: {reply.strip()!r}", model=model)
     if r.status_code == 404:
         return AITestResult(

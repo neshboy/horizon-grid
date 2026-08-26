@@ -32,6 +32,24 @@ _STATIC_MODEL_LISTS = {
 }
 
 
+def parse_ollama_tags_response(payload: dict) -> list[str]:
+    """Extracts pulled model names from Ollama's GET /api/tags response.
+
+    Real-world finding: `.get("models", [])`'s default only applies when
+    the key is ABSENT. Some Ollama versions/proxies return a literal
+    `{"models": null}` when nothing is pulled yet, which `.get` happily
+    returns as None (not the default) -- iterating that used to raise an
+    uncaught TypeError instead of falling back to the static model list.
+    Also tolerant of entries missing a "name" key (some Ollama API
+    versions use "model" instead) and of non-dict entries.
+    """
+    models_field = payload.get("models") or []
+    return [
+        n for n in (m.get("name") or m.get("model") for m in models_field if isinstance(m, dict))
+        if n
+    ]
+
+
 class AITestRequest(BaseModel):
     backend: str
     credentials: dict[str, str] = {}
@@ -166,7 +184,7 @@ async def ai_list_models(
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.get(f"{base_url}/api/tags")
                 if r.status_code == 200:
-                    names = [m["name"] for m in r.json().get("models", [])]
+                    names = parse_ollama_tags_response(r.json())
                     if names:
                         return {"backend": backend, "models": sorted(names), "source": "live", "default": "llama3.2:3b"}
             except ValueError as exc:
