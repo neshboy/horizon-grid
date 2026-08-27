@@ -2,6 +2,12 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.8] — 2026-08-27 — DeepSeek backend rejected every request with "Thinking mode does not support this tool_choice"
+
+### Fixed
+- Every AI call against the DeepSeek backend (per-provider summaries and the final assessment alike) failed with `RuntimeError('DeepSeek invocation failed: HTTP 400: {"error":{"message":"Thinking mode does not support this tool_choice"...}}')`, live-confirmed against a real running stack investigating `8.8.8.8` and a file hash. Root cause: DeepSeek's current v4 models (`deepseek-v4-flash`/`deepseek-v4-pro`) default `thinking.type` to `"enabled"`, and DeepSeek's own API rejects that combined with a forced `tool_choice` -- which `deepseek_client.py` always sends, since structured JSON output here relies on forcing a single named tool rather than a bare "return JSON" instruction (the same approach every other client in `app/ai/` uses). `call_claude_json()` now explicitly sends `"thinking": {"type": "disabled"}` in the request body, since this client never wants DeepSeek's reasoning trace -- only the forced tool-call's structured arguments. Verified live: the exact call path used by `app/ai/service.py` (`_get_ai_client()` for the configured `deepseek` backend, real decrypted credentials from the database) now returns a normal structured result instead of the HTTP 400.
+- This is shared backend code, not Windows-specific -- affects both the Windows installer and the Linux package equally.
+
 ## [0.3.7] — 2026-08-26 — Ollama base_url masked like a secret, breaking re-test of an already-working connection (Windows + Linux)
 
 ### Fixed

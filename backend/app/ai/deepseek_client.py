@@ -90,6 +90,11 @@ class DeepSeekClient:
             "model": self._model_id,
             "temperature": 0.1,
             "max_completion_tokens": max_tokens or self._max_tokens,
+            # DeepSeek v4 models default to thinking.type="enabled", which
+            # rejects a forced tool_choice (HTTP 400 "Thinking mode does not
+            # support this tool_choice"). Structured output here always
+            # forces a specific tool, so thinking must be off.
+            "thinking": {"type": "disabled"},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
