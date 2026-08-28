@@ -1,6 +1,38 @@
-# HORIZON GRID — Release Notes
+# 📰 HORIZON GRID — Release Notes
 
-## v0.3.0 — Pentest Suite: scope-enforced assessments and gated real-exploit validation
+## 📋 Table of contents
+
+- [v0.3.8 — DeepSeek backend fix](#v038---deepseek-backend-fix)
+- [v0.3.1 – v0.3.7 — Windows Setup Wizard reliability fixes](#v031--v037---windows-setup-wizard-reliability-fixes)
+- [v0.3.0 — Pentest Suite: scope-enforced assessments and gated real-exploit validation](#v030---pentest-suite-scope-enforced-assessments-and-gated-real-exploit-validation)
+- [v0.2.5 — Security Assessment panel visibility and friction fixes](#v025---security-assessment-panel-visibility-and-friction-fixes)
+- [v0.2.4 — Original visual identity and branding pass](#v024---original-visual-identity-and-branding-pass)
+- [v0.2.3 — Mission-critical deployment hardening](#v023---mission-critical-deployment-hardening)
+- [v0.2.2 — Independent re-verification: 7 real bugs found and fixed](#v022---independent-re-verification-7-real-bugs-found-and-fixed)
+- [v0.2.1 — Port scanning: cancellation added](#v021---port-scanning-cancellation-added)
+- [What's new in v0.2.0](#-whats-new-in-v020)
+- [Upgrading from a previous install](#-upgrading-from-a-previous-install)
+- [Known limitations](#-known-limitations-current-as-of-v038----unchanged-since-v023-through-every-later-release-in-this-document-including-the-pentest-suite-and-the-v031v038-wizardbackend-fixes-none-of-which-touched-anything-this-list-covers)
+- [Verdict](#-verdict)
+
+## v0.3.8 — 🤖 DeepSeek backend fix
+
+Every AI call against the DeepSeek backend (per-provider summaries and the final assessment alike) failed outright with an HTTP 400 ("Thinking mode does not support this tool_choice"), live-confirmed investigating a real IP and a file hash. DeepSeek's current v4 models default their own "thinking" mode on, and DeepSeek's API rejects that combined with the forced tool-call this platform relies on for structured output — every other AI backend in this codebase uses the same forced-tool-call approach, so this was specific to how DeepSeek's own API validates that combination. Fixed by explicitly disabling thinking mode on this one call path, since this client only ever wanted the forced tool call's structured arguments, never a reasoning trace. Verified live: the same call path used for a real investigation now returns a normal result instead of failing.
+
+No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always. Shared backend code — affects both platforms equally.
+
+## v0.3.1 – v0.3.7 — 🪟 Windows Setup Wizard reliability fixes
+
+Seven small, targeted releases fixed a cluster of real bugs in the Windows Setup Wizard, all rooted in the same underlying PowerShell scripting pitfall: a `.GetNewClosure()` scriptblock nested inside a wizard page's own invoked `Build` block cannot reliably see a bare `$script:`-scoped or top-level variable, which silently resolved to `$null`/an empty value instead of throwing an obvious error at the point of the mistake. Each release found and fixed the next site this pattern was hit live, working through the AI Configuration, Provider Configuration, and Summary/Install pages one at a time until a full deliberate sweep in v0.3.5 closed out every remaining instance:
+
+- **v0.3.1** fixed an Ollama connection check crashing on a literal `null` response field (some Ollama versions/proxies return this when nothing is pulled yet), a Watchdog scheduled task that failed to register because `[TimeSpan]::MaxValue` doesn't serialize to a value Windows Task Scheduler accepts, and a misleading "Sign-in required" message shown on every AI/Provider "Test Connection" click during a fresh install — before the backend has even started, so there was nothing to sign in to yet.
+- **v0.3.2 – v0.3.5** fixed the closure-scoping bug itself everywhere it was found: the post-install AI validation step, the "Start Installation" button, the per-provider "Test" button, the AI Configuration page's own "Test Connection" button, and finally a full sweep of every remaining `$script:`-scoped variable in the wizard to close out any instance not yet hit live.
+- **v0.3.4** additionally closed a real chicken-and-egg gap: the AI Configuration page's "Test Connection" button always required an authenticated admin session, even on a fresh install where the backend was reachable but no admin account existed yet to sign in with. The backend now allows one unauthenticated test call, but only during the same bootstrap window already used for creating the very first admin account — a window that closes permanently the moment any account exists.
+- **v0.3.6** fixed a regression introduced by v0.3.4's own fix — the new bootstrap check itself hit the identical closure-scoping bug, so a not-yet-started backend showed a raw "Unable to connect to the remote server" instead of the intended, clearer message.
+
+None of these releases touched backend business logic, the database schema, or any IOC/AI-analysis behavior — every fix is confined to the Windows Setup Wizard's own PowerShell scripts. No manual upgrade step is required for any of them.
+
+## v0.3.0 — ⚔ Pentest Suite: scope-enforced assessments and gated real-exploit validation
 
 A new, standalone assessment subsystem for authorized security testing: declare a scope, add targets inside it, and run an automated discovery/enumeration/vulnerability-assessment pipeline against them, completely separate from the existing per-investigation Security Assessment Toolkit (which is untouched). Findings carry a confidence rating alongside severity, an AI Security Analyst can explain any finding or summarize a whole assessment in plain language, and administrators get a new, heavily gated capability: running a real Metasploit exploit module against a finding that has a matched CVE.
 
@@ -8,7 +40,7 @@ That last piece is real, not a simulation, and is gated accordingly: only admini
 
 Explicitly verified, not just claimed: the backend test suite grew from 404 to 432 passing tests with zero regressions, and the feature was verified live end-to-end against a real, running Metasploit installation — a real module search by CVE, real module metadata, and a real non-exploiting check run against an authorized test target, honestly reporting what it actually found rather than a fabricated result either way. This subsystem currently requires the backend's Docker image to include Metasploit Framework at build time; a fresh install that hasn't finished that build degrades gracefully (the feature reports itself unavailable) rather than failing.
 
-## v0.2.5 — Security Assessment panel visibility and friction fixes
+## v0.2.5 — 🛡 Security Assessment panel visibility and friction fixes
 
 Two real bugs found and fixed while live-testing the Security Assessment Toolkit (the port scanner UI) against a fresh install. Both frontend-only: no backend logic, database schema, or API contract changed, confirmed by a full backend regression run (383 passed, 39 skipped, zero regressions) before and after.
 
@@ -16,7 +48,7 @@ The Security Assessment panel -- including its "Run" trigger form -- was silentl
 
 Both bugs were reproduced live against a real investigation and a real Nmap scan, not just caught by unit tests. No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
 
-## v0.2.4 — Original visual identity and branding pass
+## v0.2.4 — 🎨 Original visual identity and branding pass
 
 A professional branding + UI/UX pass across the entire application -- previously the product name and tagline ("Every Signal. One Operational Picture.") were barely visible anywhere in the running app. This release is presentation-only: no backend logic, database schema, authentication, IOC processing, AI/provider logic, port scanner logic, or admin permissions were modified, confirmed by a full backend regression run (383 passed, 39 skipped, zero regressions) and a clean frontend typecheck before and after.
 
@@ -26,7 +58,7 @@ One real bug was self-discovered and fixed during this release's own screenshot 
 
 No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
 
-## v0.2.3 — Mission-critical deployment hardening
+## v0.2.3 — 🔁 Mission-critical deployment hardening
 
 A dedicated reliability and security review for a one-time install at a remote, physically-inaccessible site with no developer access afterward. 18 real gaps were found and fixed — 2 of them self-discovered during the review itself. Every service now restarts automatically on a crash (previously only 2 of 8 did), a real dependency-aware health check (`/health/detailed`) backs a new 5-minute watchdog on both platforms, both platforms now auto-start at boot (a self-discovered bug meant Linux's systemd unit was never actually enabled, despite the unit file itself being correct), and both platforms got a real, tested database restore procedure plus scheduled nightly backups — previously only manual/pre-upgrade backups existed, with no restore procedure at all beyond a self-contradictory manual instruction.
 
@@ -36,7 +68,7 @@ Full backend suite: 380 passed, 39 skipped. A 3-hour soak test against the live 
 
 No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
 
-## v0.2.2 — Independent re-verification: 7 real bugs found and fixed
+## v0.2.2 — 🔎 Independent re-verification: 7 real bugs found and fixed
 
 The v0.2.1 cancellation fix was independently re-verified rather than taken on faith: nine separate reviewers, each reading the real code fresh, re-proved the original before/after claim directly from git history, then tried hard to break the result — live browser automation of the full UI flow, every real scan profile and target type, every documented failure condition, a dedicated adversarial security pass, real concurrency races, and full regression of the rest of the application. That pass found four real defects in the scanner itself and three unrelated ones elsewhere. All seven are fixed, tested, and live-verified in this release; nothing here was assumed correct because a test suite stayed green.
 
@@ -46,13 +78,13 @@ The v0.2.1 cancellation fix was independently re-verified rather than taken on f
 
 No manual upgrade step is required; re-running the installer on an existing install preserves your configuration and data as always.
 
-## v0.2.1 — Port scanning: cancellation added
+## v0.2.1 — 🛡 Port scanning: cancellation added
 
 This is a small, targeted release. A forensic audit was requested of the Security Assessment Toolkit's Nmap port scanner after a report that it wasn't working correctly. The audit traced the entire pipeline — frontend, API, validation, scanner, subprocess execution, result parsing, UI — and found every stage already working correctly against real local targets. The one real, confirmed gap: **there was no way to cancel a scan once started.** That's now fixed — a "Cancel Scan" button genuinely stops the underlying scan process (not just its displayed status), survives a backend restart without getting stuck, and is covered by 5 new tests including a live in-flight cancellation. See the Backend Documentation's Security Assessment Toolkit chapter for the full technical detail, and the User Manual's Security Assessment section for what you'll actually see on screen.
 
 No other behavior changed in this release; nothing about upgrading from v0.2.0 requires any extra step.
 
-## What's new in v0.2.0
+## 🤖 What's new in v0.2.0
 
 HORIZON GRID is the renamed, significantly extended release of this platform (previously "IOC Intelligence Platform"). If you're deciding whether this release matters to you, here's the short version:
 
@@ -66,11 +98,11 @@ HORIZON GRID is the renamed, significantly extended release of this platform (pr
 
 **Real fixes from real testing, not assumptions.** This release went through a genuine adversarial testing pass — including live load testing (a real concurrency bug in the Provider Health page was found and fixed, taking it from complete failure under load to a sub-2-second response), a real security review that found and closed a scoring-manipulation gap, and a real installer failure that was reported, root-caused, and fixed rather than worked around. The full findings are in the Final Release QA Report.
 
-## Upgrading from a previous install
+## 📦 Upgrading from a previous install
 
 Re-running the installer on an existing install preserves your configuration, credentials, and all investigation/case/watchlist data — nothing about this release requires starting over. Internal identifiers (data folder location, database name) are unchanged from before the rename specifically so an upgrade is safe.
 
-## Known limitations (current, as of v0.2.5 -- unchanged by the v0.2.5 fixes or the v0.2.4 branding pass, both of which touched presentation only)
+## ⚠ Known limitations (current, as of v0.3.8 -- unchanged since v0.2.3 through every later release in this document, including the Pentest Suite and the v0.3.1–v0.3.8 wizard/backend fixes, none of which touched anything this list covers)
 
 - No automated host-disk-space alerting, and no retention/cleanup job for ever-growing investigation tables.
 - No off-host/off-site backup copy option — backups are local-disk-only, which does not protect a genuinely remote site against the host/disk itself failing.
@@ -81,6 +113,6 @@ Re-running the installer on an existing install preserves your configuration, cr
 - If you configure a local AI model (Ollama) as your active backend, the AI-generated executive summary can be slower under heavy *concurrent* load, since a single local model processes generation requests one at a time. This does not affect the accuracy of any number shown, and does not affect the Dashboard's KPI tiles or the Provider Health page, both plain database reads independent of AI backend choice.
 - A minor, disclosed hardening item remains in the scoring engine's handling of a malformed numeric provider value (NaN/Infinity) — not exploitable by any currently-integrated provider, tracked as a future improvement.
 
-## Verdict
+## 🏁 Verdict
 
-**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (as of v0.2.3, unchanged through v0.2.4 and v0.2.5). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict; neither the v0.2.4 branding pass nor the v0.2.5 fixes touched anything this verdict covers.
+**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (established as of v0.2.3, unchanged through every release since, up to and including the current v0.3.8). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict; none of the v0.2.4 branding pass, the v0.2.5 UI fixes, the v0.3.0 Pentest Suite addition, or the v0.3.1–v0.3.8 wizard/backend fixes touched anything this verdict covers.

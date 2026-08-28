@@ -2,13 +2,28 @@
 
 This is the core of the product: you give it one IOC, and it tells you — with receipts — what dozens of threat-intelligence sources and an AI model think about it.
 
-## What Is an IOC?
+## Table of Contents
+
+- [❓ What Is an IOC?](#-what-is-an-ioc)
+- [🔎 Starting an Investigation](#-starting-an-investigation)
+- [🧬 Anatomy of a Real Investigation: 8.8.8.8](#-anatomy-of-a-real-investigation-8888)
+  - [The First Few Seconds](#the-first-few-seconds)
+  - [The Full Picture](#the-full-picture)
+- [⚠️ Why You Must Read the Evidence, Not Just the Score](#️-why-you-must-read-the-evidence-not-just-the-score)
+- [📋 Supported IOC Types](#-supported-ioc-types)
+- [🛡️ Security Assessment: Active Checks Against the Target](#️-security-assessment-active-checks-against-the-target)
+  - [What a port scan actually does](#what-a-port-scan-actually-does)
+  - [Scan statuses](#scan-statuses)
+  - [Cancelling a scan](#cancelling-a-scan)
+  - [If a tool shows as "unavailable"](#if-a-tool-shows-as-unavailable)
+
+## ❓ What Is an IOC?
 
 **IOC (Indicator of Compromise)** — a piece of evidence such as an IP address, a domain name, a URL, a file hash, or a **CVE** (Common Vulnerabilities and Exposures — a public catalog ID for a known software vulnerability, e.g. `CVE-2021-44228`) that a security analyst wants to investigate. An IOC by itself doesn't prove anything is wrong; it's a lead. Maybe it showed up in a firewall log, an email attachment, or a colleague's incident notes. The question an analyst always has to answer is: *is this thing actually dangerous, and what do I know about it?*
 
 HORIZON GRID exists to answer that question fast, by querying many independent, real third-party sources at once, correlating what they say, and having an AI model summarize the result — while still giving you everything you need to check the AI's work yourself.
 
-## Starting an Investigation
+## 🔎 Starting an Investigation
 
 There are two ways to kick off a lookup:
 
@@ -19,7 +34,7 @@ There are two ways to kick off a lookup:
 
 Once you submit an IOC, the platform fans out to every configured provider that supports that IOC type at the same time (not one after another), so results stream back into the page within seconds rather than making you wait for the slowest source.
 
-## Anatomy of a Real Investigation: 8.8.8.8
+## 🧬 Anatomy of a Real Investigation: 8.8.8.8
 
 To show what an investigation actually looks like, walk through a real one: the IOC `8.8.8.8` — the IPv4 address of Google's Public DNS resolver, a well-known, legitimate internet service used by billions of devices. It's a genuinely interesting example, because the sources don't fully agree with each other — and that disagreement is exactly the kind of thing an analyst needs to know how to read.
 
@@ -62,7 +77,7 @@ Scroll down (or wait for later providers to finish) and the rest of the investig
 - **Threat Hunting Center** — generates hunting queries or leads an analyst could run in their own environment, built only from indicators actually present in this investigation's evidence.
 - **Investigation Copilot** — a chat box for asking follow-up questions about this specific investigation. Its answers are grounded in this lookup's own evidence rather than general knowledge, and unsupported citations get filtered out before you see them.
 
-## Why You Must Read the Evidence, Not Just the Score
+## ⚠️ Why You Must Read the Evidence, Not Just the Score
 
 This 8.8.8.8 example is worth sitting with, because it's a genuine, non-staged illustration of the platform's most important lesson: **a single verdict number is a summary, not a substitute for reading the evidence.**
 
@@ -72,7 +87,7 @@ Meanwhile, AbuseIPDB checked its abuse-report database and found zero reports. V
 
 Notice, too, that the Threat Score gauge on the first screen still read **87/100, "High"** — pulled up by that one Spamhaus flag — even though the fuller picture tells a different story. That's not a flaw the product is hiding: it's precisely why the Executive Summary text spells out the disagreement in plain words rather than quietly averaging it away, and why tools like **Intelligence Conflicts** and **Challenge This Verdict** exist on the same page. The AI's output here is analytical assistance — a fast, well-organized starting point — not an unquestionable ruling. An analyst who stopped at the gauge would walk away thinking Google's DNS resolver is a threat. An analyst who reads the provider cards, the Executive Summary, and the Evidence Ledger sees the real picture in under a minute.
 
-## Supported IOC Types
+## 📋 Supported IOC Types
 
 The platform automatically detects what kind of IOC you've submitted and routes it only to the providers that support that type. Types with dedicated provider coverage include:
 
@@ -91,14 +106,15 @@ The platform automatically detects what kind of IOC you've submitted and routes 
 
 This is not an exhaustive list of every type the platform can classify internally, but it covers the types you'll actually get provider results back for.
 
-## Security Assessment: Active Checks Against the Target
+## 🛡️ Security Assessment: Active Checks Against the Target
 
 Every provider covered so far is **passive** — it asks a third party what they already know about your indicator. Once an investigation completes for an IP, domain, hostname, or URL, a **Security Assessment** panel appears further down the page offering a genuinely different kind of check: sending real traffic to the target itself. Four checks are available — a Nmap port/service scan, a DNS record lookup, a TLS certificate inspection, and an HTTP security-header check — each described in plain language when you select it.
 
-**This never happens automatically.** Unlike every passive provider, a security assessment is something you must deliberately start, and the platform requires two explicit confirmations before it will run anything:
-
-1. **Retype the exact target** in the confirmation box — this is a safeguard against accidentally scanning the wrong thing.
-2. **Check the authorization box**, confirming you're actually allowed to run active checks against this target. Only scan systems you own or have explicit permission to test.
+> [!WARNING]
+> This never happens automatically. Unlike every passive provider, a security assessment is something you must deliberately start, and the platform requires two explicit confirmations before it will run anything:
+>
+> 1. **Retype the exact target** in the confirmation box — this is a safeguard against accidentally scanning the wrong thing.
+> 2. **Check the authorization box**, confirming you're actually allowed to run active checks against this target. Only scan systems you own or have explicit permission to test.
 
 [FIGURE: 45-security-assessment-panel.png | The Security Assessment panel: tool selection, the target-confirmation box, and the authorization checkbox.]
 
@@ -118,7 +134,10 @@ The Nmap port/service scan is the only one of the four checks that has more than
 - **Standard scan** (the default) — the 1,000 most common ports, *with* service/version detection (identifying what software is actually answering on an open port, e.g. "Uvicorn" or "nginx"). Slower than Quick, but far more informative — a service/version match is what lets the platform cross-reference known CVEs against it.
 - **Web service scan** — only the common web ports (80, 443, 8080, 8443), with service/version detection. The fastest way to check specifically web-facing exposure.
 
-A port only ever shows up in the findings table if it's genuinely **open**. Closed and filtered ports are not reported as findings at all — they're the expected, uninteresting majority of any scan, not evidence of anything. **If a scan completes and the findings table is empty, that means every port it checked came back closed or filtered — a real, successful result, not a failure.** A failed scan looks different: the run's status badge itself shows "failed" (in red) with an explanatory error message underneath, not an empty table with no explanation.
+A port only ever shows up in the findings table if it's genuinely **open**. Closed and filtered ports are not reported as findings at all — they're the expected, uninteresting majority of any scan, not evidence of anything.
+
+> [!NOTE]
+> If a scan completes and the findings table is empty, that means every port it checked came back closed or filtered — a real, successful result, not a failure. A failed scan looks different: the run's status badge itself shows "failed" (in red) with an explanatory error message underneath, not an empty table with no explanation.
 
 ### Scan statuses
 

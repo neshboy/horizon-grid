@@ -4,7 +4,7 @@ When you look up an **IOC** (Indicator of Compromise — a piece of evidence suc
 
 This section explains, honestly, what that AI layer actually does, what it deliberately does **not** do, and — most importantly — how you as an analyst can check any AI-written claim against the real evidence behind it rather than simply trusting it.
 
-## What the AI Actually Does
+## 🤖 What the AI Actually Does
 
 The platform's AI analysis happens in two distinct passes over the same investigation:
 
@@ -17,15 +17,17 @@ Both of these appear on the investigation page, and they answer different questi
 
 [FIGURE: 17-investigation-benign-ip-result.png | An investigation of the IOC 8.8.8.8 (Google Public DNS) shown moments after submission, with a Threat Score gauge and individual provider result cards (Spamhaus, AbuseIPDB, WHOIS/RDAP) displayed side by side as each provider finishes responding.]
 
-## What the AI Does NOT Do
+## 🚫 What the AI Does NOT Do
 
 It's just as important to understand the boundaries of this feature as it is to understand what it produces:
 
 - **The AI does not scan any files itself.** It has no antivirus engine, no sandbox, and no ability to independently examine a file, URL, or IP. Every fact it summarizes came from one of the third-party providers the platform queried — VirusTotal, AbuseIPDB, Spamhaus, NIST NVD, and so on.
 - **The AI has no threat feed or knowledge base of its own that it consults for a verdict.** It doesn't maintain a private list of known-bad indicators. Its job is strictly to read and reason over the results the providers already returned for *this specific lookup* — never to supply new "knowledge" of its own about whether something is malicious.
-- **The AI is explicitly prevented from inventing a verdict when there is no real evidence.** This is a hard, code-level safeguard, not just a polite instruction to the model, and it exists precisely because the alternative was tested and failed. During validation, the platform's real EICAR test file was looked up by its actual MD5 hash (EICAR is a standard, harmless, industry-wide test file used to safely trigger antivirus and threat-intelligence detections without touching real malware). In that specific test, none of the configured providers were actually turned on for that lookup, so there was zero real evidence of any kind — no provider data, no correlation between sources. Despite that, the AI model still produced a verdict of "highly malicious," a fabricated 92% probability of maliciousness, and invented prose claiming an "association with ransomware and trojans" — none of it grounded in anything that had actually been returned. This was caught, and the platform now includes a deterministic check that runs *before* the AI is ever asked to weigh in: if there are no per-provider findings and no correlated relationships between providers, the platform skips the AI call entirely and returns a fixed, honest result — a verdict of "unknown," a message explaining that no provider returned usable data for the indicator, and the risk fields left at zero — rather than letting a model guess from its own general training data. In other words, when there's nothing to go on, the platform says so, instead of making something up.
 
-## How the AI Handles Disagreement Between Providers
+> [!IMPORTANT]
+> The AI is explicitly prevented from inventing a verdict when there is no real evidence. This is a hard, code-level safeguard, not just a polite instruction to the model, and it exists precisely because the alternative was tested and failed. During validation, the platform's real EICAR test file was looked up by its actual MD5 hash (EICAR is a standard, harmless, industry-wide test file used to safely trigger antivirus and threat-intelligence detections without touching real malware). In that specific test, none of the configured providers were actually turned on for that lookup, so there was zero real evidence of any kind — no provider data, no correlation between sources. Despite that, the AI model still produced a verdict of "highly malicious," a fabricated 92% probability of maliciousness, and invented prose claiming an "association with ransomware and trojans" — none of it grounded in anything that had actually been returned. This was caught, and the platform now includes a deterministic check that runs *before* the AI is ever asked to weigh in: if there are no per-provider findings and no correlated relationships between providers, the platform skips the AI call entirely and returns a fixed, honest result — a verdict of "unknown," a message explaining that no provider returned usable data for the indicator, and the risk fields left at zero — rather than letting a model guess from its own general training data. In other words, when there's nothing to go on, the platform says so, instead of making something up.
+
+## ⚖️ How the AI Handles Disagreement Between Providers
 
 Threat intelligence sources don't always agree, and the platform doesn't hide that when it happens — it says so directly. A good real example is the IOC `8.8.8.8` (Google's public DNS resolver): Spamhaus flagged it as malicious, but the actual reason given was a query-permission error ("public/open resolver not permitted to query Spamhaus"), not a genuine detection — while AbuseIPDB reported zero abuse reports and VirusTotal returned a clean result. The AI's Executive Summary for that investigation says so plainly: the IP "is considered malicious by Spamhaus, but its reputation as a clean and safe IP address is supported by AbuseIPDB and VirusTotal."
 
@@ -33,7 +35,7 @@ That's not a bug in the product — it's the AI doing exactly what it's supposed
 
 [FIGURE: 18-investigation-benign-ip-full.png | The same 8.8.8.8 investigation, scrolled further, showing the Final Assessment's Executive Summary describing the disagreement between Spamhaus (malicious) and AbuseIPDB/VirusTotal (clean), alongside the Evidence Ledger, Verdict Analysis tabs, and Relationship Graph.]
 
-## Verifying an AI Claim Instead of Trusting It Blindly
+## 🧾 Verifying an AI Claim Instead of Trusting It Blindly
 
 Every investigation gives you concrete ways to check an AI-written statement against the real underlying evidence, rather than asking you to just take its word for it:
 
@@ -43,7 +45,7 @@ Every investigation gives you concrete ways to check an AI-written statement aga
 
 [FIGURE: 18-investigation-benign-ip-full.png | The Evidence Ledger and Verdict Analysis tabs (Why?, What's this?, Score Explanation, Intelligence Conflicts, False Positive Check, Challenge This Verdict) on the 8.8.8.8 investigation, giving an analyst tools to check the AI's verdict against the underlying evidence.]
 
-## Switching AI Backends and Getting a Second Opinion
+## 🔀 Switching AI Backends and Getting a Second Opinion
 
 Because the platform supports several interchangeable AI backends, changing which one analyzes your work is a day-to-day action, not an administrator task. A compact **"AI: [dropdown]"** control sits right next to the search bar on the home page, showing whichever backend is currently selected along with a colored dot — green if that backend is actually configured with working credentials, gray if it isn't — and a **Manage** link through to the full provider configuration page. Picking a different backend from the dropdown changes which AI analyzes your next investigation immediately: no restart, no editing configuration files, no detour through a separate settings page.
 
@@ -67,4 +69,5 @@ This matters for two reasons an analyst should know before using it. First, it i
 
 ---
 
-**AI analysis in this product is intended as analytical assistance, not unquestionable truth, and every AI-generated claim is designed to be traceable back to real evidence an analyst can independently check.**
+> [!IMPORTANT]
+> AI analysis in this product is intended as analytical assistance, not unquestionable truth, and every AI-generated claim is designed to be traceable back to real evidence an analyst can independently check.

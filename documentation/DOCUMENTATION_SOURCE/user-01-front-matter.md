@@ -1,4 +1,4 @@
-# Executive Overview
+# 🎯 Executive Overview
 
 HORIZON GRID is a self-hosted application that takes a single indicator of compromise -- an **IOC** (Indicator of Compromise), meaning a piece of evidence such as an IP address, domain name, URL, file hash, or CVE ID (a publicly catalogued software vulnerability, e.g. "CVE-2021-44228") -- and looks it up simultaneously against a wide range of third-party threat-intelligence sources. Rather than opening a dozen browser tabs and pasting the same indicator into a dozen different tools, an analyst pastes it once into a single search box. The platform queries every relevant provider in parallel, waits for their answers, automatically looks for relationships between what those providers reported, and then asks an AI model to summarize the whole picture in plain language.
 
@@ -6,7 +6,7 @@ This tool is built for security analysts doing IOC triage: the day-to-day work o
 
 The value proposition in one sentence: **one search, many providers, correlated, AI-summarized, and evidence-backed** -- an analyst gets in seconds what used to take many separate tools and a lot of manual cross-referencing to piece together, along with a way to check, item by item, exactly where every claim in the summary came from.
 
-# The Problem
+# 🧩 The Problem
 
 Investigating a single indicator properly means checking it against several independent sources, because no one source sees everything. A file hash might be flagged by one antivirus engine and ignored by another. An IP address might be a known Tor exit node according to one list and a clean, unremarkable address according to another. A domain might have no reputation history anywhere but still be tied to a live vulnerability. Getting a trustworthy picture means checking multiple sources and weighing what they collectively say -- not any single answer in isolation.
 
@@ -14,7 +14,7 @@ In practice, that means an analyst opens a reputation lookup site, then a sandbo
 
 Multiply this by every indicator that needs triage in a day, and the real cost isn't just the minutes spent per lookup -- it's the tabs, the context-switching, the copy-paste errors, and the correlations that quietly get missed because no human is going to manually cross-reference a dozen sources for every single IOC that crosses their desk.
 
-# The Solution
+# 💡 The Solution
 
 HORIZON GRID collapses that whole workflow into a single search box. An analyst submits one IOC, and the platform:
 
@@ -24,7 +24,7 @@ HORIZON GRID collapses that whole workflow into a single search box. An analyst 
 
 That last point comes with an important caveat, and the platform is built around it rather than around hiding it: **AI output is analytical assistance, not unquestionable truth.** The AI model can misread evidence, and providers themselves can disagree -- a genuine, documented example is the IOC `8.8.8.8` (Google's public DNS resolver), where one provider's DNS blocklist flags it as malicious due to a query-permission error while two other providers report it as clean, and the AI's own executive summary has to explicitly reconcile that disagreement rather than paper over it. Because of cases exactly like this, every AI-generated claim on an investigation page is traceable back to the underlying evidence it was built from, through the **Evidence Ledger** -- a deterministic, non-AI-generated list of the concrete facts (provider results, correlation edges, and summaries) that any AI explanation is required to cite. An analyst never has to take the AI's word for it; they can always check the receipts.
 
-# Key Capabilities
+# ✨ Key Capabilities
 
 - **Multi-provider IOC lookup** -- submit one indicator (IP, domain, URL, file hash, or CVE) and query every configured, applicable threat-intelligence provider at once, with results streaming in live as each provider responds.
 - **AI-assisted analysis grounded in evidence** -- a plain-language summary per provider plus one consolidated final assessment, with dedicated views for "Why this verdict?", score explanations, provider disagreements, false-positive checks, and a "Challenge This Verdict" option -- all designed to be checked against real evidence, not taken on faith.
@@ -32,4 +32,4 @@ That last point comes with an important caveat, and the platform is built around
 - **Case management** -- create a case, attach IOCs to it as the investigation grows, and add freeform analyst notes to build a record of the work.
 - **IOC Basket** -- a saved, running list of IOCs an analyst wants to keep an eye on or revisit, with the ability to investigate or compare selected items together.
 - **JSON and Markdown export** -- download an investigation's results in either format for use outside the platform.
-- **Windows installer with a guided setup wizard** -- a standard installer followed by a step-by-step wizard that creates the administrator account, configures the AI backend and threat-intelligence providers (with live "Test" buttons for each), reviews network ports, and installs the platform end to end.
+- **Guided setup wizard on both platforms** -- a standard installer (Windows `.exe`, Linux `.deb`) followed by a step-by-step wizard that creates the administrator account, configures the AI backend and threat-intelligence providers (with live "Test" buttons for each), reviews network ports, and installs the platform end to end.

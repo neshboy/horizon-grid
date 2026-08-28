@@ -1,10 +1,27 @@
-# Troubleshooting Reference
+# 🛠️ Troubleshooting Reference
 
 This chapter is a symptom-first reference: one entry per real problem, each with the same five fields -- Symptom, Cause, How to Check, Fix, Prevention. It complements, rather than repeats, the Health & Troubleshooting chapter (which covers the AI-unavailable, database-outage, cache-speed, provider-card, disconnected-investigation, export-limitation, and invalid-IOC scenarios from an analyst's point of view, with real screenshots) and the Final Release QA Report (the source for every "found and fixed" claim below). Where a scenario is already documented in full elsewhere, this entry gives the operator-facing summary and points back rather than re-explaining it end to end.
 
 Every scenario below was either deliberately induced and observed, or organically encountered, during this platform's own QA passes -- none are hypothetical.
 
-## Frontend unavailable
+## 📚 Table of Contents
+
+- [💻 Frontend unavailable](#-frontend-unavailable)
+- [🔧 Backend unavailable](#-backend-unavailable)
+- [🔌 Port already in use](#-port-already-in-use)
+- [🔑 "API key not provided" / Test Connection always fails on an already-saved credential](#-api-key-not-provided--test-connection-always-fails-on-an-already-saved-credential)
+- [🚦 Provider timeout / rate-limited](#-provider-timeout--rate-limited)
+- [🤖 AI unavailable](#-ai-unavailable)
+- [🐘 Database unavailable](#-database-unavailable)
+- [🔓 Login failure](#-login-failure)
+- [🔐 Permission denied](#-permission-denied)
+- [📦 Installer failure (fresh install crash-loops on a Postgres password error)](#-installer-failure-fresh-install-crash-loops-on-a-postgres-password-error)
+- [🧹 Invalid IOC input](#-invalid-ioc-input)
+- [📑 Summary](#-summary)
+
+---
+
+## 💻 Frontend unavailable
 
 **Symptom:** `http://localhost:3000` doesn't load, times out, or shows a browser connection-refused error.
 
@@ -16,7 +33,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** Always use `docker compose -f docker-compose.yml -f docker-compose.prod.yml ...` (both files together) for anything other than active development against a live-editable source tree -- the dev-only base file's bind mounts are the entire reason this class of failure exists.
 
-## Backend unavailable
+## 🔧 Backend unavailable
 
 **Symptom:** `GET /health` doesn't respond; the frontend loads but every API call fails; Service Status reports `Backend API: NOT RESPONDING`.
 
@@ -28,7 +45,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** Never run the built backend image directly with `docker run`, bypassing Compose -- the image's own baked-in `CMD` is plain `uvicorn app.main:app`, with no migration step; only the Compose `command:` override runs Alembic first.
 
-## Port already in use
+## 🔌 Port already in use
 
 **Symptom:** During installation or on `docker compose up`, a service fails to bind its port, or the Setup Wizard's port fields show a conflict.
 
@@ -40,7 +57,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** If running multiple installs or environments on one machine (e.g. a dev tree and an installed copy simultaneously), give each a fully distinct set of host ports up front rather than relying on the conflict detection to catch it after the fact.
 
-## "API key not provided" / Test Connection always fails on an already-saved credential
+## 🔑 "API key not provided" / Test Connection always fails on an already-saved credential
 
 **Symptom:** A provider or AI backend was configured and saved successfully (it shows "Configured" on the Manage Providers page), but clicking **Test Connection** on that same row reports an authentication failure -- as if no key were set at all.
 
@@ -52,7 +69,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** Treat "Configured" (the badge on the collapsed row) as the source of truth for "is a credential saved," and treat Test Connection as a check on whatever you're *about* to save, not a re-verification of what's already saved. This is a distinct, unrelated issue from the historical "Test Connection succeeds, but a real investigation still reports not configured" bug described in the Runtime Configuration Architecture chapter -- that one was a real freshness bug and has been fixed; this one is expected, current behavior arising from credentials never being round-tripped back to the browser in the clear.
 
-## Provider timeout / rate-limited
+## 🚦 Provider timeout / rate-limited
 
 **Symptom:** One provider's card in an investigation shows "Timeout" or "Rate Limited" while others complete normally.
 
@@ -64,7 +81,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** None of this is preventable at the platform level for a third-party vendor's own rate limit -- it's inherent to using free/low-tier external APIs. What the platform guarantees instead is that one provider's timeout or rate limit never blocks or delays the rest of the investigation, and never gets mislabeled as a different status (e.g. a rate limit never silently reads as "no data" or "clean").
 
-## AI unavailable
+## 🤖 AI unavailable
 
 **Symptom:** The final assessment reads "Unknown," risk/confidence scores read 0, and a note explains AI summarization was unavailable.
 
@@ -76,9 +93,10 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** If running a local Ollama model, make sure the host has enough RAM/VRAM for the configured model and that Ollama itself is set to start automatically with Windows, so it's already warm before the first investigation of the day.
 
-**Linux-specific note:** `host.docker.internal` (the address the platform uses to reach a host-native Ollama) is a Docker Desktop convenience that native Linux Docker Engine does not provide automatically. `docker-compose.yml` maps it explicitly (`extra_hosts: host.docker.internal:host-gateway`, supported since Docker Engine 20.10) so this resolves correctly on a real Linux install too — confirmed live on a fresh Ubuntu 24.04 install. If you're running an older Docker Engine that predates this feature, point `OLLAMA_BASE_URL` at the host's real LAN IP instead of `host.docker.internal` as a workaround.
+> [!NOTE]
+> **Linux-specific note:** `host.docker.internal` (the address the platform uses to reach a host-native Ollama) is a Docker Desktop convenience that native Linux Docker Engine does not provide automatically. `docker-compose.yml` maps it explicitly (`extra_hosts: host.docker.internal:host-gateway`, supported since Docker Engine 20.10) so this resolves correctly on a real Linux install too — confirmed live on a fresh Ubuntu 24.04 install. If you're running an older Docker Engine that predates this feature, point `OLLAMA_BASE_URL` at the host's real LAN IP instead of `host.docker.internal` as a workaround.
 
-## Database unavailable
+## 🐘 Database unavailable
 
 **Symptom:** The page shows a clear error, or an investigation won't load at all.
 
@@ -90,7 +108,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** Take regular backups anyway (§5 of the Operations Guide) -- a clean outage doesn't lose data, but it's not a substitute for having a real point-in-time backup for the scenarios that are actually destructive (disk failure, an accidental `docker compose down -v`).
 
-## Login failure
+## 🔓 Login failure
 
 **Symptom:** Signing in returns an error instead of reaching the dashboard.
 
@@ -102,7 +120,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** Use the Setup Wizard's own re-run ("Configuration" shortcut) rather than trying to register a duplicate admin account if credentials are simply forgotten -- re-running the wizard on an existing install prompts for the existing admin email/password rather than creating a new one.
 
-## Permission denied
+## 🔐 Permission denied
 
 **Symptom:** A `403 Forbidden` response, with a message in the shape `Role '<role>' lacks permission '<permission>'` (e.g. `Role 'viewer' lacks permission 'lookup:create'`).
 
@@ -114,7 +132,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** Assign roles based on what a person actually needs to do, not defensively -- Viewer's read-only scope is deliberately generous (it includes the full dashboard and provider health, not just investigation results) specifically so that most "just looking" use cases never need Analyst access at all, which keeps the set of accounts that can create/export/configure things smaller and easier to audit.
 
-## Installer failure (fresh install crash-loops on a Postgres password error)
+## 📦 Installer failure (fresh install crash-loops on a Postgres password error)
 
 **Symptom:** Immediately after a fresh install finishes, the backend container crash-loops with a Postgres authentication error in its logs, even though the wizard just finished writing a brand-new `.env`.
 
@@ -126,7 +144,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** Let an install either fully complete or be fully removed (`docker compose down -v`) before starting another attempt on the same machine -- don't delete `.env` by hand as a way of "resetting" a partial install, since that's exactly the state that used to trigger this bug.
 
-## Invalid IOC input
+## 🧹 Invalid IOC input
 
 **Symptom:** Typing a value into the investigation search returns `422 Could not determine IOC type; pass ioc_type_hint.` (surfaced in the UI as "Could not determine IOC type").
 
@@ -138,6 +156,6 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Prevention:** None needed beyond normal input care -- this is working as designed, and matches the same principle used everywhere else in the platform: report an honest, specific rejection rather than silently guessing a type and producing a meaningless or misleading result.
 
-## Summary
+## 📑 Summary
 
 Every entry above traces to a real, either deliberately-induced or organically-encountered condition, not a hypothetical -- the Postgres-password installer bug, the connection-pool/query-optimization dashboard failure, the NO_DATA-as-failure Provider Health bug, and the AI/database-outage scenarios were all found, fixed (where a fix was appropriate), and confirmed live during this platform's own QA passes, and are cited from the Final Release QA Report and the relevant architecture chapters rather than re-derived here. Two patterns recur across several entries and are worth remembering on their own: (1) the platform consistently prefers an honest, specific failure message over a silent guess or a fabricated success -- "Unknown," "Not Configured," "Could not determine IOC type," and the exact `Role '<x>' lacks permission '<y>'` string are all instances of the same design choice; (2) a failure in one subsystem (one provider, the AI backend, Celery) is consistently isolated from the rest of the platform rather than cascading -- a rate-limited provider doesn't block an investigation, a down AI backend doesn't touch provider data, and a stopped Celery worker doesn't affect a single live lookup.

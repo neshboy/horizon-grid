@@ -1,8 +1,81 @@
-# HORIZON GRID Changelog
+# 🗒️ HORIZON GRID Changelog
 
 All notable changes for the HORIZON GRID release are listed below, grouped by area. Every entry below reflects a real, tested change — not a planned or aspirational one.
 
-## v0.3.0 — Pentest Suite: scope-enforced assessments and gated real-exploit validation
+## 📋 Table of contents
+
+- [v0.3.8 — DeepSeek backend rejected every request with "Thinking mode does not support this tool_choice"](#v038---deepseek-backend-rejected-every-request-with-thinking-mode-does-not-support-this-tool_choice)
+- [v0.3.7 — Ollama base_url masked like a secret, breaking re-test of an already-working connection](#v037---ollama-base_url-masked-like-a-secret-breaking-re-test-of-an-already-working-connection-windows--linux)
+- [v0.3.6 — "Test Connection" showed a raw connection error instead of "platform hasn't started yet"](#v036---test-connection-showed-a-raw-connection-error-instead-of-platform-hasnt-started-yet)
+- [v0.3.5 — Remaining "Cannot index into a null array" sites in the Setup Wizard](#v035---remaining-cannot-index-into-a-null-array-sites-in-the-setup-wizard)
+- [v0.3.4 — AI Configuration "Test Connection" required a sign-in that couldn't exist yet](#v034---ai-configuration-test-connection-required-a-sign-in-that-couldnt-exist-yet)
+- [v0.3.3 — Setup Wizard "Enabled property not found" / null Form on Start Installation](#v033---setup-wizard-enabled-property-not-found--null-form-on-start-installation)
+- [v0.3.2 — Setup Wizard "Cannot index into a null array" during post-install AI validation](#v032---setup-wizard-cannot-index-into-a-null-array-during-post-install-ai-validation)
+- [v0.3.1 — Ollama null-response crash, Watchdog task registration, and a misleading "Sign-in required" during fresh installs](#v031---ollama-null-response-crash-watchdog-task-registration-and-a-misleading-sign-in-required-during-fresh-installs)
+- [v0.3.0 — Pentest Suite: scope-enforced assessments and gated real-exploit validation](#v030---pentest-suite-scope-enforced-assessments-and-gated-real-exploit-validation)
+- [v0.2.5 — Security Assessment panel visibility and friction fixes](#v025---security-assessment-panel-visibility-and-friction-fixes)
+- [v0.2.4 — Original visual identity and branding pass](#v024---original-visual-identity-and-branding-pass)
+- [v0.2.3 — Mission-critical deployment hardening: 18 real gaps found and fixed](#v023---mission-critical-deployment-hardening-18-real-gaps-found-and-fixed)
+- [v0.2.2 — Independent re-verification: 7 real bugs found and fixed](#v022---independent-re-verification-7-real-bugs-found-and-fixed)
+- [v0.2.1 — Port scanning: real cancellation added](#v021---port-scanning-real-cancellation-added)
+- [v0.2.0 — AI provider ecosystem expansion](#v020---ai-provider-ecosystem-expansion)
+- [Rebrand](#-rebrand)
+- [New IOC providers](#-new-ioc-providers)
+- [Export security fixes](#-export-security-fixes)
+- [Deterministic threat-scoring engine](#-deterministic-threat-scoring-engine)
+- [AI-generation outcome tracking](#-ai-generation-outcome-tracking)
+- [Executive Dashboard and Provider Health](#-executive-dashboard-and-provider-health)
+- [Navigation](#-navigation)
+- [Performance](#-performance)
+- [Windows installer](#-windows-installer)
+- [UI](#-ui)
+
+## v0.3.8 — 🤖 DeepSeek backend rejected every request with "Thinking mode does not support this tool_choice"
+
+Every AI call against the DeepSeek backend (per-provider summaries and the final assessment alike) failed with `RuntimeError('DeepSeek invocation failed: HTTP 400: {"error":{"message":"Thinking mode does not support this tool_choice"...}}')`, live-confirmed against a real running stack investigating `8.8.8.8` and a file hash. Root cause: DeepSeek's current v4 models (`deepseek-v4-flash`/`deepseek-v4-pro`) default `thinking.type` to `"enabled"`, and DeepSeek's own API rejects that combined with a forced `tool_choice` — which `deepseek_client.py` always sends, since structured JSON output here relies on forcing a single named tool rather than a bare "return JSON" instruction (the same approach every other client in `app/ai/` uses). `call_claude_json()` now explicitly sends `"thinking": {"type": "disabled"}` in the request body, since this client never wants DeepSeek's reasoning trace — only the forced tool-call's structured arguments. Verified live: the exact call path used by `app/ai/service.py` (`_get_ai_client()` for the configured `deepseek` backend, real decrypted credentials from the database) now returns a normal structured result instead of the HTTP 400.
+
+This is shared backend code, not Windows-specific — affects both the Windows installer and the Linux package equally.
+
+## v0.3.7 — 🔌 Ollama base_url masked like a secret, breaking re-test of an already-working connection (Windows + Linux)
+
+The Manage Providers page (`/providers`) masked every AI backend's credential field identically, including Ollama's `base_url` — which isn't a secret at all. The edit form's fields all start blank by design (never pre-filling real secrets), but that meant re-testing an already-configured, genuinely working Ollama connection without retyping the exact base URL from memory sent an empty value, producing a false "Ollama base URL and model are both required" error. The backend now returns a narrow, explicit allow-list of non-secret fields (currently just Ollama's `base_url`) in cleartext instead of masked; the frontend pre-fills those fields from that value (matching how the model field already worked) and renders them as plain text instead of a password field. True secrets (API keys, tokens) are completely unaffected — still never returned in cleartext, still blank by default. Verified against the real, running stack: the exact same `test_ai_connection("ollama", ...)` call that previously failed now returns `ok=True, message="Connected. Model replied: 'pong'"`.
+
+> [!NOTE]
+> This bug never affected actual IOC analysis. `app/ai/service.py`'s `_get_ai_client()` resolves the active AI backend via `get_active_ai_config()` — a fresh, direct read of the real, correctly-stored, correctly-decrypted credentials from the database on every call. It never goes anywhere near the `/providers` page's edit form. The masking bug only broke that one page's "Test Connection" button, whose form intentionally starts blank (correct behavior for real secrets like API keys) and resends whatever's currently typed — Ollama's `base_url` getting swept into that same blanket blanking, despite not being a secret, is what broke it specifically. So "real investigations using Ollama work" and "clicking Test Connection fails" were both true simultaneously, on two genuinely separate code paths, not a contradiction.
+
+**Testing.** Added `test_plaintext_credential_field_is_not_masked` (integration, uses a synthetic provider id rather than touching the real `ollama` row), confirming the allow-listed field returns in cleartext while an ordinary secret field on the same synthetic provider still masks correctly. Full existing `test_runtime_config_persistence.py` suite re-run and passing (6/6). This is shared backend/frontend code, not Windows-specific — affects both the Windows installer and the Linux package equally.
+
+## v0.3.6 — 🪟 "Test Connection" showed a raw connection error instead of "platform hasn't started yet"
+
+Introduced in v0.3.4's own fix: the new bootstrap check for whether the backend is reachable read `$script:LastSessionFailureReason` directly inline inside the Test Connection button's closure — the exact same `GetNewClosure()` scoping defect fixed everywhere else in v0.3.3/v0.3.5, live-confirmed via isolated repro (bare inline check returns the wrong value; the identical check wrapped in a plain function returns correctly). The check now goes through a small function (`Test-LastSessionFailureIsBackendUnreachable`), consistent with how `Get-SessionRequiredMessage` already had to be a function for the same reason. Before this fix, testing Ollama against a not-yet-started backend surfaced a raw "Unable to connect to the remote server" instead of the intended "the platform hasn't started yet" message.
+
+## v0.3.5 — 🪟 Remaining "Cannot index into a null array" sites in the Setup Wizard
+
+The same `GetNewClosure()`-inside-an-invoked-Build-block scoping defect fixed in v0.3.3/v0.3.4 for `$Form`/`$NextButton`/`$BackButton`/`$script:AiGetters` also affected `$script:AiTestState` (crashed live clicking "Test Connection" on the AI Configuration page) and, latently, `$script:ProviderTestState` and `$script:SetupLogPath` on the Providers and Summary pages. All are now captured as plain locals before their respective closures, consistent with the established remedy. A full sweep of every `$script:`-scoped variable in the file was done this time to catch any remaining instance rather than fixing them one at a time as each was hit live.
+
+## v0.3.4 — 🪟 AI Configuration "Test Connection" required a sign-in that couldn't exist yet
+
+The AI Configuration page's "Test Connection" button always required an authenticated admin session before it would even attempt the call, even when the platform's backend was already reachable but no admin account existed yet (or the credentials just typed didn't match one) — a real chicken-and-egg gap on any install where the backend had already started from an earlier attempt. `POST /api/v1/ai/test` now allows an unauthenticated call ONLY while zero user accounts exist in the database (the same bootstrap window `/auth/register` already uses for the very first admin), closing automatically and permanently the moment any account is created. The wizard now attempts the call unauthenticated in this case instead of showing "sign-in required" outright; a genuinely unreachable backend still reports honestly, since there is nothing to test in that case regardless of auth.
+
+## v0.3.3 — 🪟 Setup Wizard "Enabled property not found" / null Form on Start Installation
+
+Clicking "Start Installation" (and, latently, any AI/Provider "Test Connection" button) could crash with `The property 'Enabled' cannot be found on this object` / `You cannot call a method on a null-valued expression`, live-reproduced against a real install. Same root-cause class as v0.3.2's `$script:AiGetters` bug: bare top-level `$Form`/`$NextButton`/`$BackButton` are not reliably visible inside a `.GetNewClosure()` scriptblock nested inside a page's own invoked `Build` block. Fixed at all three affected sites (the AI backend "Test Connection" button, the per-provider "Test" button, and the Summary page's Start Installation handler) by capturing each as a plain local before the closure, matching the already-established remedy for the `$script:`-scoped cases.
+
+## v0.3.2 — 🪟 Setup Wizard "Cannot index into a null array" during post-install AI validation
+
+The Setup Wizard's post-install "Validating the configured AI backend..." step crashed with `Cannot index into a null array` on the `$aiGetters = $script:AiGetters[...]` line: the Install button's click handler is a `GetNewClosure()` scriptblock lexically nested inside the Summary page's own invoked `Build` scriptblock, and `$script:`-qualified variable reads resolve to `$null` inside that specific nesting pattern (the same closure-scoping defect already worked around for `$script:AppRepoDir`/`$script:EnvFilePath`/`$script:LogsDir`/`$script:SetupCompleteMarker`, but never applied to the later-added `$script:AiGetters` lookup). Fixed by capturing `$script:AiGetters` as a plain local (`$aiGettersRegistry`) before the closure, matching the existing pattern, plus a null-safe read so this crash class can't resurface even if the registry is ever unpopulated; the pre-existing graceful-warning fallback and non-blocking "Setup complete" behavior are unchanged.
+
+## v0.3.1 — 🪟 Ollama null-response crash, Watchdog task registration, and a misleading "Sign-in required" during fresh installs
+
+Three real bugs found reproducing a failed self-hosted install report, all fixed.
+
+- Ollama returning a literal `{"models": null}` (some versions/proxies do this when nothing is pulled yet) or `{"message": null}` crashed the AI-backend model-listing and connection-test endpoints with an uncaught error instead of failing gracefully. `.get(key, default)`'s default only applies when the key is absent, not when it's present but `null`.
+- The Watchdog scheduled task failed to register with `Register-ScheduledTask : The task XML contains a value which is incorrectly formatted or out of range.` — `[TimeSpan]::MaxValue` serializes to an ISO-8601 duration that exceeds Task Scheduler's own valid range. Replaced with a 10-year repetition duration, effectively unlimited for a 5-minute watchdog.
+- Every "Test Connection" button on the AI Configuration and Provider Configuration wizard pages showed "Sign-in required: enter your existing administrator email and password" even when the operator had already typed both correctly — because those pages appear *before* "Start Installation" ever runs `docker compose`, so the backend genuinely isn't reachable yet at that point in a fresh install, and the wizard couldn't distinguish "backend not up yet" from "you haven't entered credentials" from "wrong credentials." All three now get their own clear, correct message; the expected-during-fresh-install case explains itself instead of looking like a configuration mistake.
+
+**Testing.** Added regression tests for both null-response shapes (8 new tests); the Ollama tags-parsing logic was extracted into a small, directly-testable function. The new backend-reachability check was verified directly against both a real open port (the running backend) and closed ports.
+
+## v0.3.0 — ⚔ Pentest Suite: scope-enforced assessments and gated real-exploit validation
 
 A new, standalone assessment lifecycle — DISCOVER → ENUMERATE → ASSESS → CORRELATE → PRIORITIZE → REPORT — built as a second orchestration layer over the same tool adapters (Nmap, DNS, TLS, HTTP headers, hash analysis) the existing per-investigation Security Assessment Toolkit already provides, targeting its own standalone assessments/targets/findings instead of a single `IOCLookup`. The Security Assessment Toolkit itself, and its UI, are completely untouched.
 
@@ -22,7 +95,7 @@ Five independent gates stand between "an assessment exists" and "a real exploit 
 
 **Testing.** The backend test suite grew from 404 to 432 passing tests across this work (39 pre-existing skips and 2 pre-existing pytest-collection artifacts, both unrelated to this release and documented in the Security appendix), zero regressions. Beyond the mocked suite, this was verified live end-to-end against a real, running Metasploit installation: a real module search by CVE (returned real, correctly-ranked, correctly-labeled results for a well-known vulnerability), real module option/metadata retrieval, and a real non-exploiting `check` run against an authorized loopback test target that had no listening service — correctly and honestly reported as "cannot reliably check exploitability" rather than a fabricated result either way.
 
-## v0.2.5 — Security Assessment panel visibility and friction fixes
+## v0.2.5 — 🛡 Security Assessment panel visibility and friction fixes
 
 Two real bugs found and fixed while live-testing the Security Assessment Toolkit (the port scanner UI) against a fresh install. Both frontend-only: no backend logic, database schema, or API contract changed.
 
@@ -32,7 +105,7 @@ Two real bugs found and fixed while live-testing the Security Assessment Toolkit
 
 **Testing:** both bugs reproduced live against a real investigation and a real Nmap scan (not just unit tests) — confirmed broken before the fix, confirmed working (panel visible, scan runs and completes with zero typing) after. Full backend regression suite re-run clean after each change: 383 passed, 39 skipped, zero regressions. The Windows installer was verified via an isolated silent install confirming the fix is actually packaged into the shipped frontend source, then fully cleaned up (uninstalled, registry entry removed).
 
-## v0.2.4 — Original visual identity and branding pass
+## v0.2.4 — 🎨 Original visual identity and branding pass
 
 A professional branding + UI/UX pass across the entire frontend, requested because the product name and tagline ("Every Signal. One Operational Picture.") were previously barely visible anywhere in the running application. Presentation-only by design: no backend logic, database schema, authentication, IOC processing, AI provider logic, provider API logic, port scanner logic, or admin permissions were touched, verified by a full backend regression run (383 passed, 39 skipped) and a clean frontend typecheck both before and after every change.
 
@@ -52,7 +125,7 @@ A professional branding + UI/UX pass across the entire frontend, requested becau
 
 No manual upgrade step is required; re-running the installer/package on an existing install preserves your configuration and data as always.
 
-## v0.2.3 — Mission-critical deployment hardening: 18 real gaps found and fixed
+## v0.2.3 — 🔁 Mission-critical deployment hardening: 18 real gaps found and fixed
 
 A dedicated reliability and security review for unattended, remote-site deployment (installed once, expected to run correctly for a long time with no developer access afterward). Every item below was confirmed present before the fix (live reproduction or direct code-path tracing) and confirmed resolved after (a real test, a live re-verification, or both) — nothing here was assumed fixed on intention alone. Two gaps were self-discovered during this review, not flagged by the initial structured assessment.
 
@@ -106,7 +179,7 @@ A dedicated reliability and security review for unattended, remote-site deployme
 
 **Known limitations (disclosed, not fixed in this release):** no automated host-disk-space alerting; no retention/cleanup job for ever-growing investigation tables; no off-host/off-site backup copy option (backups are local-disk-only); a narrow DNS-rebinding TOCTOU window on the SSRF check (validates a resolution snapshot, the real call re-resolves independently afterward); Neo4j and OpenSearch remain fully provisioned with zero actual application traffic (confirmed via exhaustive search — a real resource cost with no current benefit, flagged as an open product question). See the Mission-Critical Operations Manual for the complete list.
 
-## v0.2.2 — Independent re-verification: 7 real bugs found and fixed
+## v0.2.2 — 🔎 Independent re-verification: 7 real bugs found and fixed
 
 An independent, adversarial re-verification of the v0.2.1 port-scanning cancellation fix (nine parallel reviewers, each reading the real code fresh rather than trusting the prior report) confirmed the cancellation fix itself is correct — the original before/after claim was re-proven directly from git history — but found four new, real defects in the scanner and three unrelated ones surfaced incidentally during full-application regression. All seven are fixed, tested, and live-verified below; none were assumed fixed just because a test suite was green.
 
@@ -124,7 +197,7 @@ An independent, adversarial re-verification of the v0.2.1 port-scanning cancella
 - **A confusing error on the losing side of a concurrent last-admin-protection race.** The platform already correctly guarantees the system can never reach zero active administrators, even under real concurrency — that invariant held throughout adversarial testing. But the account that loses such a race got a generic "could not validate credentials" (as if their login had broken) rather than a clear explanation that their own account was the one just deactivated by the other request. Fixed by distinguishing "no such account" from "this account was deactivated" and returning the same clear, existing "Account disabled" message used elsewhere for the latter.
 - **An AI-generated assessment could cite specific findings in its prose while leaving the structured supporting-evidence list empty** — the exact violation the AI prompt's own instructions already warned against, uncorrected. Since this field holds free-text paraphrased excerpts (not structured IDs), there is no safe way to auto-fill it without risking a fabricated-looking quote; instead, a substantive claim with no supporting evidence now fails validation and reuses the existing retry mechanism, giving the AI a real second chance to either cite its evidence or write a shorter claim that doesn't need it.
 
-## v0.2.1 — Port scanning: real cancellation added
+## v0.2.1 — 🛡 Port scanning: real cancellation added
 
 - A forensic audit of the Security Assessment Toolkit's Nmap port/service scanner (prompted by a report that "port scanning is not working correctly") traced the full pipeline end to end — frontend, API route, validation, scanner engine, subprocess execution, result parsing, and UI display — and found each of those stages already working correctly against real local targets. The actual, confirmed gap was narrower and more specific: **there was no way to cancel a running scan.** Once started, a scan (or a whole batch of them) could only be waited out; a wrong profile, a slow/large target, or simply changing your mind had no recourse short of restarting the backend.
 - Added a real `POST /api/v1/security-assessment/runs/{run_id}/cancel` endpoint and a "Cancel Scan" button in the Security Assessment panel, visible on any run that's still pending or running. Cancelling genuinely stops the work, not just the displayed status: the real underlying `nmap` OS process is killed, not left orphaned. Verified live against an actual running scan: cancellation completed in ~1.6 seconds versus the ~12 seconds the same scan would have taken to finish naturally, with no leftover process.
@@ -135,7 +208,7 @@ An independent, adversarial re-verification of the v0.2.1 port-scanning cancella
 - 5 new integration tests cover in-flight cancellation (using a deliberately slow scan so the cancellation genuinely lands mid-flight, not after the scan has already finished), the backend-restart-orphan case, rejecting a cancel on an already-finished run, an unknown run id, and RBAC enforcement.
 - A follow-up adversarial pass (racing two concurrent cancel requests for the same run) found a real, low-severity issue: both requests could each write their own `run_cancelled` audit-log entry for what was really one cancellation. Fixed by making the run's own background task the single source of truth for that audit record; a request that arrives after the run is already resolving no longer writes a redundant one. Confirmed live, before and after, by directly querying the audit table during a real concurrent-cancel race.
 
-## v0.2.0 — AI provider ecosystem expansion
+## v0.2.0 — 🤖 AI provider ecosystem expansion
 
 - Added five new AI backends, bringing the total from six to eleven: **Kimi** (Moonshot AI), **DeepSeek**, **xAI (Grok)**, **Mistral AI**, and **OpenRouter** (a meta-router giving access to hundreds of underlying models from many providers through one API). Each follows the same forced-tool-calling pattern as the existing OpenAI-compatible backends (Groq, OpenAI), with a real live model-discovery endpoint and a real live connection test — no static-list-only shortcuts.
 - Every new backend's real API base URL, auth format, and default model were verified against each provider's live current documentation before implementation, not assumed from prior knowledge — this caught several real, non-obvious details worth calling out: DeepSeek's chat-completions path has no `/v1` segment (unlike every other backend); several of Kimi's newer "thinking"-mode models reject a forced tool call outright, so the default model deliberately avoids them; xAI's error response body is a flat `{"code","error"}` shape rather than the nested shape most other backends use; OpenRouter's live model list is filtered to only models that actually declare `tool_choice` support, since not every model it routes to supports forced tool calling.
@@ -143,36 +216,36 @@ An independent, adversarial re-verification of the v0.2.1 port-scanning cancella
 - Added 31 new unit tests (connection-test coverage for all 5 new backends: no-key, success, auth failure, model-not-found, rate-limit, and network-timeout paths), plus a Kimi-specific test for the thinking-mode/forced-tool-call conflict. Full backend suite: 313 passed.
 - A real, previously-undiscovered Windows installer packaging bug was found and fixed while rebuilding the installer for this release: `installer.iss` never excluded the local `backend/.venv`/`.venv_test` development virtualenvs from the bundled files, so every prior installer build silently included hundreds of megabytes of irrelevant local Python environment files that the actual running application never uses (the real app always builds fresh inside a `python:3.12-slim` container from `requirements.txt`). Fixing the exclusion dropped the installer from ~69 MB to ~8 MB with zero functional change — this gap was already flagged as a known issue in `linux/build-deb.sh`'s own comments, but never actually fixed until now.
 
-## Rebrand
+## 🏷 Rebrand
 
 - Full visible rebrand from "IOC Intelligence Platform" to **HORIZON GRID** (tagline: "Every Signal. One Operational Picture.") across the frontend, backend API title, Windows installer, Start Menu shortcuts, and all documentation.
 - Internal identifiers deliberately left unchanged for upgrade safety: the on-disk ProgramData data folder name, the Postgres database name (`ioc_intel`), Python package names, and the Kubernetes namespace. Only user-visible strings were renamed.
 
-## New IOC providers
+## 🔌 New IOC providers
 
 - Added **urlscan.io** (sandbox category, submit-then-poll scan model) as a new IOC provider.
 - Added **Google Safe Browsing** (threat_intel category) as a new IOC provider.
 - Both providers were verified, via a real live test with deliberately invalid credentials, to never report a provider failure as a false "safe"/"clean" result — a failed or unreachable call is always surfaced as an error or unknown status.
 - A real gap was found and fixed after initial release: both new providers had no live "Test Connection" check wired up (`'<provider>' has no live connection test`) even though the underlying investigation-time provider logic worked correctly. Both now have a real, working connection test.
 
-## Export security fixes
+## 🔒 Export security fixes
 
 - Fixed a CSV formula-injection vulnerability in exported investigation data (a leading `=`/`+`/`-`/`@` in any exported field is now neutralized).
 - Fixed a PDF markup-injection/crash vulnerability in exported investigation reports (all interpolated text is now escaped before reaching the PDF renderer).
 - Fixed an export permission-gate bug: exporting an investigation now correctly requires the `lookup:export` permission (previously it was gated on the broader `lookup:read`, which VIEWER-role users also hold — VIEWER cannot export).
 
-## Deterministic threat-scoring engine
+## 🧮 Deterministic threat-scoring engine
 
 - Replaced the previous 100%-AI-generated risk score with a deterministic, versioned, auditable scoring engine (`app/scoring/engine.py`, `SCORING_ENGINE_VERSION` "1.0") — see the dedicated Threat Scoring document for the full formula.
 - The AI is now given the deterministic score as a fixed input and can only narrate it; the platform mechanically overwrites the AI's own output with the real score and re-validates the full assessment against it before saving, so an AI model cannot override the number even if it tries to.
 - A real audit-trail gap was found and fixed: the engine always computed a full factor breakdown and version stamp, but it was being discarded before the assessment was saved. Both are now persisted on every assessment.
 - A real scoring-manipulation vulnerability was found via adversarial testing and fixed: a single free, unprivileged account on a community-sourced provider (AlienVault OTX, ThreatFox, or MalwareBazaar) could previously flood the correlation component with several fabricated, uncorroborated relationship claims and push any indicator's score into the "high" severity band. The correlation component now applies the same cross-provider corroboration discount the provider-vote component already had.
 
-## AI-generation outcome tracking
+## 🤖 AI-generation outcome tracking
 
 - Every AI-generated assessment is now tagged with one of three real outcomes: `success`, `skipped_no_evidence` (a correct decision not to call the AI — no provider data existed to analyze, not a failure), or `failed` (a genuine generation failure, with a real, deterministic-score-based fallback narrative, never a fabricated result). This distinction did not exist before and makes an honest "AI success rate" metric possible.
 
-## Executive Dashboard and Provider Health
+## 📊 Executive Dashboard and Provider Health
 
 - Added a new Executive Dashboard (`/dashboard`) with 7 real KPI tiles (active investigations, critical/high-risk IOC count, open/critical case counts, average threat score, provider health percentage, AI success rate) and an AI-generated (or real, number-accurate template-fallback) executive summary, with the fallback explicitly disclosed via a source badge.
 - Replaced the old, dead, stub-data `GET /providers/health` endpoint with a real, database-backed implementation reporting per-provider status (healthy/degraded/down/unknown), success rate, average latency, and consecutive-failure streaks across 1-hour/24-hour/7-day/30-day windows, plus a new dedicated Provider Health page.
@@ -180,19 +253,19 @@ An independent, adversarial re-verification of the v0.2.1 port-scanning cancella
 - A real regression was found and fixed same-day: the new, richer Provider Health response initially dropped a field (`supported_types`) an existing page depended on, which would have crashed the live investigation-launch page for every user. Fixed and covered by a regression test before it reached general use.
 - A new `dashboard:read` permission was added, deliberately granted to all three roles (ADMIN, ANALYST, VIEWER) for broad, read-only operational visibility.
 
-## Navigation
+## 🧭 Navigation
 
 - Reorganized the global navigation into named groups: COMMAND (Dashboard), INTELLIGENCE (Basket), ANALYSIS (Cases), OPERATIONS (Provider Health), ADMINISTRATION (Providers, Admin — admin-only). No existing route was changed or removed.
 
-## Performance
+## ⚡ Performance
 
 - Found and fixed a real, complete-failure concurrency bug: 25 concurrent requests to the Provider Health endpoint previously failed 100% of the time (timeout). Root-caused to two issues — roughly 300 sequential database round-trips per single request (consolidated into about 19 via SQL conditional aggregation), and a database connection-pool size that didn't account for every authenticated request holding two connections simultaneously. After both fixes, the same 25-concurrent-request test completes in about 1.6 seconds with 100% success.
 - Connection-pool sizing is now tuned per process role: the backend process (the only one serving concurrent dashboard traffic) gets a larger pool; the background worker processes keep a conservative default, since Postgres's own connection ceiling has to be shared across all of them.
 
-## Windows installer
+## 🪟 Windows installer
 
 - Fixed a real, reported installer failure: a fresh install could generate a brand-new random database password while an old, incompatible database from an abandoned earlier install attempt survived on the machine, causing the backend to crash-loop on a database authentication error immediately after installation. The installer now detects and clears an orphaned database volume before a genuinely fresh install, so a new password is never paired with an old, incompatible database. An upgrade/reconfigure of a real existing install is unaffected and continues to correctly reuse its real existing password.
 
-## UI
+## 🖥 UI
 
 - Added a small persistent attribution/contact bar at the top of every page.

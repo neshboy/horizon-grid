@@ -1,4 +1,4 @@
-# Welcome to HORIZON GRID for Linux
+# 🐧 Welcome to HORIZON GRID for Linux
 
 Welcome, and thank you for installing HORIZON GRID.
 
@@ -13,7 +13,24 @@ By the end of this guide you will have:
 - Run the setup wizard to create your administrator account and configure the platform
 - Learned how to start, stop, back up, and, if you ever need to, uninstall HORIZON GRID
 
-# Before You Begin: Prerequisites
+## 📋 Table of contents
+
+- [✅ Before You Begin: Prerequisites](#-before-you-begin-prerequisites)
+- [📥 Step 1: Download and Verify the Installer](#-step-1-download-and-verify-the-installer)
+- [🐳 Step 2: Install Docker (Critical — Read This Before Installing HORIZON GRID)](#-step-2-install-docker-critical--read-this-before-installing-horizon-grid)
+- [📦 Step 3: Install the HORIZON GRID Package](#-step-3-install-the-horizon-grid-package)
+- [🧙 Step 4: Run the Setup Wizard](#-step-4-run-the-setup-wizard)
+- [🌐 Accessing HORIZON GRID](#-accessing-horizon-grid)
+- [🛠️ Managing HORIZON GRID](#️-managing-horizon-grid)
+- [💾 Backing Up and Restoring Your Data](#-backing-up-and-restoring-your-data)
+- [📁 Where Everything Lives on Disk](#-where-everything-lives-on-disk)
+- [🧰 Troubleshooting](#-troubleshooting)
+- [🗑️ Uninstalling HORIZON GRID](#️-uninstalling-horizon-grid)
+- [📋 Quick Reference](#-quick-reference)
+
+---
+
+# ✅ Before You Begin: Prerequisites
 
 ## Supported Linux distributions
 
@@ -30,32 +47,33 @@ These are the only distributions currently supported. HORIZON GRID does not rely
 1. **A 64-bit (amd64) machine** running one of the distributions above.
 2. **A user account with `sudo` access.** Every HORIZON GRID command that changes system state needs to be run with `sudo`.
 3. **An internet connection**, at least for the initial install — Docker will need to download the platform's container images the first time you set it up.
-4. **The HORIZON GRID package itself**: `horizon-grid_0.2.2_amd64.deb` (approximately 6.1 MB / 5.8 MiB). This package does not contain any application dependencies or pre-built container images — those are downloaded and built inside Docker the first time you run setup, which is exactly why the package itself is so small despite the platform being substantial.
+4. **The HORIZON GRID package itself**: `horizon-grid_0.3.8_amd64.deb` (approximately 6.2 MB / 6.0 MiB). This package does not contain any application dependencies or pre-built container images — those are downloaded and built inside Docker the first time you run setup, which is exactly why the package itself is so small despite the platform being substantial.
 5. **Docker**, installed the correct way — see the critical note below before you do anything else.
 
-# Step 1: Download and Verify the Installer
+# 📥 Step 1: Download and Verify the Installer
 
-Download `horizon-grid_0.2.2_amd64.deb` from wherever it was provided to you (for example, a release page or a link shared by your administrator), and save it somewhere convenient, such as your home folder or `~/Downloads`.
+Download `horizon-grid_0.3.8_amd64.deb` from wherever it was provided to you (for example, a release page or a link shared by your administrator), and save it somewhere convenient, such as your home folder or `~/Downloads`.
 
 Before installing anything, it is good practice to verify that the file you downloaded is genuine and was not corrupted or tampered with in transit. Open a terminal, go to the folder where you saved the file, and run:
 
 ```bash
-sha256sum horizon-grid_0.2.2_amd64.deb
+sha256sum horizon-grid_0.3.8_amd64.deb
 ```
 
 Compare the long string of letters and numbers this prints against the official checksum below. They must match **exactly**:
 
 ```
-57d0db31d4e67dfd8ccad9f0c9dfbbf6e501382e3972f0a538f8cc4b7b912812
+ed0174633d8d3ae92448fb41a79c0e58fbcb65eaecbd8ff552afd4b3ad50a671
 ```
 
 If the value printed on your screen does not match this exactly, do not install the file — download it again from a trusted source.
 
-# Step 2: Install Docker (Critical — Read This Before Installing HORIZON GRID)
+# 🐳 Step 2: Install Docker (Critical — Read This Before Installing HORIZON GRID)
 
 HORIZON GRID runs entirely on top of Docker and the Docker Compose plugin. This step matters more than it might look, so please read it carefully.
 
-**Do not simply run `sudo apt install docker.io` and assume you're done.** On Debian 12, Ubuntu 22.04, and Ubuntu 24.04, the distribution's own `docker.io` package does **not** include the modern Docker Compose v2 plugin that HORIZON GRID requires. If you install only `docker.io`, running a compose command will fail with an error like:
+> [!IMPORTANT]
+> Do not simply run `sudo apt install docker.io` and assume you're done. On Debian 12, Ubuntu 22.04, and Ubuntu 24.04, the distribution's own `docker.io` package does **not** include the modern Docker Compose v2 plugin that HORIZON GRID requires. If you install only `docker.io`, running a compose command will fail with an error like:
 
 ```
 docker: 'compose' is not a docker command.
@@ -81,13 +99,13 @@ If this prints a version number instead of an error, Docker is ready and you can
 
 If your user account is not already in the `docker` group, you may need to prefix Docker commands with `sudo`, or add yourself to the group and log out and back in. HORIZON GRID's own commands (see later sections) already run with `sudo`, so this mainly matters if you want to run plain `docker` commands yourself.
 
-# Step 3: Install the HORIZON GRID Package
+# 📦 Step 3: Install the HORIZON GRID Package
 
 With Docker working, install the `.deb` package itself. From the folder where you downloaded it, run:
 
 ```bash
 sudo apt update
-sudo apt install ./horizon-grid_0.2.2_amd64.deb
+sudo apt install ./horizon-grid_0.3.8_amd64.deb
 ```
 
 (The `./` in front of the filename is important — it tells `apt` to install this specific local file rather than searching for a package by that name in a repository.)
@@ -109,7 +127,7 @@ sudo horizon-grid check
 
 This checks your prerequisites (such as Docker being present and working) and tells you plainly if anything is missing before you proceed.
 
-# Step 4: Run the Setup Wizard
+# 🧙 Step 4: Run the Setup Wizard
 
 Now it's time to configure HORIZON GRID for the first time. Run:
 
@@ -156,7 +174,7 @@ After you confirm the summary, the wizard does the real work automatically:
 
 Once the wizard finishes successfully, HORIZON GRID is running and ready to use.
 
-# Accessing HORIZON GRID
+# 🌐 Accessing HORIZON GRID
 
 HORIZON GRID is a web application — you use it in your browser, not through a separate desktop window.
 
@@ -204,7 +222,7 @@ If your machine has a firewall active (such as `ufw` or `firewalld`), the setup 
 
 The frontend and backend are reachable from other machines by design, so you can use HORIZON GRID from anywhere on your LAN. The four data stores (Postgres, Redis, Neo4j, OpenSearch) are deliberately restricted to the local machine only, for security, and are not meant to be reached directly from other devices.
 
-# Managing HORIZON GRID
+# 🛠️ Managing HORIZON GRID
 
 All day-to-day management is done through the single `horizon-grid` command. Most subcommands need `sudo` because they manage system services and protected files.
 
@@ -252,7 +270,7 @@ sudo horizon-grid restart
 
 HORIZON GRID is registered with `systemd` when the package is installed, but it is never automatically enabled or started on its own — nothing runs until you've configured it and started it yourself, whether by the wizard or by these commands.
 
-# Backing Up and Restoring Your Data
+# 💾 Backing Up and Restoring Your Data
 
 ## Creating a backup
 
@@ -274,7 +292,7 @@ It's good practice to run this periodically, and especially before any major cha
 
 There is currently no dedicated one-command `horizon-grid restore` option — only automated backups are provided through the CLI. Restoring a saved snapshot is a standard PostgreSQL restore operation: it involves loading the saved `.sql` file back into the running Postgres container using standard PostgreSQL tools (such as `docker compose exec` together with `psql`). If you need to restore a backup, this should be done carefully by whoever administers the system, following your organization's normal PostgreSQL restore practices, using the snapshot file saved above.
 
-# Where Everything Lives on Disk
+# 📁 Where Everything Lives on Disk
 
 HORIZON GRID follows standard Linux filesystem conventions, which keep the application itself separate from its configuration and data — similar in spirit to how a Windows install separates Program Files from ProgramData.
 
@@ -288,7 +306,7 @@ HORIZON GRID follows standard Linux filesystem conventions, which keep the appli
 | `/lib/systemd/system/horizon-grid.service` | The systemd service definition |
 | `/usr/share/applications/horizon-grid.desktop` | The desktop menu launcher entry |
 
-# Troubleshooting
+# 🧰 Troubleshooting
 
 **`docker: 'compose' is not a docker command`**
 This means Docker is installed but the Compose v2 plugin is missing — almost always because Docker was installed via `apt install docker.io` alone instead of Docker's official convenience script. Revisit Step 2 above and install Docker using `curl -fsSL https://get.docker.com | sh`.
@@ -317,7 +335,7 @@ This produces a diagnostics bundle you (or whoever supports your install) can re
 **A port the wizard wants to use is already taken by something else**
 The setup wizard automatically detects this during the Network Ports page and offers you the next free port instead — you don't need to free the port yourself, just accept the alternative it suggests.
 
-# Uninstalling HORIZON GRID
+# 🗑️ Uninstalling HORIZON GRID
 
 If you ever need to uninstall, running:
 
@@ -349,19 +367,22 @@ sudo apt purge horizon-grid
 
 This deletes **everything**: every container and every Docker volume belonging to HORIZON GRID (all of your investigation history and settings), plus `/etc/horizon-grid`, `/var/lib/horizon-grid`, and `/var/log/horizon-grid` entirely. **There is no undo.** Only choose purge if you genuinely want no trace of HORIZON GRID or its data left on the machine.
 
+> [!WARNING]
+> `apt purge` permanently deletes every Docker volume belonging to HORIZON GRID (all investigation history and settings) along with all three config/log/backup directories, with no undo. Run `sudo horizon-grid backup` first if there's any chance you'll want the data back.
+
 Cleanup in both cases works by identifying containers and volumes that belong to your HORIZON GRID installation, so it correctly finds and removes the right resources even if an administrator has customized the underlying Compose project name.
 
 If you have any data you might want later, run `sudo horizon-grid backup` first, regardless of which of the two commands you plan to use.
 
-# Quick Reference
+# 📋 Quick Reference
 
 | Item | Value |
 |---|---|
 | Supported distributions | Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, Debian 12 (bookworm) |
-| Package | `horizon-grid_0.2.2_amd64.deb` (~6.1 MB / 5.8 MiB) |
-| Package SHA256 | `57d0db31d4e67dfd8ccad9f0c9dfbbf6e501382e3972f0a538f8cc4b7b912812` |
+| Package | `horizon-grid_0.3.8_amd64.deb` (~6.2 MB / 6.0 MiB) |
+| Package SHA256 | `ed0174633d8d3ae92448fb41a79c0e58fbcb65eaecbd8ff552afd4b3ad50a671` |
 | Install Docker (required first) | `curl -fsSL https://get.docker.com \| sh` |
-| Install the package | `sudo apt install ./horizon-grid_0.2.2_amd64.deb` |
+| Install the package | `sudo apt install ./horizon-grid_0.3.8_amd64.deb` |
 | Check prerequisites | `sudo horizon-grid check` |
 | Run setup / reconfigure | `sudo horizon-grid configure` |
 | Open in browser | `sudo horizon-grid open` |

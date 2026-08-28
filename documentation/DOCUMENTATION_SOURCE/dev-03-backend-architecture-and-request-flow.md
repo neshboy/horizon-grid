@@ -2,36 +2,64 @@
 
 This chapter is a code-level reference for how the FastAPI backend is assembled and how one real request moves through it. It covers three things, in order: (1) how `backend/app/main.py` builds the application object — routers, middleware, and startup events; (2) the layering convention the codebase follows (`routes/` → `services/`-equivalent modules → `models/`); and (3) a full, file-and-line trace of `POST /api/v1/lookup/stream`, the platform's single most important endpoint, from the HTTP request to the closing SSE event. Every claim below is anchored to a specific file and, where useful, a line number, as of this codebase.
 
-## 1. Application assembly (`app/main.py`)
+## 📋 Table of contents
 
-The entire FastAPI app is built in one 65-line module (`app/main.py`). There is no application factory function and no per-environment app-building logic — `app` is a module-level object constructed at import time, from `settings = get_settings()` (`main.py:16`), the `@lru_cache`-decorated `Settings` singleton (`app/core/config.py:13,110-111`). `settings.api_v1_prefix` (`config.py:20`, value `"/api/v1"`) is baked into the OpenAPI URL (`main.py:24`) and every router prefix below at import time, not re-read per request.
+- [1. Application assembly (`app/main.py`)](#1--application-assembly-appmainpy)
+  - [Middleware](#middleware)
+  - [Router registration](#router-registration)
+  - [Startup events](#startup-events)
+  - [Endpoints outside the versioned API](#endpoints-outside-the-versioned-api)
+- [2. The layering convention: routes → domain services → models](#2--the-layering-convention-routes--domain-services--models)
+- [3. Full trace: `POST /api/v1/lookup/stream`](#3--full-trace-post-apiv1lookupstream)
+  - [Step 0 — Dependency resolution](#step-0--dependency-resolution-before-the-handler-body-runs)
+  - [Step 1 — Rate limiting](#step-1--rate-limiting)
+  - [Step 2 — IOC type detection and lookup row creation](#step-2--ioc-type-detection-and-lookup-row-creation)
+  - [Step 3 — The SSE generator opens and emits `detected`](#step-3--the-sse-generator-opens-and-emits-detected)
+  - [Step 4 — Provider fan-out](#step-4--provider-fan-out-detected--n--provider_resultprovider_summary)
+  - [Step 5 — Correlation](#step-5--correlation-correlation-event)
+  - [Step 6 — Final AI assessment](#step-6--final-ai-assessment-final_assessment-event)
+  - [Step 7 — Evidence ledger build](#step-7--evidence-ledger-build-no-sse-event-of-its-own)
+  - [Step 8 — Closing events and error/disconnect handling](#step-8--closing-events-and-errordisconnect-handling)
+  - [Summary of the full path](#summary-of-the-full-path)
+
+---
+
+## 1. 📦 Application assembly (`app/main.py`)
+
+The entire FastAPI app is built in one module (`app/main.py`, 398 lines). There is no application factory function and no per-environment app-building logic — `app` is a module-level object constructed at import time, from `settings = get_settings()` (`main.py:59`), the `@lru_cache`-decorated `Settings` singleton (`app/core/config.py:13,110-111`). `settings.api_v1_prefix` (`config.py:20`, value `"/api/v1"`) is baked into the OpenAPI URL and every router prefix below at import time, not re-read per request.
 
 ### Middleware
 
-Exactly one middleware is registered — CORS:
+Three middlewares are registered, in this order:
 
 ```python
-# app/main.py:28-34
+# app/main.py:108-115
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"] if settings.debug else [],
+    allow_origins=[],
+    allow_origin_regex=PRIVATE_NETWORK_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 ```
 
-Worth flagging precisely for a backend/DevOps audience: when `settings.debug` is falsy (the production default), `allow_origins` evaluates to an **empty list**, not a wildcard and not the production frontend's real origin — no environment variable is read here to populate a production allow-list. In practice, browser-based cross-origin calls to the API in a non-debug deployment have no CORS allow-listed origin configured in this file. No other CORS, CSRF, or security-headers middleware is registered anywhere in the request pipeline.
+CORS no longer keys off `settings.debug`. `allow_origins` is always an empty list; instead, `allow_origin_regex` (`PRIVATE_NETWORK_ORIGIN_REGEX`, `main.py:98-106`) allow-lists `http://` requests from `localhost`, `127.0.0.1`, or any RFC 1918 private-range host (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) on any port — this is what lets one built frontend be opened from `localhost`, `127.0.0.1`, or another device's LAN address without a build-time CORS allow-list, while still rejecting an arbitrary public origin. The module's own comment is explicit that this only relaxes the browser's same-origin policy; the real authorization boundary is JWT auth (`app/auth/rbac.py`), not origin matching.
 
-The only other cross-cutting instrumentation is Prometheus metrics, attached immediately after CORS: `Instrumentator().instrument(app).expose(app, endpoint="/metrics")` (`main.py:36`). This exposes `GET /metrics` with no auth dependency, no `/api/v1` prefix, and no permission check.
+Two more `@app.middleware("http")` functions follow CORS: `request_id_middleware` (`main.py:118-141`) generates or forwards an `X-Request-Id`, binding it to a `ContextVar` that every log line in the process (including uvicorn's access log and httpx's outbound-call log) is filtered through, so concurrent requests' log lines are attributable; and `request_body_size_limit_middleware` (`main.py:156-168`) rejects any request whose `Content-Length` exceeds 10 MB with a `413`, checked before the body is read. No CSRF or security-headers middleware is registered.
+
+The only other cross-cutting instrumentation is Prometheus metrics, attached immediately after the middleware stack: `Instrumentator().instrument(app).expose(app, endpoint="/metrics")` (`main.py:171`). This exposes `GET /metrics` with no auth dependency, no `/api/v1` prefix, and no permission check.
 
 ### Router registration
 
-All ten route modules are imported in one line and registered in a fixed order, each mounted under the same global prefix:
+All fifteen route modules are imported in one statement and registered in a fixed order, each mounted under the same global prefix:
 
 ```python
-# app/main.py:9, 38-47
-from app.api.routes import ai_config, analysis, auth, basket, cases, hunting, lookup, pivot, providers, runtime
+# app/main.py:15-31, 173-187
+from app.api.routes import (
+    admin, ai_config, analysis, auth, basket, cases, dashboard, hunting,
+    lookup, pentest, pentest_exploit, pivot, providers, runtime, security_assessment,
+)
 ...
 app.include_router(auth.router, prefix=settings.api_v1_prefix)
 app.include_router(lookup.router, prefix=settings.api_v1_prefix)
@@ -43,19 +71,31 @@ app.include_router(pivot.router, prefix=settings.api_v1_prefix)
 app.include_router(basket.router, prefix=settings.api_v1_prefix)
 app.include_router(cases.router, prefix=settings.api_v1_prefix)
 app.include_router(runtime.router, prefix=settings.api_v1_prefix)
+app.include_router(admin.router, prefix=settings.api_v1_prefix)
+app.include_router(security_assessment.router, prefix=settings.api_v1_prefix)
+app.include_router(pentest.router, prefix=settings.api_v1_prefix)
+app.include_router(pentest_exploit.router, prefix=settings.api_v1_prefix)
+app.include_router(dashboard.router, prefix=settings.api_v1_prefix)
 ```
 
-Each router carries its own sub-prefix declared where it's defined (e.g. `router = APIRouter(prefix="/lookup", tags=["lookup"])`, `app/api/routes/lookup.py:44`), so the final path is always `{api_v1_prefix}{router_prefix}{route_path}` — e.g. `/api/v1` + `/lookup` + `/stream` = `/api/v1/lookup/stream`. Registration order has no effect on route matching (FastAPI matches by path, and no paths overlap across these ten modules); it is simply the order this documentation set uses when enumerating endpoints.
+Each router carries its own sub-prefix declared where it's defined (e.g. `router = APIRouter(prefix="/lookup", tags=["lookup"])`, `app/api/routes/lookup.py:44`), so the final path is always `{api_v1_prefix}{router_prefix}{route_path}` — e.g. `/api/v1` + `/lookup` + `/stream` = `/api/v1/lookup/stream`. Registration order has no effect on route matching (FastAPI matches by path, and no paths overlap across these fifteen modules); it is simply the order this documentation set uses when enumerating endpoints. `admin.py`, `security_assessment.py`, `pentest.py`, `pentest_exploit.py`, and `dashboard.py` were added after the original ten — respectively the Administration console, the Security Assessment Toolkit, the Pentest Suite's own lifecycle, its admin-only Metasploit exploit-validation routes, and the executive dashboard's KPI/summary endpoints.
 
-### Startup event
+### Startup events
 
-One `@app.on_event("startup")` hook exists, `_seed_runtime_config()` (`main.py:50-60`), which calls `seed_from_env_if_empty()` (`app/core/runtime_config.py:398-448`) inside a `try/except Exception` that logs but never blocks boot on failure. That function is the bridge described in the credential-lifecycle chapter of this documentation set: if `provider_runtime_configs` already has any row, it no-ops (`runtime_config.py:408-410`); otherwise it reads every AI-backend/IOC-provider credential out of the frozen `Settings` singleton and inserts one encrypted row per provider/backend — a one-time migration from `.env`-driven to DB-driven configuration. There is no corresponding shutdown hook anywhere in `main.py`.
+Four `@app.on_event("startup")` hooks exist, run in this order:
 
-### Two endpoints outside the versioned API
+1. `_warn_if_jwt_secret_is_a_placeholder()` (`main.py:194-208`) — logs a warning if `jwt_secret_key` is still `.env.example`'s literal placeholder value.
+2. `_warn_if_msf_rpc_password_is_a_placeholder()` (`main.py:211-223`) — same pattern for the Pentest Suite's Metasploit RPC password, mitigated by `msfrpcd` being bound to `127.0.0.1` only regardless.
+3. `_seed_runtime_config()` (`main.py:226-236`), which calls `seed_from_env_if_empty()` (`app/core/runtime_config.py`) inside a `try/except Exception` that logs but never blocks boot on failure. That function is the bridge described in the credential-lifecycle chapter of this documentation set: if `provider_runtime_configs` already has any row, it no-ops; otherwise it reads every AI-backend/IOC-provider credential out of the frozen `Settings` singleton and inserts one encrypted row per provider/backend — a one-time migration from `.env`-driven to DB-driven configuration.
+4. `_recover_orphaned_running_lookups()` (`main.py:239-294`) — on process start, flips any `IOCLookup` or `SecurityAssessmentRun` row still stuck `RUNNING` (or, for security-assessment runs, `PENDING`) to `FAILED`, since any such row still in that state at the instant this process just started cannot belong to a request this process is handling — it can only be orphaned by a previous process instance that was killed uncleanly (OOM-kill, `docker kill`, power loss) before its own `except`/`finally` cleanup ever ran.
 
-`GET /health` (`main.py:63-65`) and `GET /metrics` (`main.py:36`) are the only two HTTP-reachable endpoints defined directly in `main.py` rather than in `app/api/routes/*.py`. Neither carries the `/api/v1` prefix, and neither has a `require_permission(...)` or `get_current_user` dependency — both are intentionally unauthenticated, `/health` for container liveness checks and `/metrics` for Prometheus scraping.
+There is no corresponding shutdown hook anywhere in `main.py`.
 
-## 2. The layering convention: routes → domain services → models
+### Endpoints outside the versioned API
+
+`GET /health`, `GET /health/detailed`, `GET /network-info` (all in `main.py`), and `GET /metrics` (`main.py:171`) are the HTTP-reachable endpoints defined directly in `main.py` rather than in `app/api/routes/*.py`. None carries the `/api/v1` prefix, and none has a `require_permission(...)` or `get_current_user` dependency — all are intentionally unauthenticated. `/health` (`main.py:324-341`) is a deliberately dependency-free liveness check (version + uptime only, no DB/Redis call) so it stays usable on a bare CI runner; `/health/detailed` (`main.py:344-381`) is the real dependency-aware check a watchdog should point at instead — it pings Postgres and Redis and reports `healthy`/`degraded`/`down` (Postgres failure is `down`/`503`; Redis-only failure is `degraded`/`200`, since caching and rate limiting break but most read-mostly endpoints still work); `/network-info` (`main.py:384-397`) serves the Windows wizard's last-detected LAN IP for the frontend's Network Access panel; and `/metrics` is for Prometheus scraping.
+
+## 2. 🧩 The layering convention: routes → domain services → models
 
 The codebase does not use a single `services/` package name; instead each concern has its own top-level `app/` package, and the convention is consistent regardless of package name: **route handlers in `app/api/routes/*.py` are thin** — they perform auth/permission checks, load/validate the request, and delegate to a domain module, then serialize that module's return value back into the response. Business logic does not live in the route file itself beyond that orchestration.
 
@@ -69,7 +109,7 @@ Two supporting packages sit underneath all three layers, imported by nearly ever
 
 Worth calling out for anyone extending the codebase: `app/api/routes/lookup.py` is the one route module that does **not** fully delegate to a single domain module for its core endpoint. `stream_lookup()` (traced in full below) directly orchestrates calls across four domain modules in sequence (`providers/orchestrator.py`, `ai/service.py`, `correlation/engine.py`, `evidence/builder.py`) plus raw SQLAlchemy session writes, inline in the route function, rather than through one composed "run a lookup" service function — a consequence of the SSE streaming requirement, since each domain call's result must be persisted and yielded before the next one starts. This makes it the least "thin" handler in the codebase, and the natural place to read to understand the whole pipeline.
 
-## 3. Full trace: `POST /api/v1/lookup/stream`
+## 3. 🔬 Full trace: `POST /api/v1/lookup/stream`
 
 This section follows one request through every layer, in the exact order the code executes it. The route is defined in `app/api/routes/lookup.py:51-303` (`stream_lookup`), mounted at `/api/v1/lookup/stream` (prefix composition described in §1).
 

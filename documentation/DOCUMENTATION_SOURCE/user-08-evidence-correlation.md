@@ -1,4 +1,4 @@
-# Evidence and Receipts
+# 🧾 Evidence and Receipts
 
 ## Every AI claim comes with a receipt
 
@@ -8,9 +8,12 @@ The Evidence Ledger itself is not written by the AI. It is assembled determinist
 
 On top of the ledger sit several different views an analyst can open on the same evidence -- for example, "Why?", "What's this?", "Score Explanation," "Intelligence Conflicts," "False Positive Check," and "Challenge This Verdict." These are different lenses on the same underlying evidence, not separate, independent opinions. Where an AI explanation cites specific evidence for a specific sentence, "Show receipts" takes you straight from that sentence to the exact evidence record(s) it's based on, instead of leaving you to wonder where a number or a claim came from.
 
-## Why this matters: never take the AI's word for it
+## ⚠️ Why this matters: never take the AI's word for it
 
-This design exists for one reason: an analyst should never have to simply trust an AI's conclusion. The AI is analytical assistance -- it reads, summarizes, and correlates a lot of provider data quickly -- but the underlying evidence, not the AI's prose, is the actual source of truth. If a claim in a summary can't be traced to a real evidence record, that's a signal to question it, not accept it.
+This design exists for one reason: an analyst should never have to simply trust an AI's conclusion. The AI is analytical assistance -- it reads, summarizes, and correlates a lot of provider data quickly -- but the underlying evidence, not the AI's prose, is the actual source of truth.
+
+> [!TIP]
+> If a claim in a summary can't be traced to a real evidence record, that's a signal to question it, not accept it.
 
 A genuine example from this platform makes the point well. Looking up `8.8.8.8` (Google's Public DNS server, a benign, well-known service) produces a Threat Score of 87 out of 100, rated "High" -- because the Spamhaus provider marked it malicious. But the actual reason string behind that verdict, visible in the evidence itself, is "query error -- public/open resolver not permitted to query Spamhaus" -- a policy rejection from Spamhaus's own lookup service, not a detection of malicious behavior. Meanwhile AbuseIPDB reports zero abuse reports and VirusTotal calls the address clean. The platform's own AI-written Executive Summary is honest about this: it describes the IP as "considered malicious by Spamhaus, but its reputation as a clean and safe IP address is supported by AbuseIPDB and VirusTotal" -- disagreement and all.
 
@@ -18,7 +21,7 @@ This isn't a bug to hide -- it's exactly the kind of case the Evidence Ledger ex
 
 [FIGURE: 18-investigation-benign-ip-full.png | For the IOC 8.8.8.8 (Google's public DNS resolver), the Evidence Ledger lists individual, checkable evidence records with confidence scores, alongside the Verdict Analysis tabs (including "Why?" and "Challenge This Verdict") an analyst can use to trace exactly which evidence backs the Executive Summary's statement that Spamhaus flagged the IP while AbuseIPDB and VirusTotal call it clean.]
 
-# Correlation and the Relationship Graph
+# 🕸️ Correlation and the Relationship Graph
 
 ## What "correlation" means here
 
@@ -28,7 +31,7 @@ Every provider the platform queries only knows about its own narrow slice of the
 
 This happens automatically after every provider has finished responding, before the platform writes its final consolidated assessment -- so the AI's overall summary is correlation-aware, not just a stitched-together list of per-provider opinions. When more than one provider corroborates the same underlying fact, the platform's confidence in that connection increases accordingly, since agreement across independent sources is more meaningful than a single provider's claim alone.
 
-## The Relationship Graph: seeing connections instead of reading walls of text
+## 🔗 The Relationship Graph: seeing connections instead of reading walls of text
 
 The **Relationship Graph** is where these correlated connections become visible. Instead of an analyst reading through several separate provider cards and mentally cross-referencing which facts relate to which, the graph draws each fact as a node and each discovered connection as a line between nodes -- so relationships that would otherwise be buried across multiple paragraphs of provider text are visible at a glance.
 

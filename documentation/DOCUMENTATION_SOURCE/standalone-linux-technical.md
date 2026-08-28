@@ -1,10 +1,34 @@
-# HORIZON GRID Linux Technical Documentation
+# 🐧 HORIZON GRID Linux Technical Documentation
 
 This document describes the Linux packaging layer for HORIZON GRID: how the `.deb` package, systemd unit, and CLI setup wizard are built, installed, and maintained. It does not cover the application's own architecture (backend/frontend/Docker Compose services) beyond what's needed to understand what the packaging layer wraps — see the existing application and security documentation for that.
 
-# Packaging Architecture Decision
+## 📋 Table of contents
 
-HORIZON GRID on Linux is distributed as a `.deb` package (`horizon-grid_0.2.2_amd64.deb`) that installs a systemd unit and a `horizon-grid` CLI, including a terminal setup wizard. This is the direct Linux analog of the Windows installer + WinForms wizard + Docker Compose combination that already exists for that platform.
+- [Packaging Architecture Decision](#-packaging-architecture-decision)
+- [File Layout](#-file-layout)
+- [Building the Package](#-building-the-package)
+- [The systemd Unit](#-the-systemd-unit)
+- [The CLI and Setup Wizard](#-the-cli-and-setup-wizard)
+  - [CLI commands](#cli-commands)
+  - [Wizard flow](#wizard-flow)
+  - [Providers configured by the wizard](#providers-configured-by-the-wizard)
+- [Ports](#-ports)
+- [Remove vs Purge](#-remove-vs-purge)
+- [The Docker Compose v2 Plugin Gotcha](#-the-docker-compose-v2-plugin-gotcha)
+- [Backup Container-Resolution Bug](#-backup-container-resolution-bug)
+- [Security Properties](#-security-properties)
+- [Test Methodology](#-test-methodology)
+  - [Test results](#test-results)
+  - [AI-safety finding (positive proof point, not a bug)](#ai-safety-finding-positive-proof-point-not-a-bug)
+  - [Provider behavior confirmed on Linux](#provider-behavior-confirmed-on-linux)
+- [Cross-Platform Parity and Windows Regression](#-cross-platform-parity-and-windows-regression)
+- [Reproducing the Build](#-reproducing-the-build)
+
+---
+
+# 📐 Packaging Architecture Decision
+
+HORIZON GRID on Linux is distributed as a `.deb` package (`horizon-grid_0.3.8_amd64.deb`) that installs a systemd unit and a `horizon-grid` CLI, including a terminal setup wizard. This is the direct Linux analog of the Windows installer + WinForms wizard + Docker Compose combination that already exists for that platform.
 
 **Why not an AppImage.** This was a deliberate decision, confirmed with the user before packaging work began. HORIZON GRID is a multi-container Docker Compose platform — Postgres, Redis, Neo4j, OpenSearch, a FastAPI backend, a Next.js frontend, and two Celery workers — accessed via a web browser, not a single GUI executable. An AppImage exists to wrap one GUI binary; that packaging model does not fit an application whose actual runtime is a set of orchestrated containers. Wrapping only, say, a launcher binary in an AppImage while the real workload runs in Docker Compose would misrepresent what is actually being packaged.
 
@@ -13,7 +37,7 @@ HORIZON GRID on Linux is distributed as a `.deb` package (`horizon-grid_0.2.2_am
 - The WinForms setup wizard is replaced by a terminal program (`linux/wizard/setup_wizard.py`) that performs the identical steps and the identical HTTP calls against the backend, just without a GUI toolkit — appropriate for a server/sysadmin-oriented Linux install.
 - `apt remove`/`apt purge` map onto Linux's own idiomatic uninstall model, and turn out to be a cleaner, more explicit two-tier analog of the Windows uninstaller's "keep data" vs "delete everything" paths.
 
-# File Layout
+# 📁 File Layout
 
 The installed layout follows FHS conventions and maps directly onto the Windows Program Files / ProgramData split.
 
@@ -29,15 +53,15 @@ The installed layout follows FHS conventions and maps directly onto the Windows 
 
 One deliberate parity detail: both platforms' Compose project directory has the same basename (`app`), so both produce the identical Docker Compose project label `com.docker.compose.project=app`. This is by design, not coincidence, and it's what makes the label-based remove/purge logic (below) behave identically on both platforms.
 
-# Building the Package
+# 🔨 Building the Package
 
 The `.deb` is built by a Linux-specific build script that stages the application tree and application metadata (control file, postinst/postrm scripts, systemd unit, desktop file) into a package layout and invokes standard Debian packaging tooling (`dpkg-deb`) to produce the final artifact. This must run on a real Debian/Ubuntu host (or container) — `dpkg-deb` is a Debian-family tool with no Windows equivalent, the same reason the Windows installer can only be built with Inno Setup's `ISCC.exe` on Windows.
 
-**Why it doesn't vendor dependencies.** The package does not bundle `node_modules`, Python pip dependencies, or pre-built Docker images. All of those install the same way on every platform: inside the containers, the first time `docker compose up --build` runs. This is why the package is small (~6.1 MB / 5.8 MiB) despite the application being substantial — the same reason the ~69 MB Windows installer doesn't contain Docker images either. Both installers ship orchestration and configuration, not the workload's runtime dependencies.
+**Why it doesn't vendor dependencies.** The package does not bundle `node_modules`, Python pip dependencies, or pre-built Docker images. All of those install the same way on every platform: inside the containers, the first time `docker compose up --build` runs. This is why the package is small (~6.2 MB / ~5.95 MiB) despite the application being substantial — the same reason the ~69 MB Windows installer doesn't contain Docker images either. Both installers ship orchestration and configuration, not the workload's runtime dependencies.
 
 **A real bug found and fixed in this build process:** the build script's `rsync` of `backend/` initially swept up two host-only Python virtualenvs (`.venv`, `.venv_test` — about 21,700 files combined) that have no place in a shipped package, since dependencies install inside the container at image-build time, exactly as on Windows. This was fixed by excluding both directories in the Linux build script. Separately — and not fixed in this pass, since it lives in a Windows-side file outside the scope of this Linux effort — the Windows installer's `installer.iss` `Excludes` list has the same latent gap and could pick up the same two folders if they happen to exist on the machine building that installer. This is flagged here as a discovered, non-blocking hardening item for the Windows installer specifically.
 
-# The systemd Unit
+# 🔩 The systemd Unit
 
 `/lib/systemd/system/horizon-grid.service` is registered (via `daemon-reload`) at package install time but is **never** auto-enabled or auto-started by the package itself. Nothing starts until the administrator runs the setup wizard — this matches the Windows installer's own behavior, where nothing auto-starts before configuration either.
 
@@ -45,7 +69,7 @@ The unit wraps Docker Compose rather than reimplementing the application as a na
 
 It is configured as `Type=oneshot` with `RemainAfterExit=yes`. This is the correct shape for a unit whose start action is "run a command that hands off to a long-lived external process group it doesn't itself hold open" — `docker compose up -d` returns once the containers are launched in detached mode; the unit process itself does not stay in the foreground supervising them (the containers are supervised by the Docker daemon, not by systemd). `Type=oneshot` tells systemd the start command is expected to exit; `RemainAfterExit=yes` tells systemd to still consider the unit "active" after that exit, rather than treating the exit as a failure or an immediate return to "inactive". This lets `systemctl status horizon-grid`, `enable`, and `stop` behave sensibly for a unit that is really just a thin wrapper delegating persistent state to Docker itself. `ExecStart`/`ExecStop`/`ExecReload` each call the `horizon-grid` CLI (`start`/`stop`/`restart`) rather than a raw `docker compose` command directly, so the unit always goes through the same `.env`-sync and health-wait logic every other entry point uses.
 
-# The CLI and Setup Wizard
+# 🧙 The CLI and Setup Wizard
 
 ## CLI commands
 
@@ -68,7 +92,7 @@ The wizard writes directly to `.env`, matching `windows/scripts/Write-EnvFile.ps
 
 Providers needing no credential at all (crt.sh, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, the Internet Intelligence Collector) and the newer, runtime-only threat-intelligence providers that have no wizard field of their own (urlscan.io, Google Safe Browsing) are instead configured and managed after install from the app's own Providers page (sign in → Providers). This is identical on both platforms, since it's a database-backed runtime configuration feature of the application itself, not of either installer — Groq is a wizard-configurable **AI backend** choice, distinct from that runtime-only provider category.
 
-# Ports
+# 🔌 Ports
 
 Identical to Windows, because it's the same `docker-compose.yml`:
 
@@ -77,7 +101,7 @@ Identical to Windows, because it's the same `docker-compose.yml`:
 
 The wizard detects port conflicts and offers the next free port, same as on Windows.
 
-# Remove vs Purge
+# 🧹 Remove vs Purge
 
 Linux offers a two-tier uninstall that is a more idiomatic analog of the Windows uninstaller's two paths:
 
@@ -88,7 +112,7 @@ Linux offers a two-tier uninstall that is a more idiomatic analog of the Windows
 
 A real bug in this area was found and fixed: `apt purge`/`apt remove` initially left one small file behind, `/opt/horizon-grid/app/.env` — a runtime-written copy that dpkg's manifest never tracked — which blocked full removal of that directory ("directory not empty so not removed"). This was fixed in the package's `postrm` script. It is the direct Linux analog of a documented Windows uninstaller fix for the exact same underlying problem (an untracked, runtime-written `.env` copy blocking cleanup), just via a different mechanism: dpkg simply not tracking the file, versus Windows's ACL blocking Inno Setup's own cleanup.
 
-# The Docker Compose v2 Plugin Gotcha
+# 🚨 The Docker Compose v2 Plugin Gotcha
 
 A real, live-confirmed finding on all three tested distributions (Debian 12, Ubuntu 22.04, Ubuntu 24.04): the distribution's own `docker.io` package does **not** include the Docker Compose v2 plugin this application requires. Installing `docker.io` and then running `docker compose version` fails with `docker: 'compose' is not a docker command`. Debian 12's own repositories don't even have a `docker-compose-v2` package to fall back to — only the deprecated standalone v1 `docker-compose` binary.
 
@@ -98,15 +122,19 @@ The correct, working install method — what the package's `control` file `Recom
 curl -fsSL https://get.docker.com | sh
 ```
 
-(or manually adding Docker's own apt repository per https://docs.docker.com/engine/install/). Do **not** tell users to simply `apt install docker.io` and stop there; this will silently leave them without a working `docker compose` command.
+(or manually adding Docker's own apt repository per https://docs.docker.com/engine/install/).
 
-# Backup Container-Resolution Bug
+> [!WARNING]
+> Do **not** tell users to simply `apt install docker.io` and stop there; this will silently leave
+> them without a working `docker compose` command.
+
+# 🐛 Backup Container-Resolution Bug
 
 `horizon-grid backup` initially used a hardcoded container name (`app-postgres-1`), mirroring Windows's own `Backup-Database.ps1` exactly. This silently skipped the backup — logging a misleadingly reassuring "Postgres container is not running — skipping backup" message as if it were a successful no-op — whenever a non-default Compose project name was in use.
 
 This was fixed to resolve the real container via `docker compose ps -q postgres` (label/service-based, respecting whatever project name is actually in effect). Confirmed live afterward: a real 34,786-byte `pg_dump` SQL file was produced. This is a small, Linux-specific robustness improvement over the Windows script's hardcoded name; it does not change or regress the Windows side, whose hardcoded name remains correct for its own always-default-project-name usage.
 
-# Security Properties
+# 🔒 Security Properties
 
 - `/etc/horizon-grid/.env` is `0600`, owned `root:root` — verified live on all three tested distros.
 - Every service/wizard script requires root (checks `id -u` / `os.geteuid()`, refuses otherwise) — the direct analog of Windows's UAC-elevation requirement, without needing an equivalent to Windows's filtered-token nuance, since Linux root/sudo has no comparable split-token gap.
@@ -116,7 +144,7 @@ This was fixed to resolve the real container via `docker compose ps -q postgres`
 - No firewall is guaranteed present on Linux the way Windows Firewall always is. The wizard/CLI does a best-effort detection and configuration of `ufw` or `firewalld` if active, and clearly reports what it did (or that nothing was detected) rather than assuming a firewall exists.
 - No hardcoded credentials appear anywhere in any script. Test Connection semantics are identical to Windows (see the wizard section above).
 
-# Test Methodology
+# 🧪 Test Methodology
 
 Each of the three supported distributions — **Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, and Debian 12 (bookworm)** — was genuinely tested this session, disclosed honestly here rather than implying a bare-metal test lab:
 
@@ -150,9 +178,9 @@ In the same `8.8.8.8` investigation, providers needing no credential returned re
 
 One of the Internet Intelligence Collector's four OSINT sub-sources (its paste-dump search module) hit a transient DNS/network failure reaching one paste-site host during this run — correctly isolated per-source (confirmed via backend logs, with the traceback originating in `app/crawler/sources/pastebin_search.py` specifically) with zero effect on the other three sub-sources (GitHub, Reddit, and RSS feeds all succeeded, with logs showing real 200/301/302 responses from `blog.talosintelligence.com`, `crowdstrike.com`, and `unit42.paloaltonetworks.com`) or on the Collector's own overall `ok` status. This is an ordinary transient network hiccup hitting one of four redundant sub-sources, handled exactly per the provider's documented per-source isolation design — not a Linux-specific defect.
 
-# Cross-Platform Parity and Windows Regression
+# 🔀 Cross-Platform Parity and Windows Regression
 
-At the application layer, parity between Linux and Windows is effectively 100%, because it is the literal same Docker images and code running on both platforms — IOC investigation, threat scoring, AI backend switching, provider switching, the admin UI, Provider Health, the Executive Dashboard, cases, the IOC Basket, exports (JSON/Markdown work; PDF/CSV honestly report "Export format not yet available" on **both** platforms, not a Linux gap), and the Security Assessment tools are all identical, as confirmed live on Linux above.
+At the application layer, parity between Linux and Windows is effectively 100%, because it is the literal same Docker images and code running on both platforms — IOC investigation, threat scoring, AI backend switching, provider switching, the admin UI, Provider Health, the Executive Dashboard, cases, the IOC Basket, all four exports (JSON/Markdown/PDF/CSV), and the Security Assessment tools are all identical, as confirmed live on Linux above.
 
 The only real differences are in the outer packaging/installer layer:
 - a terminal wizard instead of a WinForms GUI wizard;
@@ -162,7 +190,7 @@ The only real differences are in the outer packaging/installer layer:
 
 **Windows regression:** zero files under `backend/`, `frontend/`, `docker-compose.yml`, `docker-compose.prod.yml`, or `windows/` were created, modified, or deleted during this Linux packaging effort, verified directly via file timestamps and content. Every new file lives under the new, additive `linux/` directory, which nothing in the Windows installer or the application runtime references. This is reported as a structural/file-level non-regression guarantee. A live functional click-through re-test of the currently installed Windows platform itself was **not** performed in this pass, honestly, because it requires interactive Administrator elevation (UAC) that could not be granted unattended.
 
-# Reproducing the Build
+# 🔧 Reproducing the Build
 
 To reproduce the `.deb` build on another machine:
 
@@ -170,7 +198,7 @@ To reproduce the `.deb` build on another machine:
 2. Run the Linux build script from the `linux/` directory of the source tree. It stages `backend/`, `frontend/`, `docker-compose.yml`, `docker-compose.prod.yml`, and `docs/` into the package layout under `/opt/horizon-grid/app/`, along with the systemd unit, desktop file, and `postinst`/`postrm` scripts.
 3. Confirm the build excludes host-only Python virtualenvs (`.venv`, `.venv_test`) from `backend/` — this exclusion is already present in the Linux build script as a fix for the bug described above; if reproducing or modifying the script, verify this exclusion is still in place before packaging.
 4. Do not attempt to vendor `node_modules`, pip dependencies, or pre-built Docker images into the package — these are intentionally left to install inside the containers on first `docker compose up --build`, matching the Windows installer's own approach and keeping the package small.
-5. After building, verify the resulting `.deb`'s size is in the same ~6 MB range as `horizon-grid_0.2.2_amd64.deb` (5.8 MiB); a much larger artifact likely indicates a vendored-dependency or virtualenv regression.
+5. After building, verify the resulting `.deb`'s size is in the same ~6 MB range as `horizon-grid_0.3.8_amd64.deb` (~5.95 MiB); a much larger artifact likely indicates a vendored-dependency or virtualenv regression.
 6. Before testing, ensure the target test environment has Docker Compose v2 available — installing only `docker.io` from distro repos will not provide `docker compose`; use Docker's official convenience script (`curl -fsSL https://get.docker.com | sh`) as described above.
 7. For end-to-end verification, follow the same real-install methodology used in this effort: real `apt install`, run `horizon-grid configure` to drive the setup wizard through a real `docker compose up -d --build`, and exercise the CLI commands (`status`, `backup`, `diagnostics`, `stop`/`start`, `remove`/`purge`) against the resulting install. If testing `apt purge`/`apt remove` cleanup logic specifically with the real default project name, do so inside an isolated environment (e.g., a dedicated Docker-in-Docker daemon) to avoid colliding with any other running instance on a shared host, exactly as done in this session's testing.
-8. Version numbers (package version, `MyAppVersion`, backend, frontend) must be kept in lockstep across platforms — the current release is `0.2.2` on both Windows and Linux, with no version drift.
+8. Version numbers (package version, `MyAppVersion`, backend, frontend) must be kept in lockstep across platforms — the current release is `0.3.8` on both Windows and Linux, with no version drift.

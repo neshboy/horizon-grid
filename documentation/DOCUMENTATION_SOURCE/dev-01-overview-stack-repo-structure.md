@@ -1,8 +1,22 @@
 # Project Overview, Technology Stack, and Repository Structure
 
-## 1. What This Project Is
+## 📋 Table of contents
 
-HORIZON GRID is a self-hosted SOC (Security Operations Center) workbench for investigating **IOCs** (Indicators of Compromise — an IP address, domain, URL, file hash, CVE, or similar artifact). The backend's own FastAPI app description (`backend/app/main.py:20-22`, shown in the Swagger UI at `/docs`) describes the core loop as "single-search IOC lookup across dozens of providers, correlated and summarized by a local Ollama model (or AWS Bedrock/Gemini/Anthropic/Groq, configurable via AI_BACKEND)."
+- [1. What This Project Is](#1--what-this-project-is)
+- [2. Technology Stack](#2--technology-stack)
+  - [2.1 Backend](#21-backend)
+  - [2.2 Frontend](#22-frontend)
+  - [2.3 Datastores and infrastructure](#23-datastores-and-infrastructure)
+- [3. Repository Structure](#3--repository-structure)
+- [4. The Backend API Surface, at a Glance](#4--the-backend-api-surface-at-a-glance)
+- [5. Files a New Engineer Should Read First](#5--files-a-new-engineer-should-read-first)
+- [6. Cross-Cutting Facts Worth Internalizing Before Reading Further](#6--cross-cutting-facts-worth-internalizing-before-reading-further)
+
+---
+
+## 1. 🎯 What This Project Is
+
+HORIZON GRID is a self-hosted SOC (Security Operations Center) workbench for investigating **IOCs** (Indicators of Compromise — an IP address, domain, URL, file hash, CVE, or similar artifact). The backend's own FastAPI app description (`backend/app/main.py:83-85`, shown in the Swagger UI at `/docs`) describes the core loop as "Unified threat intelligence workbench: single-search IOC lookup across dozens of providers, correlated and summarized by a local Ollama model (or AWS Bedrock/Gemini/Anthropic/Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter, configurable via AI_BACKEND)."
 
 Concretely, one investigation does the following, all reachable from a single API call (`POST /api/v1/lookup/stream`):
 
@@ -17,7 +31,7 @@ Beyond the core lookup, the platform layers analyst workflow on top: a persisted
 
 This is a real, running codebase — not a prototype: it ships as a Windows-installable product (Inno Setup + a PowerShell setup wizard over Docker Compose), has an async backend test suite (`backend/app/tests/`), and has two parallel deployment paths (Docker Compose and Kubernetes via `k8s/`).
 
-## 2. Technology Stack
+## 2. 🧱 Technology Stack
 
 ### 2.1 Backend
 
@@ -28,15 +42,15 @@ This is a real, running codebase — not a prototype: it ships as a Windows-inst
 | ASGI server | Uvicorn (`[standard]`) | 0.30.6 | `backend/requirements.txt` |
 | Validation / settings | Pydantic, pydantic-settings | 2.9.2, 2.5.2 | `backend/requirements.txt` |
 | ORM | SQLAlchemy (`[asyncio]`) | 2.0.35 | `backend/requirements.txt` |
-| Postgres driver | asyncpg | 0.29.0 | `backend/requirements.txt` |
+| Postgres driver | asyncpg | 0.30.0 | `backend/requirements.txt` |
 | Migrations | Alembic | 1.13.2 | `backend/requirements.txt` |
 | Cache / broker client | redis-py | 5.0.8 | `backend/requirements.txt` |
 | HTTP client | httpx | 0.27.2 | `backend/requirements.txt` |
 | Retry logic | tenacity | 9.0.0 | `backend/requirements.txt` |
 | Graph DB driver (provisioned, unused — see Database chapter) | neo4j | 5.24.0 | `backend/requirements.txt` |
 | Background jobs | Celery | 5.4.0 | `backend/requirements.txt` |
-| Auth / JWT | python-jose (`[cryptography]`) | 3.3.0 | `backend/requirements.txt` |
-| Credential encryption | cryptography | 43.0.1 | `backend/requirements.txt` |
+| Auth / JWT | python-jose (`[cryptography]`) | 3.5.0 | `backend/requirements.txt` |
+| Credential encryption | cryptography | 50.0.0 | `backend/requirements.txt` |
 | Password hashing | passlib, bcrypt | 1.7.4, 4.0.1 | `backend/requirements.txt` |
 | Cloud SDK (Bedrock) | boto3 | 1.35.24 | `backend/requirements.txt` |
 | Search client (provisioned, unused) | opensearch-py | 2.7.1 | `backend/requirements.txt` |
@@ -61,7 +75,7 @@ This is a real, running codebase — not a prototype: it ships as a Windows-inst
 | UI primitives | Radix UI (`react-tabs`, `react-dialog`, `react-progress`, `react-slot`, `react-tooltip`) | 1.0.x–1.1.x | `frontend/package.json` |
 | Class variants / utility CSS | class-variance-authority, clsx, tailwind-merge | 0.7.0, 2.1.1, 2.5.2 | `frontend/package.json` |
 | Icons | lucide-react | 0.446.0 | `frontend/package.json` |
-| Test runner (configured, unused) | vitest | 2.1.1 | `frontend/package.json` — `"test": "vitest run"` is declared, but no `*.test.*`/`*.spec.*` files exist anywhere under `frontend/`; the tooling is present, no frontend automated tests currently exist. |
+| Test runner (configured, unused) | vitest | 4.1.10 | `frontend/package.json` — `"test": "vitest run"` is declared, but no `*.test.*`/`*.spec.*` files exist anywhere under `frontend/`; the tooling is present, no frontend automated tests currently exist. |
 
 ### 2.3 Datastores and infrastructure
 
@@ -75,7 +89,7 @@ This is a real, running codebase — not a prototype: it ships as a Windows-inst
 
 Orchestration is defined in `docker-compose.yml` (development, eight containers total including `frontend`) and layered with `docker-compose.prod.yml` for production (strips dev bind-mounts, switches to production start commands). A second, independent deployment path exists in `k8s/` — a Kustomize-based Kubernetes manifest set (`k8s/base/`) with StatefulSets for `postgres`/`neo4j`/`opensearch`, Deployments for `backend`/`frontend`/`celery`, and an Ingress resource.
 
-## 3. Repository Structure
+## 3. 📁 Repository Structure
 
 ```
 ioc-intel-platform/
@@ -91,22 +105,25 @@ ioc-intel-platform/
 │   ├── requirements.txt
 │   ├── alembic/                 Schema migrations
 │   │   ├── env.py               Async-engine Alembic runner; imports app.models.Base
-│   │   └── versions/            4 linear migrations (initial_schema → evidence/basket/case → provider_runtime_config/audit → final_assessment_records)
+│   │   └── versions/            12 linear migrations (initial_schema → evidence/basket/case → provider_runtime_config/audit → final_assessment_records → user_last_login_at → user_token_version → security_assessment_tables → provenance_category → final_assessment_ai_outcome → cancelled_security_assessment_status → pentest_suite_tables → pentest_exploit_attempts_table, current head)
 │   └── app/
-│       ├── main.py               App assembly: router registration, CORS, startup hook (runtime-config seeding), /health, /metrics
-│       ├── api/routes/           10 route modules — one per resource area (see §4)
+│       ├── main.py               App assembly: router registration, CORS/request-id/body-size middleware, startup hooks (runtime-config seeding, orphaned-run recovery), /health, /health/detailed, /network-info, /metrics
+│       ├── api/routes/           15 route modules — one per resource area (see §4)
 │       ├── core/                 config.py (Settings), runtime_config.py (DB-backed config), runtime_context.py (ContextVar overrides), db.py, cache.py, crypto.py
 │       ├── auth/                 security.py (bcrypt/JWT), rbac.py (get_current_user, require_permission)
 │       ├── ioc/                  types.py (IOCType enum), detector.py (regex-cascade classifier)
-│       ├── providers/            ~18 threat-intel connectors + base.py, orchestrator.py, registry.py, connection_test.py, stubs/
+│       ├── providers/            17 threat-intel connectors + base.py, orchestrator.py, registry.py, connection_test.py, stubs/
 │       ├── ai/                   11 AI-backend clients + service.py, analysis_service.py, hunting_service.py, schemas, connection_test.py
 │       ├── correlation/          engine.py — pure fact/relationship extraction, no I/O
 │       ├── evidence/             builder.py, loaders.py, pivot.py — the citable, deterministic evidence ledger
+│       ├── scoring/               engine.py — the deterministic (non-AI) risk/confidence/severity scoring engine
+│       ├── security_assessment/   Security Assessment Toolkit — active-scan tools tied to one IOC lookup
+│       ├── pentest/                Pentest Suite — standalone scope-enforced DISCOVER→ENUMERATE→ASSESS→CORRELATE→PRIORITIZE→REPORT lifecycle, incl. admin-only Metasploit exploit validation
 │       ├── crawler/               OSINT collector provider + 4 sub-source modules (github, reddit, rss_news, pastebin_search)
 │       ├── workers/               celery_app.py, tasks.py — the one hourly OSINT re-crawl job
-│       ├── models/                SQLAlchemy ORM: user, lookup, evidence, basket, case, runtime_config, base
-│       ├── schemas/                Pydantic request/response DTOs (lookup, basket, case, auth)
-│       └── tests/                 unit/ (18 files) + integration/ (3 files), pytest + pytest-asyncio + respx
+│       ├── models/                SQLAlchemy ORM: user, lookup, evidence, basket, case, runtime_config, security_assessment, pentest, base
+│       ├── schemas/                Pydantic request/response DTOs (lookup, basket, case, auth, admin, security_assessment, pentest)
+│       └── tests/                 unit/ (33 files) + integration/ (15 files), pytest + pytest-asyncio + respx
 │
 ├── frontend/                     Next.js 14 application (TypeScript)
 │   ├── Dockerfile
@@ -129,14 +146,14 @@ ioc-intel-platform/
 └── release/                       Built installer artifact (.exe) + checksums
 ```
 
-## 4. The Backend API Surface, at a Glance
+## 4. 🌐 The Backend API Surface, at a Glance
 
-`backend/app/main.py` registers ten route modules under the global prefix `/api/v1` (`settings.api_v1_prefix`), in this order:
+`backend/app/main.py` registers fifteen route modules under the global prefix `/api/v1` (`settings.api_v1_prefix`), in this order:
 
 | Module | Base path | Endpoint count | Covers |
 |---|---|---|---|
 | `auth.py` | `/auth` | 4 | register / login / refresh / me |
-| `lookup.py` | `/lookup` | 5 | the core SSE investigation stream, reanalyze, assessments, get/list |
+| `lookup.py` | `/lookup` | 6 | the core SSE investigation stream, reanalyze, assessments, get/list, PDF/CSV export |
 | `providers.py` | `/providers` | 2 | provider health, live credential test |
 | `ai_config.py` | `/ai` | 2 | AI backend live test, model-list discovery |
 | `analysis.py` | `/lookup/{id}/analysis` | 10 | evidence + 9 AI explanation endpoints (why, what-is-this, disagreement, false-positive, challenge, next-actions, gaps, score-explanation, copilot) |
@@ -145,10 +162,15 @@ ioc-intel-platform/
 | `basket.py` | `/basket` | 5 | per-analyst scratch list + AI comparison |
 | `cases.py` | `/cases` | 8 | case CRUD, IOCs, notes |
 | `runtime.py` | `/runtime` | 10 | DB-backed AI/provider config, activation, audit log |
+| `admin.py` | `/admin` | 7 | user management — create/update/list users, roles, stats, enable/disable, password reset |
+| `security_assessment.py` | `/security-assessment` | 6 | Security Assessment Toolkit — profiles, tool health, run, list/get runs |
+| `pentest.py` | `/pentest` | 18 | Pentest Suite — scope/target CRUD, scan pipeline control (start/pause/resume/cancel), findings, AI explanations |
+| `pentest_exploit.py` | `/pentest` | 6 | admin-only Metasploit exploit validation (module lookup, confirm-and-run, attempt history) |
+| `dashboard.py` | `/dashboard` | 2 | executive dashboard KPIs + AI-written executive summary |
 
-Total: 49 endpoints, all gated by `require_permission(...)` except the three public auth endpoints and `/auth/me` (identity-only). The full request/response contract for every one of these is documented in the API Reference chapter of this package; this chapter is concerned only with orienting a new engineer to where that code lives.
+Total: 89 endpoints, all gated by `require_permission(...)` except the three public auth endpoints and `/auth/me` (identity-only). The full request/response contract for every one of these is documented in the API Reference chapter of this package; this chapter is concerned only with orienting a new engineer to where that code lives.
 
-## 5. Files a New Engineer Should Read First
+## 5. 📖 Files a New Engineer Should Read First
 
 The following ~26 files, read roughly in this order, cover the entire system end to end. This list reflects the actual dependency order of the codebase, not an arbitrary tour.
 
@@ -194,7 +216,7 @@ The following ~26 files, read roughly in this order, cover the entire system end
 26. `docker-compose.yml` — the full local runtime topology and the `host.docker.internal` Ollama networking detail.
 27. `windows/wizard/Setup-Wizard.ps1` (with `windows/scripts/Common.ps1`) — how the stack becomes an installable Windows product; explains the Program Files/ProgramData split and the live-provider-testing UX that mirrors `providers/connection_test.py`.
 
-## 6. Cross-Cutting Facts Worth Internalizing Before Reading Further
+## 6. 🧭 Cross-Cutting Facts Worth Internalizing Before Reading Further
 
 - Every provider is a **module-level singleton**; per-investigation credential and enabled/disabled overrides flow through a `ContextVar` (`core/runtime_context.py`), never through mutated instance state — this is what makes concurrent investigations with different provider configs safe.
 - Every AI call site resolves its backend the same three-tier way (`_get_ai_client`): explicit override → active DB-backed runtime config → legacy `Settings` fallback. This pattern repeats identically across `ai/service.py`, `ai/analysis_service.py`, and `ai/hunting_service.py`.

@@ -1,4 +1,4 @@
-# Security Assessment Toolkit Architecture
+# 🛡️ Security Assessment Toolkit Architecture
 
 This chapter documents the Security Assessment Toolkit (`backend/app/security_assessment/`,
 `backend/app/core/security_assessment.py`, `backend/app/api/routes/security_assessment.py`) — the
@@ -7,11 +7,28 @@ provider under `backend/app/providers/`, which only ever queries a third party's
 data. It was built under an explicit, non-negotiable constraint: this must never become an
 exploitation framework. Every architectural decision below is traceable to that constraint.
 
+> [!IMPORTANT]
+> This subsystem was built under an explicit, non-negotiable constraint: it must never become an
+> exploitation framework. Every architectural decision in this chapter is traceable to that
+> constraint.
+
 For the user-facing tool/profile/severity reference, see
 [SECURITY_ASSESSMENT_TOOLKIT.md](../../docs/SECURITY_ASSESSMENT_TOOLKIT.md) in the repo root
 `docs/` folder — this chapter covers the *implementation*, that one covers *behavior*.
 
-## 1. Why Tools Are Not Providers
+## 📋 Table of contents
+
+- [1. Why Tools Are Not Providers](#1--why-tools-are-not-providers)
+- [2. The Authorization Gate](#2--the-authorization-gate)
+- [3. Structured Process Execution (Nmap)](#3--structured-process-execution-nmap)
+- [4. Provenance Categories](#4--provenance-categories)
+- [5. Result Integration and the "Refresh" vs. "Reanalyze" Distinction](#5--result-integration-and-the-refresh-vs-reanalyze-distinction)
+- [6. Background Execution and Task Lifetime](#6--background-execution-and-task-lifetime)
+- [7. Cancellation](#7--cancellation)
+- [8. Bugs Found by Independent Re-verification (v0.2.2)](#8--bugs-found-by-independent-re-verification-v022)
+- [9. Installer / Deployment](#9--installer--deployment)
+
+## 1. 🧩 Why Tools Are Not Providers
 
 `app/providers/base.py`'s `BaseProvider`/`ProviderResult`/`ProviderCategory`/`ProviderStatus`
 contract was confirmed, by direct research before any of this was written, to be fully reusable:
@@ -35,7 +52,7 @@ abstract `async def run(self, target, ioc_type, profile_id) -> ToolRunResult`. `
 bundles the genuine `ProviderResult` (for the AI/correlation pipeline) alongside a `list[Finding]`
 (for persistence and UI drill-down) — the two representations a tool's work needs to feed.
 
-## 2. The Authorization Gate
+## 2. 🔐 The Authorization Gate
 
 `app/core/security_assessment.py::_validate_scope()` is the single choke point every request
 passes through before a `SecurityAssessmentRun` row is even created:
@@ -63,7 +80,7 @@ none of it reaches a tool, a subprocess, or a network call. This is deliberately
 scope is checked; there is no second, looser path into `app/security_assessment/registry.py`'s
 tools from anywhere else in the codebase.
 
-## 3. Structured Process Execution (Nmap)
+## 3. 🧰 Structured Process Execution (Nmap)
 
 `nmap_tool.py` is the one tool that shells out to an external binary, and is held to the strictest
 standard: `PROFILES`/`_PROFILE_ARGS` are hardcoded Python dicts mapping a profile *id* (never
@@ -84,7 +101,7 @@ literal, meaningless hostname argument, never concatenated into a shell command 
 Output is parsed via `xml.etree.ElementTree` against Nmap's own `-oX -` XML format, never by
 regex-scraping human-readable text output (which Nmap's own docs warn is unstable across versions).
 
-## 4. Provenance Categories
+## 4. 📂 Provenance Categories
 
 `app/core/provenance.py` defines four category constants — `THREAT_INTEL`,
 `SECURITY_ASSESSMENT`, `LOCAL_OBSERVATION`, `AI_INTERPRETATION` — and one mapping function,
@@ -111,7 +128,7 @@ dedup/corroboration-boost logic across the two sets, so an identical fact assert
 original provider and a new tool run would appear as two edges rather than one boosted-confidence
 edge. Judged unnecessary complexity for what is, in practice, a rare overlap.
 
-## 5. Result Integration and the "Refresh" vs. "Reanalyze" Distinction
+## 5. 🔁 Result Integration and the "Refresh" vs. "Reanalyze" Distinction
 
 `app/api/routes/lookup.py::reanalyze_lookup()` (the existing "compare with a different AI backend"
 feature) always writes its new `FinalAssessmentRecord` with `is_primary=False` — it's an alternate
@@ -122,7 +139,7 @@ inserts the new one as `is_primary=True`, updating `IOCLookup.final_verdict`/`ri
 `final_assessment` in place. The distinction is deliberate: new active-scan findings are genuine new
 evidence about the investigation, not merely a different model's take on unchanged evidence.
 
-## 6. Background Execution and Task Lifetime
+## 6. ⏳ Background Execution and Task Lifetime
 
 `start_run()` returns `{"run_id", "status": "pending"}` immediately and spawns `_execute_run()` via
 `_spawn_background()`, which adds the `asyncio.Task` to a module-level `_background_tasks: set` with
@@ -134,7 +151,7 @@ added after a real test-isolation bug surfaced during development, where a test 
 step runs) and returned while that refresh step was still executing in the background, corrupting
 whichever test ran next by disposing the shared DB engine out from under it.
 
-## 7. Cancellation
+## 7. 🛑 Cancellation
 
 Cancellation was added after a forensic audit of the port-scanning pipeline found no way to stop a
 run once started — the run tracking in §6 only prevented Python from garbage-collecting an
@@ -233,7 +250,7 @@ VALUE`, the throwaway test database had to be torn down and recreated rather tha
 The Python-side `.value = "cancelled"` string is unaffected and correct as-is — it's what
 `_serialize_run()` returns to the API/frontend; it was never what gets sent to Postgres.
 
-## 8. Bugs Found by Independent Re-verification (v0.2.2)
+## 8. 🐛 Bugs Found by Independent Re-verification (v0.2.2)
 
 An independent re-verification pass (nine parallel reviewers, each reading the real code fresh
 rather than trusting §7's own claims) re-proved the cancellation fix correct, then found four new,
@@ -290,7 +307,7 @@ even if an unrelated writer already finalized the row.
 Also fixed in the same pass: an empty `tool_ids` array is now rejected at the Pydantic layer
 (`Field(min_length=1)`) instead of silently producing a no-op `COMPLETED` run.
 
-## 9. Installer / Deployment
+## 9. 📦 Installer / Deployment
 
 `backend/Dockerfile` installs `nmap` via `apt-get` alongside the pre-existing `gcc libpq-dev curl`.
 `GET /api/v1/security-assessment/tool-health` calls `shutil.which("nmap")` at request time rather

@@ -1,14 +1,40 @@
-# HORIZON GRID — API Reference
+# 🔌 HORIZON GRID — API Reference
 
 *Every Signal. One Operational Picture.*
 
-## About this document
+## 📋 Table of contents
+
+- [About this document](#-about-this-document)
+- [Why an API, and why two separate services](#-why-an-api-and-why-two-separate-services)
+- [Base URL and versioning](#-base-url-and-versioning)
+- [Authentication: obtaining and using a JWT](#-authentication-obtaining-and-using-a-jwt)
+- [Authorization: roles and permissions](#-authorization-roles-and-permissions)
+- [Conventions used in this reference](#-conventions-used-in-this-reference)
+- [Rate limiting](#-rate-limiting)
+- [Endpoint Reference](#-endpoint-reference)
+  - [1. Authentication — `/api/v1/auth`](#1--authentication--apiv1auth)
+  - [2. IOC Lookup — `/api/v1/lookup`](#2--ioc-lookup--apiv1lookup)
+  - [3. Providers — `/api/v1/providers`](#3--providers--apiv1providers)
+  - [4. AI Configuration — `/api/v1/ai`](#4--ai-configuration--apiv1ai)
+  - [5. Lookup Analysis — `/api/v1/lookup/{lookup_id}/analysis`](#5--lookup-analysis--apiv1lookuplookup_idanalysis)
+  - [6. Threat Hunting — `/api/v1/lookup/{lookup_id}`](#6--threat-hunting--apiv1lookuplookup_id)
+  - [7. Pivoting — `/api/v1/lookup/{lookup_id}/pivots`](#7--pivoting--apiv1lookuplookup_idpivots)
+  - [8. IOC Basket — `/api/v1/basket`](#8--ioc-basket--apiv1basket)
+  - [9. Case Management — `/api/v1/cases`](#9--case-management--apiv1cases)
+  - [10. Runtime Configuration — `/api/v1/runtime`](#10--runtime-configuration--apiv1runtime)
+  - [11. Administration — `/api/v1/admin`](#11--administration--apiv1admin)
+  - [12. Security Assessment Toolkit — `/api/v1/security-assessment`](#12--security-assessment-toolkit--apiv1security-assessment)
+  - [13. Executive Dashboard — `/api/v1/dashboard`](#13--executive-dashboard--apiv1dashboard)
+- [Unversioned utility endpoints](#-unversioned-utility-endpoints)
+- [Appendix: endpoint count by router](#-appendix-endpoint-count-by-router)
+
+## 📖 About this document
 
 This is a complete, standalone reference to the HTTP API that powers HORIZON GRID: every route the backend actually exposes, traced directly to the FastAPI route files that define it (`backend/app/api/routes/*.py`) and to the Pydantic schemas those routes validate against. It is written for two audiences: an engineer integrating another system (a SIEM, a SOAR playbook, a script) against HORIZON GRID directly, and anyone who wants to understand exactly what the web UI is doing under the hood, because it is doing nothing the UI itself couldn't also do by calling these same endpoints.
 
 Nothing in this document is inferred from a comment or a docstring's stated intent — every method, path, permission requirement, request field, response field, and error code below was confirmed by reading the route function and the schema class it depends on. Where the existing internal API chapter (`backend-02-api-reference.md`) was checked against the current route files for this document, three gaps were found and are filled in here: `POST /api/v1/lookup/{lookup_id}/export` (defined in `lookup.py` but previously undocumented), the entire `routes/admin.py` router (7 endpoints, user management), and the entire `routes/security_assessment.py` router (5 endpoints, the Security Assessment Toolkit's API surface) — both of the latter two were explicitly marked out of scope in that chapter's own introduction. All three are documented in full below, alongside everything already covered.
 
-## Why an API, and why two separate services
+## 🧩 Why an API, and why two separate services
 
 HORIZON GRID ships as two independent services: a FastAPI backend (Python) and a Next.js frontend (TypeScript/React), running as separate containers that talk to each other exclusively over HTTP. The frontend holds no business logic of its own worth calling "the platform" — it renders pages and calls the backend's API for every piece of real data or work: running an investigation, fetching a case, testing a provider credential, reading the dashboard's KPIs. The backend has no concept of pages, sessions, or HTML; it is a stateless JSON-over-HTTP service that authenticates every single request independently via a bearer token, and does nothing else.
 
@@ -16,7 +42,7 @@ This separation is not incidental — it is the reason this document is useful a
 
 [FIGURE: standalone-api-documentation-diagram-1.png | Diagram: Frontend and backend as separate services, both callable independently against the same API]
 
-## Base URL and versioning
+## 🌐 Base URL and versioning
 
 Every endpoint in this reference is served by the backend container. On this install, that is:
 
@@ -31,7 +57,7 @@ Two more, deliberately unauthenticated, self-describing endpoints exist for expl
 - `GET /docs` — FastAPI's built-in Swagger UI. It renders every route below with a live "Try it out" form, including an "Authorize" button that accepts a bearer token for the rest of the session.
 - `GET /api/v1/openapi.json` — the raw OpenAPI 3.1 schema Swagger UI itself is built from, useful for generating a typed client in another language.
 
-## Authentication: obtaining and using a JWT
+## 🔑 Authentication: obtaining and using a JWT
 
 HORIZON GRID authenticates every protected request with a JSON Web Token (JWT), sent as a standard `Authorization: Bearer <token>` header — there are no cookies, no sessions, and no API keys of the platform's own for this purpose (provider/AI-backend API keys are a completely separate thing, covered below in §3–4 and §10, and are used server-side to call third-party services, never to call HORIZON GRID itself).
 
@@ -67,9 +93,10 @@ Two distinct token types are issued together, signed HS256 (`backend/app/auth/se
 
 Both lifetimes are configurable per-install and are not hardcoded absolutes; the values above are the shipped defaults. An access token also embeds the user's `role` and a `token_version` counter — the latter means an administrator resetting a user's password immediately invalidates every token already issued to that user, not just future logins, because `get_current_user` re-checks `token_version` against the live database value on every single request (it also re-checks `is_active` the same way, so disabling an account takes effect on that account's very next request, not at token expiry).
 
-There is no logout endpoint and no server-side token revocation list beyond the `token_version` mechanism above — an access token, once issued, remains valid for up to its own 30-minute lifetime even if the browser tab is closed. This is a documented, known characteristic of the current design, not an oversight to route around.
+> [!NOTE]
+> There is no logout endpoint and no server-side token revocation list beyond the `token_version` mechanism above — an access token, once issued, remains valid for up to its own 30-minute lifetime even if the browser tab is closed. This is a documented, known characteristic of the current design, not an oversight to route around.
 
-## Authorization: roles and permissions
+## 🛂 Authorization: roles and permissions
 
 Every protected route is gated by one specific *permission string*, checked by a single shared dependency, `require_permission("<permission>")` (`backend/app/auth/rbac.py`). There are exactly three roles (`backend/app/models/user.py`'s `Role` enum) and eighteen distinct permission strings checked anywhere in the API:
 
@@ -118,7 +145,7 @@ This document states the one required permission string next to every endpoint b
 
 [FIGURE: standalone-api-documentation-diagram-2.png | Diagram: Login exchanges credentials for a token pair, then every subsequent request carries the access token as a bearer credential]
 
-## Conventions used in this reference
+## 📐 Conventions used in this reference
 
 - **IDs.** Every resource ID (`lookup_id`, `case_id`, `item_id`, `run_id`, `user_id`, …) is a UUID, serialized as a string in every JSON response.
 - **Timestamps.** Every persisted timestamp is serialized with `.isoformat()` — an ISO-8601 string, always UTC-aware where the underlying column is timezone-aware.
@@ -127,18 +154,21 @@ This document states the one required permission string next to every endpoint b
 - **"None explicit."** Where an endpoint's Errors line says "none explicit," it means the route raises no hand-written `HTTPException` at all — a request that reaches the handler will always get a `200`/`201`/`204` (barring an unrelated infrastructure failure), aside from the universal `401`/`403`/`422` cases described above.
 - **Secrets.** Every example in this document uses `<REDACTED>` or `<YOUR_API_KEY>` in place of any value that would be a real credential in production. No real key, password, or token appears anywhere below.
 
-## Rate limiting
+## ⏱ Rate limiting
 
-Exactly one route in the entire API is rate-limited: `POST /api/v1/lookup/stream`, capped per-user at `lookup_rate_limit_max_calls` (10) calls per `lookup_rate_limit_window_seconds` (60) seconds, enforced by a Redis fixed-window counter (`backend/app/core/cache.py`). Every other endpoint in this reference — including authentication itself — has no rate limit of its own; this is a known, documented gap, not a hidden one, called out in the Security Architecture chapter. Exceeding the lookup limit returns:
+Exactly one route in the entire API is rate-limited: `POST /api/v1/lookup/stream`, capped per-user at `lookup_rate_limit_max_calls` (10) calls per `lookup_rate_limit_window_seconds` (60) seconds, enforced by a Redis fixed-window counter (`backend/app/core/cache.py`). Exceeding the lookup limit returns:
 
 ```
 HTTP 429
 {"detail": "Rate limit exceeded: max 10 lookups per 60s. Each lookup fans out to every provider plus the crawler and multiple AI calls, so this bounds cost/load per user."}
 ```
 
+> [!WARNING]
+> Every other endpoint in this reference — including authentication itself — has no rate limit of its own; this is a known, documented gap, not a hidden one, called out in the Security Architecture chapter.
+
 ---
 
-# Endpoint Reference
+# 📡 Endpoint Reference
 
 | § | Router | Base path | Endpoints |
 |---|---|---|---|
@@ -160,7 +190,7 @@ HTTP 429
 
 ---
 
-## 1. Authentication — `/api/v1/auth`
+## 1. 🔑 Authentication — `/api/v1/auth`
 
 All four endpoints are unauthenticated *at the dependency level* except `/me`; `/register` and `/login` are the only two ways to ever obtain a token.
 
@@ -229,7 +259,7 @@ curl http://localhost:8000/api/v1/auth/me \
 
 ---
 
-## 2. IOC Lookup — `/api/v1/lookup`
+## 2. 🔍 IOC Lookup — `/api/v1/lookup`
 
 The core investigation pipeline: create a lookup, stream its lifecycle, re-run the AI verdict against a different backend, export a report, and read results back. This is the single endpoint group HORIZON GRID's search box drives end to end.
 
@@ -354,7 +384,7 @@ curl -X POST "http://localhost:8000/api/v1/lookup/b3c1.../export?format=pdf" \
 
 ---
 
-## 3. Providers — `/api/v1/providers`
+## 3. 🔌 Providers — `/api/v1/providers`
 
 Read-only health reporting for the 18 registered IOC providers, plus a live credential test used by the setup wizard and the Manage Providers screen.
 
@@ -404,7 +434,7 @@ curl -X POST http://localhost:8000/api/v1/providers/abuseipdb/test \
 
 ---
 
-## 4. AI Configuration — `/api/v1/ai`
+## 4. 🤖 AI Configuration — `/api/v1/ai`
 
 The AI-backend analog of §3: live credential testing and model-list discovery, used by the setup wizard and Manage Providers screen for all eleven supported AI backends (Ollama, Anthropic, AWS Bedrock, Google Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter).
 
@@ -449,7 +479,7 @@ curl -X POST http://localhost:8000/api/v1/ai/groq/models \
 
 ---
 
-## 5. Lookup Analysis — `/api/v1/lookup/{lookup_id}/analysis`
+## 5. 🧠 Lookup Analysis — `/api/v1/lookup/{lookup_id}/analysis`
 
 The "explain the verdict" endpoints: on-demand AI generations grounded in a *completed* lookup's persisted evidence ledger — never the AI's own free association. Every endpoint below except `/evidence` requires the lookup's status to be `completed`; both shared error conditions are stated once here rather than repeated ten times:
 
@@ -531,7 +561,7 @@ curl -X POST http://localhost:8000/api/v1/lookup/b3c1.../analysis/copilot \
 
 ---
 
-## 6. Threat Hunting — `/api/v1/lookup/{lookup_id}`
+## 6. 🎯 Threat Hunting — `/api/v1/lookup/{lookup_id}`
 
 Both endpoints share a lookup-existence check with **no completed-status gate**, unlike §5 — a hunting package or detection rule can be requested even for a lookup still running or one that failed, since the seed IOC value itself is already known the moment the lookup row exists.
 
@@ -555,7 +585,7 @@ Both endpoints share a lookup-existence check with **no completed-status gate**,
 
 ---
 
-## 7. Pivoting — `/api/v1/lookup/{lookup_id}/pivots`
+## 7. 🔀 Pivoting — `/api/v1/lookup/{lookup_id}/pivots`
 
 A single, deterministic (non-AI) endpoint — a pure sort over real correlation edges, which by construction can never hallucinate a pivot target.
 
@@ -576,7 +606,7 @@ curl "http://localhost:8000/api/v1/lookup/b3c1.../pivots?limit=5" \
 
 ---
 
-## 8. IOC Basket — `/api/v1/basket`
+## 8. 🧺 IOC Basket — `/api/v1/basket`
 
 A per-analyst scratch space of saved IOCs — every endpoint here operates only on the calling user's own basket; there is no team-shared basket.
 
@@ -634,7 +664,7 @@ curl -X POST http://localhost:8000/api/v1/basket/compare \
 
 ---
 
-## 9. Case Management — `/api/v1/cases`
+## 9. 📁 Case Management — `/api/v1/cases`
 
 Cases are team-shared (not per-analyst) investigation containers grouping IOCs, notes, and reports. Most endpoints share one loader that raises `404` `"Case not found"` for a missing case — stated once here.
 
@@ -712,7 +742,7 @@ curl -X POST http://localhost:8000/api/v1/cases \
 
 ---
 
-## 10. Runtime Configuration — `/api/v1/runtime`
+## 10. ⚙ Runtime Configuration — `/api/v1/runtime`
 
 The API surface behind the "Manage Providers" screen: configuring and activating AI backends, configuring and enabling IOC providers, and reading the resulting audit trail — all without editing a `.env` file or restarting a container. Distinct from §3/§4 (which only *test* candidate credentials): this router is what actually *persists* a validated credential.
 
@@ -803,7 +833,7 @@ curl -X POST http://localhost:8000/api/v1/runtime/ioc-providers/virustotal \
 
 ---
 
-## 11. Administration — `/api/v1/admin`
+## 11. 🔐 Administration — `/api/v1/admin`
 
 *Not present in the prior internal API chapter, which explicitly scoped this router out. Added here in full after reading `backend/app/api/routes/admin.py` directly.* The backend for the RBAC admin console — every route gated by `user:manage`, granted to `admin` only, and every route re-derives the caller's role from the database on every request rather than trusting the JWT's embedded role claim alone.
 
@@ -897,7 +927,7 @@ curl -X POST http://localhost:8000/api/v1/admin/users/<user_id>/reset-password \
 
 ---
 
-## 12. Security Assessment Toolkit — `/api/v1/security-assessment`
+## 12. 🛡 Security Assessment Toolkit — `/api/v1/security-assessment`
 
 *Not present in the prior internal API chapter, which explicitly scoped this router out. Added here in full after reading `backend/app/api/routes/security_assessment.py` and its service layer directly.* This is the API behind active-scanning checks against a target — Nmap port/service scanning, DNS, TLS, HTTP-header inspection, vulnerability-intel lookups, and hash-based checks — gated by an explicit, mandatory scope/authorization confirmation on every single run, never implicit consent inherited from having created the underlying lookup. A dedicated router, deliberately not folded into `lookup.py`, mirroring `admin.py`'s precedent for a self-contained subsystem.
 
@@ -973,7 +1003,7 @@ curl -X POST http://localhost:8000/api/v1/security-assessment/b3c1.../run \
 
 ---
 
-## 13. Executive Dashboard — `/api/v1/dashboard`
+## 13. 📊 Executive Dashboard — `/api/v1/dashboard`
 
 Both endpoints back the Executive Dashboard. Both are read-only aggregations over already-persisted data — neither triggers a new provider call, and neither persists anything.
 
@@ -1027,7 +1057,7 @@ curl http://localhost:8000/api/v1/dashboard/executive-summary \
 
 ---
 
-## Unversioned utility endpoints
+## 🧰 Unversioned utility endpoints
 
 Three endpoints are defined directly in `backend/app/main.py`, outside `app/api/routes/`, with no `/api/v1` prefix and no permission check of any kind:
 
@@ -1054,7 +1084,7 @@ Both `/health` and `/network-info` share the same trust model: unauthenticated, 
 
 ---
 
-## Appendix: endpoint count by router
+## 📎 Appendix: endpoint count by router
 
 | Router | Endpoints | Permission strings used |
 |---|---|---|

@@ -7,7 +7,25 @@ This appendix covers two distinct, non-overlapping bodies of evidence about the 
 
 These two bodies of evidence come from different inspection passes and are reported separately below. Where a number (test count, line count, bug count) is stated, it is attributed to its source and not blended with the other source to make the two agree.
 
-## 1. Automated Test Suites
+## 📋 Table of contents
+
+- [🧪 1. Automated Test Suites](#-1-automated-test-suites)
+  - [1.1 Backend](#11-backend)
+  - [1.2 Frontend](#12-frontend)
+  - [1.3 Summary](#13-summary)
+  - [1.4 Regression Tests for the API-Key / AI-Backend Configuration Fix](#14-regression-tests-for-the-api-key--ai-backend-configuration-fix)
+- [📋 2. Manual / QA End-to-End Validation History](#-2-manual--qa-end-to-end-validation-history)
+  - [2.1 Final Verdict](#21-final-verdict)
+  - [2.2 Specific Bugs Found and Fixed](#22-specific-bugs-found-and-fixed)
+  - [2.3 Findings Documented but Not Fixed (Not Blocking Release)](#23-findings-documented-but-not-fixed-not-blocking-release)
+  - [2.4 Failure-Recovery Testing](#24-failure-recovery-testing)
+  - [2.5 Performance Observations (as measured in that pass)](#25-performance-observations-as-measured-in-that-pass)
+  - [2.6 Live End-to-End Verification of the API-Key / AI-Backend Fix](#26-live-end-to-end-verification-of-the-api-key--ai-backend-fix)
+- [🧭 3. What This Means Together](#-3-what-this-means-together)
+
+---
+
+## 🧪 1. Automated Test Suites
 
 ### 1.1 Backend
 
@@ -15,18 +33,18 @@ The backend (FastAPI/Python) test suite lives under `backend/app/tests/` and use
 
 | Layer | Location | File count | Approx. line count |
 |---|---|---|---|
-| Unit tests | `backend/app/tests/unit/` | 13 files | ~1,486 lines |
-| Integration tests | `backend/app/tests/integration/` | 3 files | ~1,009 lines |
+| Unit tests | `backend/app/tests/unit/` | 33 files | ~5,013 lines |
+| Integration tests | `backend/app/tests/integration/` | 15 files | ~5,340 lines |
 
-**Unit tests** cover: abuse.ch status mapping, AI schemas/validators, the AI service (including its no-evidence short-circuit guard, described below), `analysis_service` grounding logic, connection-test handlers, the correlation engine, the OSINT crawler's collector/rate-limit logic, the evidence builder, the IOC-type detector, pivot logic, the provider base class, and WHOIS/RDAP handling.
+**Unit tests** cover: abuse.ch status mapping, AI schemas/validators, the AI service (including its no-evidence short-circuit guard, described below, and its Ollama SSRF guard), `analysis_service` grounding logic, connection-test handlers, the correlation engine, the deterministic scoring engine, the OSINT crawler's collector/rate-limit logic, the evidence builder, the IOC-type detector, pivot logic, the provider base class and orchestrator retry logic, WHOIS/RDAP and several individual provider connectors (Google Safe Browsing, Spamhaus, urlscan.io), runtime configuration and its credential-encryption layer, user management, the Executive Dashboard/KPI service, the Security Assessment Toolkit's service and tool connectors, and the Pentest Suite's orchestrator and Metasploit exploit-validation client.
 
-**Integration tests** are three named files: `test_lookup_flow.py`, `test_lookup_stream_persistence.py`, and `test_api_health.py`. They exercise the real lookup **orchestrator** (the component that fans a lookup out to every applicable data-source connector, called a "provider," concurrently) end-to-end, but against:
+**Integration tests** now span fifteen named files — the original `test_lookup_flow.py`, `test_lookup_stream_persistence.py`, and `test_api_health.py`, plus `test_admin_rbac_api.py`, `test_admin_users.py`, `test_auth_login_rate_limit.py`, `test_auth_registration.py`, `test_dashboard_api.py`, `test_dashboard_service_db.py`, `test_deterministic_scoring.py`, `test_lookup_export_permissions.py`, `test_pentest_api.py`, `test_pentest_exploit_api.py`, `test_runtime_config_persistence.py`, and `test_security_assessment_api.py`. They exercise the real lookup **orchestrator** (the component that fans a lookup out to every applicable data-source connector, called a "provider," concurrently) end-to-end, but against:
 
 - **Fake `BaseProvider` subclasses** standing in for real providers — the real, network-hitting connectors (VirusTotal, AbuseIPDB, etc.) are never called in these tests;
 - **respx-mocked HTTP** for any HTTP calls that do occur;
 - a **real Redis** instance reached via docker-compose (these tests auto-skip if Redis is not reachable, rather than failing).
 
-With that harness, the integration tests verify: concurrent (parallel, not sequential) fan-out across providers, isolation of a single provider's failure from the rest of the investigation, cache hit/miss behavior, and correct short-circuiting for providers that are unsupported for a given IOC type or not configured (missing API key).
+With that harness, the integration tests verify: concurrent (parallel, not sequential) fan-out across providers, isolation of a single provider's failure from the rest of the investigation, cache hit/miss behavior, correct short-circuiting for providers that are unsupported for a given IOC type or not configured (missing API key), RBAC enforcement across the admin and dashboard routes, the login rate limiter, deterministic-scoring persistence, and scope-enforced behavior of the Security Assessment and Pentest Suite APIs.
 
 [FIGURE: tech-08-testing-qa-diagram-1.png | Diagram: 1.1 Backend]
 
@@ -42,19 +60,19 @@ The frontend (Next.js/React/TypeScript) declares a `"test": "vitest run"` script
 
 | Area | Framework(s) configured | Test files that actually exist | Coverage % |
 |---|---|---|---|
-| Backend unit | pytest, pytest-asyncio, pytest-cov | 13 | Not measured |
-| Backend integration | pytest, respx, real Redis | 3 | Not measured |
+| Backend unit | pytest, pytest-asyncio, pytest-cov | 33 | Not measured |
+| Backend integration | pytest, respx, real Redis | 15 | Not measured |
 | Frontend | Vitest (declared) | 0 | Not measured (no tests to measure) |
 
 ### 1.4 Regression Tests for the API-Key / AI-Backend Configuration Fix
 
 A follow-on engineering pass fixed a bug where entering, saving, and testing provider and AI-backend API-key credentials in the Windows setup wizard was unreliable — every "Test Connection" button required a session token that had previously only ever been set deep inside the final "Start Installation" step, so a credential could never be tested before a full install completed, and never at all on a reconfigure run where the admin-account fields were left blank to preserve an existing account. The same pass added Groq as a fifth AI backend alongside Ollama, Anthropic, Bedrock, and Gemini, and introduced a live connection-test endpoint shared by all five backends.
 
-That fix shipped with a new regression-test file, `backend/app/tests/unit/test_ai_connection_test.py`, adding **16 automated tests** that exercise the connection-test logic for all five AI backends that existed at the time using **mock/fake credentials only** — no real API key ever appears in the test suite — with **respx**-mocked HTTP responses standing in for the real provider APIs. The 16 tests covered, across those five backends: a successful ping, an invalid-key/401 response, a rate-limit/429 response, a model-not-found/404 response, a request timeout, and a network error, each expected to be reported as its own specific, honest failure category rather than a generic error. With this file added, the full backend automated suite was reported as **144 tests total, passing with no regressions** at that point in the project's history — a count reported by this follow-on pass itself, distinct from (and not necessarily contemporaneous with) the 13-file/~1,486-line source-inspection figures in Section 1.1 above.
+That fix shipped with a new regression-test file, `backend/app/tests/unit/test_ai_connection_test.py`, adding **16 automated tests** that exercise the connection-test logic for all five AI backends that existed at the time using **mock/fake credentials only** — no real API key ever appears in the test suite — with **respx**-mocked HTTP responses standing in for the real provider APIs. The 16 tests covered, across those five backends: a successful ping, an invalid-key/401 response, a rate-limit/429 response, a model-not-found/404 response, a request timeout, and a network error, each expected to be reported as its own specific, honest failure category rather than a generic error. With this file added, the full backend automated suite was reported as **144 tests total, passing with no regressions** at that point in the project's history — a count reported by this follow-on pass itself, distinct from (and not necessarily contemporaneous with) the 33-file/~5,013-line source-inspection figures in Section 1.1 above.
 
-**Current state (v0.2.3):** the same file has since grown alongside the AI backend roster — six more backends (OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter) joined the original five, each with its own block of backend-specific test cases (including a few genuinely backend-specific scenarios: Kimi's forced-tool-call-vs-thinking-mode conflict, DeepSeek's provider-specific HTTP 402, xAI's flat non-nested error body). `test_ai_connection_test.py` now contains **53 test functions** covering all eleven backends. See `TEST_EVIDENCE_CURRENT_VERSION.md` for this release's authoritative, actually-executed full-suite numbers rather than the historical 144 figure above, which predates most of this project's test growth.
+**Current state (v0.3.8):** the same file has since grown alongside the AI backend roster — six more backends (OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter) joined the original five, each with its own block of backend-specific test cases (including a few genuinely backend-specific scenarios: Kimi's forced-tool-call-vs-thinking-mode conflict, DeepSeek's provider-specific HTTP 402, xAI's flat non-nested error body). `test_ai_connection_test.py` now contains **54 test functions** covering all eleven backends. See `TEST_EVIDENCE_CURRENT_VERSION.md` for this release's authoritative, actually-executed full-suite numbers rather than the historical 144 figure above, which predates most of this project's test growth.
 
-## 2. Manual / QA End-to-End Validation History
+## 📋 2. Manual / QA End-to-End Validation History
 
 Separately from the automated suites above, a full manual QA pass was performed against the actual compiled Windows installer (`IOC-Intelligence-Platform-Setup-0.1.0.exe`, version 0.1.0, ~62.6 MB final build, SHA256 `b32b1cc02205a0a53dda200d6bc336943a71df6b930cecd2dff45b28d84e81e8`), dated 2026-08-11, and documented in `FINAL_END_TO_END_TEST_REPORT.md`. This pass treated the build as never-before-tested and covered install, configuration, normal use, deliberate failure injection, a real Windows reboot, uninstall, reinstall, and a final independent clean install — exercised against the real installer and running containers, not source/dev-server shortcuts.
 
@@ -62,7 +80,8 @@ Separately from the automated suites above, a full manual QA pass was performed 
 
 ### 2.1 Final Verdict
 
-**READY FOR RELEASE.** The report's stated justification: every defect found — including the single most severe one (AI evidence-free fabrication, below) — was root-caused, fixed, covered by a regression test, and re-verified against the real running product. The three highest-severity findings (AI fabrication, LAN-exposed unauthenticated datastores, and silent data loss on client disconnect) were all closed with direct, live re-confirmation. Remaining open items are explicitly scoped-out unbuilt features (Report generation, PDF/CSV export, Timeline) and small-model AI-quality limitations, not incorrect or unsafe behavior.
+> [!IMPORTANT]
+> **READY FOR RELEASE.** The report's stated justification: every defect found — including the single most severe one (AI evidence-free fabrication, below) — was root-caused, fixed, covered by a regression test, and re-verified against the real running product. The three highest-severity findings (AI fabrication, LAN-exposed unauthenticated datastores, and silent data loss on client disconnect) were all closed with direct, live re-confirmation. Remaining open items are explicitly scoped-out unbuilt features (Report generation, PDF/CSV export, Timeline) and small-model AI-quality limitations, not incorrect or unsafe behavior.
 
 ### 2.2 Specific Bugs Found and Fixed
 
@@ -82,7 +101,7 @@ Separately from the automated suites above, a full manual QA pass was performed 
 | 11 | Low | Cosmetic | Routine `docker compose` stderr progress output was rendered as a fake red "NativeCommandError" on every Start/Stop/Restart, even on full success. |
 | 12 | Low | Branding accuracy | The landing page hardcoded "Claude" as the AI backend name regardless of which backend was actually configured. |
 
-Bugs #1–12 (including 4b) were all root-caused, fixed, covered by a regression test where the fix was in backend Python code, rebuilt into a real running instance, and re-verified live against the actual product. Per the QA report, the regression tests added for these fixes brought the backend unit-test suite to **128/128 passing** at the time of that pass, plus the targeted stream-persistence integration tests — a count reported by the QA pass itself, distinct from (and not necessarily contemporaneous with) the 13-file/3-file source-inspection counts in Section 1 above. One named regression test is called out specifically: `test_completed_lookup_returns_rebuilt_correlation_graph`, added for bug #8.
+Bugs #1–12 (including 4b) were all root-caused, fixed, covered by a regression test where the fix was in backend Python code, rebuilt into a real running instance, and re-verified live against the actual product. Per the QA report, the regression tests added for these fixes brought the backend unit-test suite to **128/128 passing** at the time of that pass, plus the targeted stream-persistence integration tests — a count reported by the QA pass itself, distinct from (and not necessarily contemporaneous with) the 33-file/15-file source-inspection counts in Section 1 above. One named regression test is called out specifically: `test_completed_lookup_returns_rebuilt_correlation_graph`, added for bug #8.
 
 ### 2.3 Findings Documented but Not Fixed (Not Blocking Release)
 
@@ -110,6 +129,9 @@ Idle-baseline container memory was recorded as: backend ~96 MB, frontend ~39 MB,
 
 Beyond the automated regression tests in Section 1.4, the same fix was also verified live against the real running product, start to finish: a full uninstall, a wipe of the database and Docker volumes, a fresh install, a complete run through the setup wizard, a fresh administrator-account bootstrap, and a live IOC investigation all passed. A genuine container-restart persistence test was performed separately: after a real container restart, admin login and all prior investigation records were confirmed to have survived intact. Finally, a live side-by-side comparison ran one identical IOC through both the Ollama and Groq AI backends to compare the quality of each backend's AI-generated output against identical underlying provider evidence. As with the rest of Section 2, these are the results observed in that specific verification pass, not a repeatable benchmark.
 
-## 3. What This Means Together
+## 🧭 3. What This Means Together
 
-The two bodies of evidence answer different questions and should not be conflated: Section 1 shows that the codebase has a real, if partial, automated regression safety net on the backend (13 unit-test files, 3 integration-test files exercising the orchestrator against fake providers plus real Redis) and none yet on the frontend. Section 2 shows that, independent of those automated tests, a full manual lifecycle pass against the actual shipped installer found and fixed 12 real defects — including one severe AI-safety issue (evidence-free fabrication of a malicious verdict) and one severe security issue (unauthenticated datastores reachable from the LAN) — and reached a "ready for release" verdict with two remaining categories of known, documented, non-blocking gaps: small-model AI-quality quirks, and three genuinely unbuilt features (Report generation, PDF/CSV export, Timeline).
+> [!NOTE]
+> The two bodies of evidence answer different questions and should not be conflated.
+
+Section 1 shows that the codebase has a real, if partial, automated regression safety net on the backend (33 unit-test files, 15 integration-test files exercising the orchestrator against fake providers plus real Redis) and none yet on the frontend. Section 2 shows that, independent of those automated tests, a full manual lifecycle pass against the actual shipped installer found and fixed 12 real defects — including one severe AI-safety issue (evidence-free fabrication of a malicious verdict) and one severe security issue (unauthenticated datastores reachable from the LAN) — and reached a "ready for release" verdict with two remaining categories of known, documented, non-blocking gaps: small-model AI-quality quirks, and three genuinely unbuilt features (Report generation, PDF/CSV export, Timeline).

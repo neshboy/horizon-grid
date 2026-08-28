@@ -2,16 +2,53 @@
 
 This chapter is the exhaustive technical reference for every external integration the backend calls: the 18 registered IOC (Indicator of Compromise) providers in `backend/app/providers/` and the 11 interchangeable AI backends in `backend/app/ai/`. Where the *Provider Architecture* and *AI Architecture* chapters explain how the fan-out, caching, credential-override, and grounding mechanisms work, this chapter documents **what each individual integration actually calls** — real endpoint URLs, auth schemes, credential fields, supported IOC types, rate-limit/error detection, and the shape of the normalized data each one returns. All facts are drawn directly from the connector source files cited inline; nothing below is inferred from documentation or docstrings alone.
 
-## 1. Shared Provider Contract
+## 📋 Table of contents
+
+- [1. Shared Provider Contract](#-1-shared-provider-contract)
+- [2. IOC Providers, One by One](#-2-ioc-providers-one-by-one)
+  - [2.1 VirusTotal — virustotal](#21-virustotal--virustotal)
+  - [2.2 AbuseIPDB — abuseipdb](#22-abuseipdb--abuseipdb)
+  - [2.3 AlienVault OTX — otx](#23-alienvault-otx--otx)
+  - [2.4 URLhaus (abuse.ch) — urlhaus](#24-urlhaus-abusech--urlhaus)
+  - [2.5 ThreatFox (abuse.ch) — threatfox](#25-threatfox-abusech--threatfox)
+  - [2.6 MalwareBazaar (abuse.ch) — malwarebazaar](#26-malwarebazaar-abusech--malwarebazaar)
+  - [2.7 crt.sh — crtsh](#27-crtsh--crtsh)
+  - [2.8 NIST NVD — nvd](#28-nist-nvd--nvd)
+  - [2.9 CISA Known Exploited Vulnerabilities — cisa_kev](#29-cisa-known-exploited-vulnerabilities--cisa_kev)
+  - [2.10 MITRE ATT&CK — mitre_attack](#210-mitre-attck--mitre_attack)
+  - [2.11 WHOIS / RDAP — whois_rdap](#211-whois--rdap--whois_rdap)
+  - [2.12 Hybrid Analysis (Falcon Sandbox) — hybrid_analysis](#212-hybrid-analysis-falcon-sandbox--hybrid_analysis)
+  - [2.13 Spamhaus DBL/ZEN — spamhaus](#213-spamhaus-dblzen--spamhaus)
+  - [2.14 PhishTank — phishtank](#214-phishtank--phishtank)
+  - [2.15 Censys — censys](#215-censys--censys)
+  - [2.16 urlscan.io — urlscan](#216-urlscanio--urlscan)
+  - [2.17 Google Safe Browsing — google_safe_browsing](#217-google-safe-browsing--google_safe_browsing)
+- [3. Internet Intelligence Collector (OSINT Crawler-as-Provider) — internet_intelligence](#-3-internet-intelligence-collector-osint-crawler-as-provider--internet_intelligence)
+- [4. AI Backends](#-4-ai-backends)
+  - [4.1 Ollama — ollama_client.py](#41-ollama--ollama_clientpy)
+  - [4.2 Anthropic — anthropic_client.py](#42-anthropic--anthropic_clientpy)
+  - [4.3 AWS Bedrock — bedrock_client.py](#43-aws-bedrock--bedrock_clientpy)
+  - [4.4 Google Gemini — gemini_client.py](#44-google-gemini--gemini_clientpy)
+  - [4.5 Groq — groq_client.py](#45-groq--groq_clientpy)
+  - [4.6 OpenAI — openai_client.py](#46-openai--openai_clientpy)
+  - [4.7 Kimi (Moonshot AI) — kimi_client.py](#47-kimi-moonshot-ai--kimi_clientpy)
+  - [4.8 DeepSeek — deepseek_client.py](#48-deepseek--deepseek_clientpy)
+  - [4.9 xAI (Grok) — xai_client.py](#49-xai-grok--xai_clientpy)
+  - [4.10 Mistral AI — mistral_client.py](#410-mistral-ai--mistral_clientpy)
+  - [4.11 OpenRouter — openrouter_client.py](#411-openrouter--openrouter_clientpy)
+- [5. Cross-Cutting Mechanisms](#-5-cross-cutting-mechanisms)
+- [6. Quick-Reference Table](#-6-quick-reference-table)
+
+## 🔌 1. Shared Provider Contract
 
 Every provider subclasses `BaseProvider` (`app/providers/base.py:80-184`), which wraps `fetch()` with three short-circuits before any outbound call is made — disabled, unsupported IOC type, and not-configured (`base.py:97-146`) — and normalizes every outbound-call exception into one of a fixed set of `ProviderStatus` values. Two mappings are uniform across **all** real HTTP-based providers unless a connector explicitly overrides them:
 
 - `httpx.HTTPStatusError` with status **429, 403, or 509** → `ProviderStatus.RATE_LIMITED` (`base.py:149-155`; 509 is called out at `base.py:152` as PhishTank's documented over-limit code, since it is not a widely-recognized rate-limit status elsewhere).
 - Any other non-2xx status raised via `response.raise_for_status()` → `ProviderStatus.ERROR`.
 
-Retries and timeouts are applied one layer above, in the orchestrator (`app/providers/orchestrator.py:26,47-61`): `asyncio.wait_for` per call, with `tenacity`-based retry limited to `httpx.ConnectError`, `httpx.ReadTimeout`, and `httpx.PoolTimeout` — a bad-status response is never retried, only a genuinely failed connection. Sixteen providers are registered in `app/providers/registry.py:29-46`, including the OSINT crawler described in §3.
+Retries and timeouts are applied one layer above, in the orchestrator (`app/providers/orchestrator.py:26,47-61`): `asyncio.wait_for` per call, with `tenacity`-based retry limited to `httpx.ConnectError`, `httpx.ReadTimeout`, and `httpx.PoolTimeout` — a bad-status response is never retried, only a genuinely failed connection. Eighteen providers are registered in `app/providers/registry.py:29-46` — the seventeen IOC providers documented one by one in §2, plus the OSINT crawler described in §3.
 
-## 2. IOC Providers, One by One
+## 🔍 2. IOC Providers, One by One
 
 ### 2.1 VirusTotal — `virustotal`
 - **File**: `app/providers/virustotal.py`. Category `THREAT_INTEL`. IOC types: `ipv4`, `ipv6`, `domain`, `url`, and every hash type (`md5`/`sha1`/`sha256`/`sha512`) (`:17-20`).
@@ -103,7 +140,9 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 - **Mechanism**: this connector makes **no HTTP call at all** — it performs plain DNS A-record lookups via `loop.getaddrinfo()` against `*.zen.spamhaus.org` (IP, octet-reversed) or `*.dbl.spamhaus.org` (domain) (`:61-76`).
 - **Normalized data**: `verdict` ("clean" if NXDOMAIN/no answer, "malicious" if any A-record hit that isn't a query-error code, "unknown" if every returned code is a query-error code), `listed` (bool), `list` (`"ZEN"` or `"DBL"`), `query`, and on a real listing, `return_codes` plus `listing_reason` (decoded from the published Spamhaus ZEN/DBL return-code tables) (`:81-131`).
 - **"Errors"**: `socket.gaierror` (NXDOMAIN) is caught and treated as "not listed" — a normal clean result, not an error. Because there is no HTTP call, the 429/403/509 rate-limit mapping described in §1 does not apply to this connector.
-- **Real bug fixed (v0.2.2)**: Spamhaus's two shared query-error codes (`127.255.255.254` "public/open resolver not permitted", `127.255.255.255` "excessive queries, temporarily blocked") were only documented in `_ZEN_CODES`, and — more importantly — were never actually distinguished from a real listing in the classification logic itself: ANY non-empty DNS answer, including these, was reported as `verdict: "malicious"`. Confirmed live against a real Docker container (a common deployment shape, not unique to any one environment): every domain lookup got `127.255.255.254` back (Spamhaus rejecting the container's default DNS resolver as public/shared), so every domain — including `example.org`, IANA's reserved, universally-benign example domain — was reported malicious with zero real finding behind it. Fixed with a `_QUERY_ERROR_CODES` set checked before classification: a response containing ONLY error codes now reports `status=ERROR`, `verdict="unknown"`, `listed=False`, with a clear `error_message` explaining the query was rejected; a real listing found alongside an error code still correctly reports `malicious` (the real evidence isn't discarded just because an unrelated error code was also present). `_DBL_CODES` also gained the two error codes for documentation completeness, confirmed live to appear on DBL (domain) lookups too, not only ZEN (IP) lookups as previously assumed.
+
+> [!NOTE]
+> **Real bug fixed (v0.2.2):** Spamhaus's two shared query-error codes (`127.255.255.254` "public/open resolver not permitted", `127.255.255.255` "excessive queries, temporarily blocked") were only documented in `_ZEN_CODES`, and — more importantly — were never actually distinguished from a real listing in the classification logic itself: ANY non-empty DNS answer, including these, was reported as `verdict: "malicious"`. Confirmed live against a real Docker container (a common deployment shape, not unique to any one environment): every domain lookup got `127.255.255.254` back (Spamhaus rejecting the container's default DNS resolver as public/shared), so every domain — including `example.org`, IANA's reserved, universally-benign example domain — was reported malicious with zero real finding behind it. Fixed with a `_QUERY_ERROR_CODES` set checked before classification: a response containing ONLY error codes now reports `status=ERROR`, `verdict="unknown"`, `listed=False`, with a clear `error_message` explaining the query was rejected; a real listing found alongside an error code still correctly reports `malicious` (the real evidence isn't discarded just because an unrelated error code was also present). `_DBL_CODES` also gained the two error codes for documentation completeness, confirmed live to appear on DBL (domain) lookups too, not only ZEN (IP) lookups as previously assumed.
 
 ### 2.14 PhishTank — `phishtank`
 - **File**: `app/providers/stubs/phishtank.py`. Category `THREAT_INTEL`. IOC type: `url` (`:19-22`).
@@ -131,7 +170,7 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 - **Endpoint**: `POST https://safebrowsing.googleapis.com/v4/threatMatches:find?key=<API_KEY>`, checking against `MALWARE`, `SOCIAL_ENGINEERING`, `UNWANTED_SOFTWARE`, and `POTENTIALLY_HARMFUL_APPLICATION` threat types (`_THREAT_TYPES`).
 - **Normalized data**: a "clean" verdict only when the response is a genuine HTTP 200 with an empty/missing `matches` field — this is the *only* input path that can produce a safe result. Every other outcome (non-200 status, network error/timeout, or a response that doesn't parse the way the API contract promises) returns early via the module's own `_error()` helper, which always sets `data={"verdict": "unknown", ...}` — there is no code path from "the request failed" to a result that looks clean, a deliberately pinned invariant (module docstring; covered by `test_google_safe_browsing.py`'s `test_*_never_looks_like_safe` tests).
 
-## 3. Internet Intelligence Collector (OSINT Crawler-as-Provider) — `internet_intelligence`
+## 🌐 3. Internet Intelligence Collector (OSINT Crawler-as-Provider) — `internet_intelligence`
 
 - **File**: `app/crawler/collector.py`. Category `OSINT`. IOC types: `domain`, `ipv4`, `malware_family`, `threat_actor`, `campaign`, `cve`, `file_name` — deliberately limited to free-text-searchable types; the module docstring notes that "raw network atoms like ja3 hashes or mutexes are excluded" (`:36-44,50-52`).
 - **Credential**: `requires_key=False` — every underlying source is unauthenticated (`:54,58-59`).
@@ -147,7 +186,7 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 - **Normalized data**: `osint_findings` (a deduplicated-by-URL merged list of `{title, url, snippet, published_at, source}`, capped at `crawler_max_results_per_source * 4`), `source_count` (per-source hit counts), `total_findings`, `rate_limited_sources` (`collector.py:68-110`).
 - **Status resolution**: the collector maps "all four sources came back empty and at least one was rate-limited" → `ProviderStatus.RATE_LIMITED`; "all empty, none rate-limited" → `NO_DATA`; any findings at all → `OK` (`:112-133`).
 
-## 4. AI Backends
+## 🤖 4. AI Backends
 
 All eleven backend clients expose an identical async method, `call_claude_json(system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None) -> dict`, which is what lets `app/ai/service.py` swap backends with zero branching logic (`service.py:43-53,56-99`). Defaults for every credential/model/URL below live in `app/core/config.py:44-80`; at call time, `_build_client()` (`service.py:56-99`) constructs a **fresh** client per call using whichever credentials the active runtime-config row (or an explicit override) supplies — proving these constructor parameters are live override points a caller genuinely exercises, not dead code.
 
@@ -235,13 +274,13 @@ All eleven backend clients expose an identical async method, `call_claude_json(s
 - **Model discovery filtering, a real constraint specific to this backend**: because OpenRouter fans out to hundreds of underlying models, many of which do not support forced tool-calling at all, `list_models()` filters the live `/models` response down to ids whose `supported_parameters` array contains `tool_choice` (confirmed live: 342 of 413 models declared tool_choice support at the time this was written) — picking a model without it would `400` against this client's forced-tool-calling `call_claude_json()`. Falls back to returning every listed model id if the response doesn't include `supported_parameters` for any model.
 - **Errors**: same RuntimeError shape as the other OpenAI-compatible clients. OpenRouter's error body is `{"error": {"code", "message", "metadata"?}}` — similar to OpenAI's nested shape but without an `error.type`/`error.param` field; doesn't change handling since only `response.text` is surfaced either way.
 
-## 5. Cross-Cutting Mechanisms
+## 🔀 5. Cross-Cutting Mechanisms
 
 - **Per-investigation credential overrides (IOC providers)**: `app/core/runtime_context.py:38-47` — `get_credential(provider_id, field, fallback)` returns a per-investigation `ContextVar` override when one has been set (via `set_provider_overrides()` at `orchestrator.py:113`), else falls back to the `.env`-derived `Settings` value. Every real provider's `fetch()` calls this — e.g. `abuseipdb.py:29`, `virustotal.py:44`, `otx.py:46`, `nvd.py:32`, `censys.py:40-41`, `hybrid_analysis.py:45`, `phishtank.py:29`, `urlhaus.py:31`, `threatfox.py:38`, `malwarebazaar.py:31`.
 - **AI backend resolution order**: `app/ai/service.py:_get_ai_client` (`:102-145`) resolves the active backend in this order on **every call**: an explicit `backend_override` (used by the reanalyze/comparison feature) → the DB-backed active runtime config (`app/core/runtime_config.py`) → the legacy `settings.ai_backend` default of `"ollama"` (`config.py:80`).
 - **Live connection tests** (candidate credentials only, never `get_settings()`): IOC providers are tested in `app/providers/connection_test.py:51-208` (VirusTotal, AbuseIPDB, OTX, the abuse.ch family via ThreatFox's `query_status`, NVD, Hybrid Analysis, Censys, PhishTank); urlscan.io and Google Safe Browsing are tested the same way despite having no wizard entry. AI backends are tested in `app/ai/connection_test.py` — a dedicated `_check_*` function exists for all eleven (Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter, Anthropic, Gemini, Ollama, Bedrock), not just the original five; the module's own docstring records the investigation finding that motivated dedicated per-backend checks in the first place: none of the original five backends' generic error handling reliably distinguished "bad key" from "bad request" from "service down" without one. Both endpoints — `POST /api/v1/providers/{id}/test` and `POST /api/v1/ai/test` — make one real, minimal outbound call with the credentials from the request body and never persist them; see the *Runtime Configuration and Credential Lifecycle* chapter for how this relates to the separate, saved runtime-config path.
 
-## 6. Quick-Reference Table
+## 📇 6. Quick-Reference Table
 
 | Provider ID | Category | Auth mechanism | IOC types | Rate-limit signal |
 |---|---|---|---|---|

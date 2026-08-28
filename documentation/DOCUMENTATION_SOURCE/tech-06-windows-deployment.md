@@ -2,7 +2,21 @@
 
 This section documents the Windows installer for HORIZON GRID: an Inno Setup package (a Windows installer-authoring tool that compiles a self-extracting setup executable) plus a WinForms configuration wizard (.NET's native desktop UI framework — this is not an Electron or browser-based installer). Together they package the same Docker Compose-based runtime described elsewhere in this document for a single-machine Windows install; they do not reimplement the platform as a native Windows service. Docker Compose remains the actual runtime underneath the installer, per an explicit header comment in `windows/installer.iss`.
 
-## What the Installer Actually Does
+## 📋 Table of contents
+
+- [What the Installer Actually Does](#-what-the-installer-actually-does)
+  - [Prerequisite Checks](#prerequisite-checks)
+- [File Layout: Program Files vs. ProgramData](#-file-layout-program-files-vs-programdata)
+  - [ACL Protection](#acl-protection)
+- [Setup Wizard Page Flow](#-setup-wizard-page-flow)
+- [What "Start Installation" Actually Executes](#-what-start-installation-actually-executes)
+- [Start Menu Shortcuts](#-start-menu-shortcuts)
+- [Upgrade / Reconfigure Flow](#-upgrade--reconfigure-flow)
+- [Summary](#-summary)
+
+---
+
+## 🪟 What the Installer Actually Does
 
 `installer.iss` copies the following into `%ProgramFiles%\IOC Intelligence Platform\app\` (Inno Setup's `{autopf}` constant):
 
@@ -27,9 +41,10 @@ Before any files are copied, a `[Code]`-section step in `installer.iss` runs `Ch
 - Docker Compose v2 available
 - The ports the platform needs are free
 
-Failures surface a "Continue anyway?" prompt rather than a silent abort — the check is advisory-with-friction for at least some of these conditions, not a hard, unbypassable gate.
+> [!WARNING]
+> Failures surface a "Continue anyway?" prompt rather than a silent abort — the check is advisory-with-friction for at least some of these conditions, not a hard, unbypassable gate.
 
-## File Layout: Program Files vs. ProgramData
+## 📁 File Layout: Program Files vs. ProgramData
 
 The installer follows the standard Windows split between read-mostly program binaries and writable per-machine application data (`windows/scripts/Common.ps1`, lines 28-40):
 
@@ -48,7 +63,7 @@ There is one additional wrinkle worth noting precisely because it affects where 
 
 Secrets themselves are generated using a CSPRNG (cryptographically secure pseudo-random number generator) — specifically .NET's `RandomNumberGenerator` via a `New-RandomSecret` helper, not PowerShell's `Get-Random` — and written out by `Write-EnvFile.ps1`.
 
-## Setup Wizard Page Flow
+## 🧙 Setup Wizard Page Flow
 
 `Setup-Wizard.ps1` is a WinForms application. On launch it self-elevates via UAC (User Account Control) if it isn't already running with a real, non-filtered elevated token. It then walks the operator through a fixed sequence of pages:
 
@@ -62,7 +77,7 @@ Notes on individual pages:
 - **Provider Configuration** — presents exactly 8 of the platform's 18 registered intelligence providers, each with a live "Test" button that calls `POST /api/v1/providers/{id}/test` against the running backend: VirusTotal, AbuseIPDB, OTX, the combined abuse.ch group (URLhaus/ThreatFox/MalwareBazaar — one free Auth-Key covers all three), NVD, Hybrid Analysis, Censys, and PhishTank. The wizard's own inline notes match the backend's behavior exactly for the cases checked: Censys requires both a Personal Access Token and an Organization ID, the abuse.ch key is shared across three connectors, and NVD works without a key at a lower rate limit. The remaining 10 backend providers are deliberately absent from this page for two different reasons: 6 (Certificate Transparency lookups, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, and the internal OSINT crawler) require no credential to collect at all, so there is nothing for this page to configure and no corresponding test handler exists for them either; the other 2 (urlscan.io, Google Safe Browsing) **do** require a credential but are still absent from the wizard on both platforms identically — both are configured after install from the app's own Providers page instead.
 - **Port Review** — lets the operator confirm/adjust the host ports the stack will bind, following on from the prerequisite check's "ports free" verification.
 
-## What "Start Installation" Actually Executes
+## 🏁 What "Start Installation" Actually Executes
 
 Clicking "Start Installation" on the Summary/Install page runs, in order:
 
@@ -73,7 +88,7 @@ Clicking "Start Installation" on the Summary/Install page runs, in order:
 
 Nothing here is a distinct "installer-native" install step beyond orchestrating the same Docker Compose commands and HTTP calls an operator could run by hand — the wizard's value is sequencing and validating them, not replacing them.
 
-## Start Menu Shortcuts
+## 📌 Start Menu Shortcuts
 
 The installer's `[Icons]` section creates the following (plus an optional desktop icon):
 
@@ -90,15 +105,18 @@ The installer's `[Icons]` section creates the following (plus an optional deskto
 | Documentation | Opens the installed documentation (`docs/`, `README.md`) copied in at install time. |
 | Uninstall | Invoked via `[Code]` in `installer.iss`; offers "Remove Application" (keeps `ProgramData` and Docker volumes intact) versus "Remove Everything" (requires typing `DELETE` to confirm; runs `docker compose down -v` and deletes `ProgramData`). |
 
-## Upgrade / Reconfigure Flow
+## 🆙 Upgrade / Reconfigure Flow
 
 Re-running the Setup Wizard from the **Configuration** shortcut on a machine that already has the platform installed sets `$State.IsUpgrade = true` internally, which changes two things before the operator sees any page:
 
 1. **Pre-population**: the wizard parses the existing `.env` (from `ProgramData\...\config\.env`) and uses it to pre-fill the wizard's fields, so re-running Configuration is a "review and adjust" flow rather than starting from a blank slate.
 2. **Pre-install backup**: before anything else changes, the wizard backs up the database by running `Backup-Database.ps1`, which executes `pg_dump` inside the already-running Postgres container. This backup lands in `ProgramData\...\backups\`, alongside the same rolling most-recent-10-retained snapshots used elsewhere.
 
-From there the wizard proceeds through the same page flow (Welcome → Admin Account → … → Summary/Install → Finish) and "Start Installation" re-runs the same `docker compose ... up -d --build` / health-poll sequence described above. The source material does not specify whether the final admin-account registration call is skipped or altered on an upgrade path versus a fresh install — this detail is **not confirmed** and should not be assumed either way without checking the wizard script directly.
+From there the wizard proceeds through the same page flow (Welcome → Admin Account → … → Summary/Install → Finish) and "Start Installation" re-runs the same `docker compose ... up -d --build` / health-poll sequence described above.
 
-## Summary
+> [!NOTE]
+> The source material does not specify whether the final admin-account registration call is skipped or altered on an upgrade path versus a fresh install — this detail is **not confirmed** and should not be assumed either way without checking the wizard script directly.
+
+## 📝 Summary
 
 The Windows installer's job is narrowly scoped: verify the host can run the stack, lay down application files under Program Files, collect configuration through a WinForms wizard, generate and lock down secrets under a restrictive ACL in ProgramData, and drive the same `docker compose` commands and REST calls an operator could otherwise run manually. It intentionally leaves Docker Compose as the real runtime rather than replacing it with a native Windows service, and it protects the resulting secrets primarily through NTFS ACLs (Administrators + SYSTEM only) on the `.env` file(s) and CSPRNG-based secret generation, rather than through any OS-level secret store.

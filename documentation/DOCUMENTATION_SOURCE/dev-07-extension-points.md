@@ -2,7 +2,16 @@
 
 This chapter is a practical, step-by-step reference for the four kinds of change a maintainer is most likely to make to this codebase: adding a new IOC intelligence provider, adding a new AI backend, adding a new API endpoint, and adding a database migration. Each walkthrough cites the exact files, classes, and functions involved and points at an existing piece of code to use as a template. It assumes familiarity with the Provider Architecture, AI Architecture, and Database Architecture chapters elsewhere in this document, and focuses on *where to make the change*, not on re-explaining what each subsystem does.
 
-## 1. Adding a New IOC Provider
+## 📋 Table of contents
+
+- [1. Adding a New IOC Provider](#1--adding-a-new-ioc-provider)
+- [2. Adding a New AI Backend](#2--adding-a-new-ai-backend)
+- [3. Adding a New API Endpoint](#3--adding-a-new-api-endpoint)
+- [4. Adding a Database Migration](#4--adding-a-database-migration)
+
+---
+
+## 1. 🔌 Adding a New IOC Provider
 
 Every provider is a subclass of `BaseProvider` (`backend/app/providers/base.py`), instantiated once as a module-level singleton and listed in `backend/app/providers/registry.py`. The orchestrator, correlation engine, and API layer never branch on which concrete provider answered — they only call the shared interface — so a fully working new connector is, by design, a self-contained, two-file change: the new connector module, plus one import and one list entry in `registry.py`.
 
@@ -50,7 +59,7 @@ Nothing else needs to change: the orchestrator, correlation engine, evidence bui
 
 ---
 
-## 2. Adding a New AI Backend
+## 2. 🤖 Adding a New AI Backend
 
 All eleven existing AI backends (Ollama, Anthropic, Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter) expose an identical async contract, defined structurally as the `_AIClient` `Protocol` in `backend/app/ai/service.py`:
 
@@ -96,7 +105,7 @@ The referenced `my_backend_api_key`/`my_backend_model_id` fields must exist on `
 
 ---
 
-## 3. Adding a New API Endpoint
+## 3. 🌐 Adding a New API Endpoint
 
 Every route lives under `backend/app/api/routes/`, one file per resource area, registered exactly once in `backend/app/main.py`. The simplest existing router to use as a template is `backend/app/api/routes/pivot.py` — one `GET` route, one permission check, one 404 case.
 
@@ -115,7 +124,7 @@ async def get_item(item_id: str, db=Depends(get_db),
     ...
 ```
 
-For a new operation on an *existing* resource, add the function to the existing file (`cases.py`, `lookup.py`, etc.) instead — the pattern every multi-endpoint file already follows (all ten `cases.py` endpoints share one `router` and its `_load_case()` helper).
+For a new operation on an *existing* resource, add the function to the existing file (`cases.py`, `lookup.py`, etc.) instead — the pattern every multi-endpoint file already follows (all eight `cases.py` endpoints share one `router` and its `_load_case()` helper).
 
 **Gate it with `require_permission(...)`.** This dependency factory (`backend/app/auth/rbac.py`) first resolves `get_current_user` (Bearer JWT, `401` if missing/invalid/inactive), then checks `permission in ROLE_PERMISSIONS.get(user.role, set())`, raising `403` otherwise. If the permission string doesn't already exist, add it to `ROLE_PERMISSIONS` in `backend/app/models/user.py`:
 
@@ -131,10 +140,14 @@ This dict is the single source of truth for the entire authorization matrix. Onl
 
 **Define request/response Pydantic schemas** in `backend/app/schemas/` (e.g. `basket.py`, `case.py`, `lookup.py`) — separate from the AI-output schemas in `app/ai/schemas.py`/`app/ai/analysis_schemas.py`, which describe what an AI call must emit, not what the HTTP API accepts. Follow the existing plain-`BaseModel` style. Some endpoints deliberately accept a raw untyped `dict` instead (Copilot's `{"question": str, "notes": list[str]}` in `analysis.py`, basket-compare's `{"lookup_ids": list[str]}` in `basket.py`) — an accepted pattern for small, rarely-reused bodies, but a typed `BaseModel` is preferable for anything larger, since Pydantic then returns an automatic `422` on a bad shape.
 
-**Register the router in `main.py`**, in the same style as the existing ten:
+**Register the router in `main.py`**, in the same style as the existing fifteen:
 
 ```python
-from app.api.routes import ai_config, analysis, auth, basket, cases, hunting, lookup, my_resource, pivot, providers, runtime
+from app.api.routes import (
+    admin, ai_config, analysis, auth, basket, cases, dashboard, hunting,
+    lookup, my_resource, pentest, pentest_exploit, pivot, providers,
+    runtime, security_assessment,
+)
 app.include_router(my_resource.router, prefix=settings.api_v1_prefix)
 ```
 
@@ -144,9 +157,9 @@ app.include_router(my_resource.router, prefix=settings.api_v1_prefix)
 
 ---
 
-## 4. Adding a Database Migration
+## 4. 🐘 Adding a Database Migration
 
-Schema changes are managed with **Alembic** (`backend/alembic/`) against SQLAlchemy 2.0 async models. The migration history is a single linear chain of four revisions today: `660d2aa3bc20` (initial schema) → `a6d3ad2bb63c` (evidence, basket, case management) → `0f2dc283823e` (provider runtime config, audit log) → `2652d888a33f` (final assessment records, current head).
+Schema changes are managed with **Alembic** (`backend/alembic/`) against SQLAlchemy 2.0 async models. The migration history is a single linear chain of twelve revisions today: `660d2aa3bc20` (initial schema) → `a6d3ad2bb63c` (evidence, basket, case management) → `0f2dc283823e` (provider runtime config, audit log) → `2652d888a33f` (final assessment records) → `7a1c2f9d4e6b` (user last-login timestamp) → `3b9e7a2c1d4f` (user token version) → `5c8e1f3a9b2d` (security assessment tables) → `6d2f4b8e1a7c` (evidence provenance category) → `6716ed40b9f2` (final assessment AI outcome) → `8f4a1c2d9e6b` (cancelled security-assessment status) → `9273d7b21c79` (Pentest Suite tables) → `9123b075e962` (Pentest Suite exploit-attempts table, current head).
 
 **Change the model.** Edit the relevant file under `backend/app/models/`. If it's a new table in a new module, make sure the module is imported from `backend/app/models/__init__.py` — its sole purpose is importing every model module so `Base.metadata` is fully populated before Alembic looks at it; a model class that exists but is never imported is invisible to autogenerate.
 
@@ -157,7 +170,7 @@ cd backend
 alembic revision --autogenerate -m "describe your change"
 ```
 
-This produces a new file in `backend/alembic/versions/`, whose `down_revision` Alembic sets automatically to the current head (`2652d888a33f` as of this writing). **Always open and read the generated file before applying it** — autogenerate diffs model metadata against the database's current shape column-by-column, but does not reliably detect every kind of change (a column rename shows up as a drop-and-add unless hand-edited to `op.alter_column`) and never writes data-migration logic for you.
+This produces a new file in `backend/alembic/versions/`, whose `down_revision` Alembic sets automatically to the current head (`9123b075e962` as of this writing). **Always open and read the generated file before applying it** — autogenerate diffs model metadata against the database's current shape column-by-column, but does not reliably detect every kind of change (a column rename shows up as a drop-and-add unless hand-edited to `op.alter_column`) and never writes data-migration logic for you.
 
 **Apply it:**
 
@@ -169,15 +182,38 @@ This is exactly the command every container in this platform already runs on eve
 
 **The Windows installer "Can't locate revision" gotcha.** This project's Windows installer does not run the application out of the git working tree. `windows/installer.iss` copies the entire `backend/` directory — including `backend/alembic/versions/*.py` — into the installed Program Files tree at install time (`Source: "{#RepoRoot}backend\*"; DestDir: "{app}\app\backend"; ...`). `windows/scripts/Common.ps1` documents the resulting split: read-only application code under Program Files (`$script:InstallDir`), writable runtime data under `C:\ProgramData\IOC Intelligence Platform\` (`$script:DataDir`). In production, `docker-compose.prod.yml` additionally strips every bind-mount from the backend service (`volumes: !reset []`) and rebuilds the backend image from scratch (`docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`) — so the installed container's copy of `alembic/versions/` is baked into its image from whatever `.py` files existed in the **Program Files** copy at build time, not from the developer's working tree.
 
-The failure mode: a new migration generated and applied (steps above) against a database from one copy of the code advances that database's `alembic_version` row to the new revision hash. If the *installed* Program Files copy of `backend/alembic/versions/` isn't also updated with that same `.py` file — by copying it in directly, or by rebuilding and reinstalling the installer — before that installed stack's backend container is next rebuilt or restarted, Alembic has no script matching the revision hash already recorded in the database. Because both compose files run `alembic upgrade head` as the very first step of the container's startup command, before `uvicorn` ever starts, this is not a soft failure: the entrypoint fails immediately with Alembic's `Can't locate revision identified by '<hash>'` error, and the backend never comes up, taking `uvicorn` down with it since the two commands are chained with `&&`.
-
-**The practical rule:** every new file added to `backend/alembic/versions/` must reach every deployed copy of the application before, or at the same time as, any database that copy talks to is upgraded to that revision — by rebuilding and reinstalling the Windows installer package (which re-copies the current `backend/` tree per `installer.iss`), or, for a manual hotfix, by placing the new migration file directly into `{app}\app\backend\alembic\versions\` under Program Files and rebuilding the backend image before restarting the container.
+> [!WARNING]
+> The failure mode: a new migration generated and applied (steps above) against a database from
+> one copy of the code advances that database's `alembic_version` row to the new revision hash.
+> If the *installed* Program Files copy of `backend/alembic/versions/` isn't also updated with
+> that same `.py` file — by copying it in directly, or by rebuilding and reinstalling the
+> installer — before that installed stack's backend container is next rebuilt or restarted,
+> Alembic has no script matching the revision hash already recorded in the database. Because both
+> compose files run `alembic upgrade head` as the very first step of the container's startup
+> command, before `uvicorn` ever starts, this is not a soft failure: the entrypoint fails
+> immediately with Alembic's `Can't locate revision identified by '<hash>'` error, and the backend
+> never comes up, taking `uvicorn` down with it since the two commands are chained with `&&`.
+>
+> **The practical rule:** every new file added to `backend/alembic/versions/` must reach every
+> deployed copy of the application before, or at the same time as, any database that copy talks to
+> is upgraded to that revision — by rebuilding and reinstalling the Windows installer package
+> (which re-copies the current `backend/` tree per `installer.iss`), or, for a manual hotfix, by
+> placing the new migration file directly into `{app}\app\backend\alembic\versions\` under Program
+> Files and rebuilding the backend image before restarting the container.
 
 | Order | Revision | Down-revision | Created |
 |---|---|---|---|
 | 1 | `660d2aa3bc20` | (root) | `users`, `ioc_lookups`, `ai_summaries`, `correlation_edges`, `provider_results` |
 | 2 | `a6d3ad2bb63c` | `660d2aa3bc20` | `cases`, `basket_items`, `case_iocs`, `case_notes`, `case_reports`, `evidence_items` |
 | 3 | `0f2dc283823e` | `a6d3ad2bb63c` | `config_audit_log`, `provider_runtime_configs` |
-| 4 (head) | `2652d888a33f` | `0f2dc283823e` | `final_assessment_records` |
+| 4 | `2652d888a33f` | `0f2dc283823e` | `final_assessment_records` |
+| 5 | `7a1c2f9d4e6b` | `2652d888a33f` | `users.last_login_at` |
+| 6 | `3b9e7a2c1d4f` | `7a1c2f9d4e6b` | `users.token_version` |
+| 7 | `5c8e1f3a9b2d` | `3b9e7a2c1d4f` | Security Assessment Toolkit tables |
+| 8 | `6d2f4b8e1a7c` | `5c8e1f3a9b2d` | Evidence `provenance`/`category` columns |
+| 9 | `6716ed40b9f2` | `6d2f4b8e1a7c` | `final_assessment_records`' AI-outcome column |
+| 10 | `8f4a1c2d9e6b` | `6716ed40b9f2` | Cancelled security-assessment status |
+| 11 | `9273d7b21c79` | `8f4a1c2d9e6b` | Pentest Suite tables (scope, targets, findings, assessment runs) |
+| 12 (head) | `9123b075e962` | `9273d7b21c79` | Pentest Suite exploit-attempts table |
 
-A new migration's `down_revision` should always be `2652d888a33f` unless a teammate has already generated and merged a different migration first, in which case Alembic requires a merge revision (`alembic merge heads`) — not otherwise seen in this project's history, which has maintained a single linear chain to date.
+A new migration's `down_revision` should always be `9123b075e962` unless a teammate has already generated and merged a different migration first, in which case Alembic requires a merge revision (`alembic merge heads`) — not otherwise seen in this project's history, which has maintained a single linear chain to date.

@@ -1,6 +1,19 @@
-# Intelligence Providers
+# 🔌 Intelligence Providers
 
-## What Is a "Provider," Exactly?
+## Table of Contents
+
+- [❓ What Is a "Provider," Exactly?](#-what-is-a-provider-exactly)
+- [🦠 Malware, IP, and URL Reputation Providers](#-malware-ip-and-url-reputation-providers)
+- [🩹 Vulnerability Intelligence Providers](#-vulnerability-intelligence-providers)
+- [🌐 Live Web / OSINT Intelligence](#-live-web--osint-intelligence)
+- [⚔️ Attack Technique Reference](#️-attack-technique-reference)
+- [📜 Domain, IP, and Certificate Registration Providers](#-domain-ip-and-certificate-registration-providers)
+- [📋 All 18 Providers at a Glance](#-all-18-providers-at-a-glance)
+- [🧮 Why the Setup Wizard Only Shows 8 Providers, Not 18](#-why-the-setup-wizard-only-shows-8-providers-not-18)
+- [⚙️ Managing Providers From the App (No Restart)](#️-managing-providers-from-the-app-no-restart)
+- [💬 A Note on Provider Disagreement](#-a-note-on-provider-disagreement)
+
+## ❓ What Is a "Provider," Exactly?
 
 Every time you look up an IOC (Indicator of Compromise — a piece of evidence such as an IP address, domain, URL, file hash, or CVE ID that a security analyst wants to investigate) in HORIZON GRID, the tool doesn't ask one source what it thinks. It asks many.
 
@@ -10,7 +23,7 @@ The platform has **18 providers built in**. When you submit an IOC, it queries e
 
 This section walks through what each of the 18 real providers is, in plain language: what it is, what kind of intelligence it supplies, why a SOC (Security Operations Center) analyst would care, and roughly what comes back.
 
-## Malware, IP, and URL Reputation Providers
+## 🦠 Malware, IP, and URL Reputation Providers
 
 These are the "has anyone seen this before, and was it bad?" sources — the closest thing to a criminal record check for an IP, domain, URL, or file.
 
@@ -36,7 +49,7 @@ These are the "has anyone seen this before, and was it bad?" sources — the clo
 
 - **Google Safe Browsing** — Google's own URL/domain reputation check (the same list of malware and phishing threat types your web browser itself would normally warn you about), covering malware, social engineering, unwanted software, and potentially harmful applications. It checks URLs and domains only. What it returns: a verdict based on whether Google's own threat lists have a match — and, by design, absolutely nothing else (a failed check, a network error, or an unexpected response is always reported as unknown/error, never mistaken for "safe," specifically so a broken or misconfigured key can never look like a clean scan).
 
-## Vulnerability Intelligence Providers
+## 🩹 Vulnerability Intelligence Providers
 
 These answer a different question: not "is this indicator bad," but "how serious is this known software vulnerability, and is it actually being used in the wild?"
 
@@ -46,15 +59,15 @@ These answer a different question: not "is this indicator bad," but "how serious
 
 [FIGURE: 22-investigation-cve-result.png | Investigating CVE-2021-44228 (Log4Shell) returns cards from CISA Known Exploited Vulnerabilities, NIST NVD, and the Internet Intelligence Collector side by side — CISA KEV confirms real-world exploitation, NVD supplies the CVSS 10.0 "CRITICAL" score and full description, and the Internet Intelligence Collector adds live-fetched OSINT findings, all without any provider requiring a credential.]
 
-## Live Web / OSINT Intelligence
+## 🌐 Live Web / OSINT Intelligence
 
 - **Internet Intelligence Collector** — This is the platform's own OSINT (Open-Source Intelligence — information gathered from publicly available sources rather than a paid feed) crawler. It actively searches public sources like GitHub, Reddit, RSS feeds, and paste sites for recent chatter about a domain, IP, malware family, threat actor, campaign, CVE, or filename. Unlike the other providers, which query a fixed, pre-built database, this one goes out and fetches live results at the moment you run the investigation. For an analyst, this is useful precisely because it can surface very recent, informal discussion — like a proof-of-concept exploit script just published on GitHub — that a slower-moving commercial feed hasn't caught up to yet. What it returns: a list of real, live-fetched findings (e.g. matching GitHub repositories) relevant to the IOC.
 
-## Attack Technique Reference
+## ⚔️ Attack Technique Reference
 
 - **MITRE ATT&CK** — MITRE ATT&CK is the industry-standard framework that catalogs known attacker tactics and techniques (for example, "T1055 — Process Injection"). This provider looks up a MITRE technique ID directly against the official ATT&CK knowledge base. It's mainly used behind the scenes to enrich technique references the platform's correlation engine has already identified, giving analysts the real, official name and description rather than a bare ID.
 
-## Domain, IP, and Certificate Registration Providers
+## 📜 Domain, IP, and Certificate Registration Providers
 
 These answer "who owns this, and what else is tied to it?" — infrastructure-and-ownership questions rather than reputation questions.
 
@@ -64,7 +77,7 @@ These answer "who owns this, and what else is tied to it?" — infrastructure-an
 
 - **Censys** — An internet-wide scanning service that catalogs what's actually running on IP addresses across the internet (open ports, services, certificates) — sometimes described as passive DNS / internet asset intelligence. This is useful for understanding what an IP is actually hosting, beyond just a reputation score. Censys is the one provider in this platform that needs **two** separate credentials to work — a Personal Access Token *and* an Organization ID — both are required, and having only one leaves it not configured.
 
-## All 18 Providers at a Glance
+## 📋 All 18 Providers at a Glance
 
 | Provider | What It Checks | Key Required? |
 |---|---|---|
@@ -87,7 +100,7 @@ These answer "who owns this, and what else is tied to it?" — infrastructure-an
 | urlscan.io | URLs, domains — live sandbox scan | Yes (no wizard entry — see below) |
 | Google Safe Browsing | URLs, domains — Google's malware/phishing threat lists | Yes (no wizard entry — see below) |
 
-## Why the Setup Wizard Only Shows 8 Providers, Not 18
+## 🧮 Why the Setup Wizard Only Shows 8 Providers, Not 18
 
 If you've been through the installation wizard, you may have noticed its provider page only lists 8 entries to fill in — not 18. This is a deliberate, verified design detail, not a missing feature.
 
@@ -101,7 +114,7 @@ Here's the honest breakdown of why the numbers work out that way:
 
 So the math is: 8 wizard entries → 10 providers with a wizard entry (7 individual + 3 sharing one abuse.ch key) + 6 always-on providers with nothing to configure + 2 providers that need a credential but are set up after install instead of during the wizard = **18 providers total**, all working once configured. Nothing is hidden or broken — the shorter wizard list is simply an accurate reflection of which providers actually have a setting on that specific page.
 
-## Managing Providers From the App (No Restart)
+## ⚙️ Managing Providers From the App (No Restart)
 
 The Setup Wizard's provider page is a **first-run bootstrap**, not the only place these settings live. Once the platform is up and running, every credential, model choice, and enabled/disabled state — for both IOC providers and AI backends — can be viewed and changed from inside the app itself, at any time, with no restart, no re-installation, and no editing of any configuration file by hand. This is the same underlying configuration the wizard wrote on first install; the wizard just gets you to a working starting point, and this page is where you go afterward whenever something needs to change.
 
@@ -115,7 +128,7 @@ Expanding a backend's row lets you enter or update its credentials and model. An
 
 [FIGURE: 33-manage-providers-ai-edit-masked.png | An AI backend's row expanded for editing, showing the masked API key field, the model field, and the Test Connection / Save / Set Active controls.]
 
-**IOC Providers.** This tab covers all 16 built-in providers described earlier in this section — each one configurable, testable, and individually enabled or disabled, right from this screen. Because each provider's row only asks for the exact fields that provider actually needs (a single credential for most, the shared abuse.ch key for URLhaus/ThreatFox/MalwareBazaar, or the Personal Access Token *and* Organization ID pair for Censys), there's no guesswork about what to fill in. Providers that need no credential at all still appear here with an enable/disable toggle, since "on or off" remains a setting worth controlling even when there's nothing to type in.
+**IOC Providers.** This tab covers all 18 built-in providers described earlier in this section — each one configurable, testable, and individually enabled or disabled, right from this screen. Because each provider's row only asks for the exact fields that provider actually needs (a single credential for most, the shared abuse.ch key for URLhaus/ThreatFox/MalwareBazaar, or the Personal Access Token *and* Organization ID pair for Censys), there's no guesswork about what to fill in. Providers that need no credential at all still appear here with an enable/disable toggle, since "on or off" remains a setting worth controlling even when there's nothing to type in.
 
 [FIGURE: 34-manage-providers-ioc-tab.png | The IOC Providers tab, listing all 18 registry providers with their real configured/enabled status.]
 
@@ -127,13 +140,16 @@ Test Connection always makes a real request to the provider rather than just che
 
 [FIGURE: 38-failed-test-connection.png | A real failed Test Connection result: "Failed: Authentication failed -- check your API key," shown in place, with the provider's exact response reflected back rather than a generic error.]
 
-**Audit Log.** Every configuration change made through this page — configuring a provider, enabling or disabling one, switching the active AI backend, running a connection test — is recorded here in plain, human-readable language: who made the change and what it was. Consistent with how the platform treats credentials everywhere else, the audit log **never records the actual credential value** — only that a credential was configured or updated, never what it is.
+**Audit Log.** Every configuration change made through this page — configuring a provider, enabling or disabling one, switching the active AI backend, running a connection test — is recorded here in plain, human-readable language: who made the change and what it was.
+
+> [!NOTE]
+> Consistent with how the platform treats credentials everywhere else, the audit log never records the actual credential value — only that a credential was configured or updated, never what it is.
 
 [FIGURE: 35-manage-providers-audit-log.png | The Audit Log tab, showing recorded configuration actions with human-readable detail text and no credential values.]
 
 **Network Access.** This tab shows the address other devices on your local network can use to reach the platform (detected automatically during setup), the ports in use, and whether the local Windows Firewall rule needed for LAN access is in place — see "Accessing From Another Computer" for the full walkthrough.
 
-## A Note on Provider Disagreement
+## 💬 A Note on Provider Disagreement
 
 Because the platform asks many independent providers at once, they won't always agree — and that's normal, useful behavior, not a malfunction. Reputation feeds, blocklists, and community-reported databases each have their own methodology, so it's entirely possible for one provider to flag an indicator as malicious while another calls the exact same indicator clean.
 

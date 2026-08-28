@@ -1,4 +1,22 @@
-# System Health
+## 📋 Table of contents
+
+- [System Health](#-system-health)
+  - [A simple yes/no answer: is the platform up?](#a-simple-yesno-answer-is-the-platform-up)
+  - [Checking health without touching Docker](#checking-health-without-touching-docker)
+- [Provider Health](#-provider-health)
+  - [A dedicated page for "is every provider actually working right now?"](#a-dedicated-page-for-is-every-provider-actually-working-right-now)
+- [Troubleshooting](#-troubleshooting)
+  - [The AI summary says "Unknown" and every risk score reads 0](#the-ai-summary-says-unknown-and-every-risk-score-reads-0)
+  - [The page shows a real error, or an investigation won't load at all](#the-page-shows-a-real-error-or-an-investigation-wont-load-at-all)
+  - [A repeat lookup on the same IOC comes back noticeably faster](#a-repeat-lookup-on-the-same-ioc-comes-back-noticeably-faster)
+  - [One provider card shows "Not Configured," "Error," or "Rate Limited" while others show real results](#one-provider-card-shows-not-configured-error-or-rate-limited-while-others-show-real-results)
+  - [You closed the browser tab or lost your connection partway through an investigation](#you-closed-the-browser-tab-or-lost-your-connection-partway-through-an-investigation)
+  - [Clicking "Export PDF" or "Export CSV" shows "Export format not yet available"](#clicking-export-pdf-or-export-csv-shows-export-format-not-yet-available)
+  - [You typed something and got "Could not determine IOC type"](#you-typed-something-and-got-could-not-determine-ioc-type)
+
+---
+
+# 🩺 System Health
 
 ## A simple yes/no answer: is the platform up?
 
@@ -23,7 +41,7 @@ The platform's actual runtime is a set of Docker containers, but an administrato
 
 Between these Start Menu shortcuts and the health-check address described above, an administrator has two independent, beginner-friendly ways to confirm the platform is alive -- one click, or one URL.
 
-# Provider Health
+# 📡 Provider Health
 
 ## A dedicated page for "is every provider actually working right now?"
 
@@ -35,11 +53,13 @@ Unlike the old provider cards shown mid-investigation (still covered below), thi
 
 Status is always one of four values -- Healthy, Degraded, Down, or Unknown -- and each is always paired with its own distinct color, icon, and text label, never color alone, so the information doesn't depend on being able to distinguish colors.
 
-**A guarantee worth stating explicitly: a provider that was never actually exercised in a given window shows "Unknown," never "Healthy."** Silence is not evidence of health -- a provider nobody has called in the last hour has no success rate to report for that hour, and reporting one anyway (even a reassuring one) would be reporting something the platform doesn't actually know.
+> [!IMPORTANT]
+> A provider that was never actually exercised in a given window shows "Unknown," never "Healthy." Silence is not evidence of health -- a provider nobody has called in the last hour has no success rate to report for that hour, and reporting one anyway (even a reassuring one) would be reporting something the platform doesn't actually know.
 
-**A related guarantee, found and fixed as a real bug during this feature's own testing:** a provider that correctly reports "nothing found" for a given indicator -- which is what most real-world lookups against most providers actually return, since no single provider's dataset covers every indicator -- counts as a healthy, successful outcome, not a failure. An earlier version of this page's health calculation miscounted that correct "no data" response as a failed attempt, which meant a provider working perfectly could have shown up as "Degraded" or "Down" simply for doing its job honestly. This was caught and fixed before release: a real provider (OTX) that had been reporting "Degraded" at 64% success under the flawed logic correctly reported "Healthy" at 100% once "nothing found" was counted as the successful outcome it actually is.
+> [!NOTE]
+> A related guarantee, found and fixed as a real bug during this feature's own testing: a provider that correctly reports "nothing found" for a given indicator -- which is what most real-world lookups against most providers actually return, since no single provider's dataset covers every indicator -- counts as a healthy, successful outcome, not a failure. An earlier version of this page's health calculation miscounted that correct "no data" response as a failed attempt, which meant a provider working perfectly could have shown up as "Degraded" or "Down" simply for doing its job honestly. This was caught and fixed before release: a real provider (OTX) that had been reporting "Degraded" at 64% success under the flawed logic correctly reported "Healthy" at 100% once "nothing found" was counted as the successful outcome it actually is.
 
-# Troubleshooting
+# 🔧 Troubleshooting
 
 The list below is not a set of hypothetical problems -- every item was either deliberately induced and observed, or organically encountered, during the platform's own end-to-end quality-assurance pass, then either fixed or documented as an honest, known limitation. It is written for the first time something looks unexpected during an investigation of an IOC (Indicator of Compromise -- a piece of evidence such as an IP address, domain, URL, file hash, or CVE ID -- Common Vulnerabilities and Exposures, a public catalog number for a known software vulnerability -- that a security analyst wants to look up).
 
@@ -71,11 +91,11 @@ This is normal and expected, not a malfunction. Each provider's status is report
 
 Provider results that had already come back before the disconnect are saved, not lost. Revisiting the investigation afterward shows every provider result that had completed up to that point, even though the investigation itself may show as failed if it didn't finish.
 
-## Clicking "Export PDF" or "Export CSV" doesn't produce a file
+## Clicking "Export PDF" or "Export CSV" shows "Export format not yet available"
 
-[FIGURE: 21-investigation-export-menu.png | The Export menu offers PDF, Markdown, CSV, and JSON, but clicking Export PDF or Export CSV shows the honest message "Export format not yet available" instead of producing a file.]
+[FIGURE: 21-investigation-export-menu.png | The Export menu offers PDF, Markdown, CSV, and JSON — all four work.]
 
-This is a known, honest limitation, not a bug to work around: PDF and CSV export are not yet available in this release. Rather than fail silently or crash, the platform tells you so directly with the message shown above. **Export JSON and Export Markdown both work today** and are the way to get an investigation's results out of the platform in the meantime.
+All four export formats are real and working. This specific message is the frontend's generic fallback for *any* failed export request, not a sign the format itself is missing — the most common real cause is role permissions: exporting requires the `lookup:export` permission, which Admin and Analyst hold but Viewer does not. If you're signed in as a Viewer, this is expected — ask an Admin to export on your behalf, or have your role changed if you need it regularly. If you're seeing it as an Admin or Analyst, that points to a genuine server-side error worth checking the backend logs for, rather than a missing feature.
 
 ## You typed something and got "Could not determine IOC type"
 

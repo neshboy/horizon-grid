@@ -1,10 +1,27 @@
-# Standalone Function Reference
+# 🧭 Standalone Function Reference
 
 This chapter is the exhaustive, page-by-page catalog of every major user-facing function, button, and action in HORIZON GRID. Where the Architecture, API Reference, and User Manual chapters explain *why* the platform is built the way it is and walk through representative examples, this chapter is a lookup table: for a given screen, what can you click, who is allowed to click it, what happens when you do, and what happens when it goes wrong.
 
+## 📋 Table of contents
+
+- [How to Read This Reference](#-how-to-read-this-reference)
+- [Global / Shared Elements](#-global--shared-elements)
+- [Page: Sign In (`/login`)](#-page-sign-in-login)
+- [Page: Create Account (`/register`)](#-page-create-account-register)
+- [Page: Home / Investigate (`/`)](#-page-home--investigate-)
+- [Page: Live Investigation (`/lookup/new`)](#-page-live-investigation-lookupnew)
+- [Page: Completed Investigation (`/lookup/[id]`)](#-page-completed-investigation-lookupid)
+- [Page: Executive Dashboard (`/dashboard`)](#-page-executive-dashboard-dashboard)
+- [Page: Provider Health (`/dashboard/provider-health`)](#-page-provider-health-dashboardprovider-health)
+- [Page: IOC Basket (`/basket`)](#-page-ioc-basket-basket)
+- [Page: Cases (`/cases`)](#-page-cases-cases)
+- [Page: Case Detail (`/cases/[id]`)](#-page-case-detail-casesid)
+- [Page: Manage Providers (`/providers`)](#-page-manage-providers-providers)
+- [Page: Administration (`/admin`)](#-page-administration-admin)
+
 Every entry below was traced to a real source file -- the page component under `frontend/app/**/page.tsx`, the component it renders from `frontend/components/dashboard/`, the exact function it calls in `frontend/lib/api.ts`, and the backend route (and `require_permission(...)` check) that function actually hits. Nothing here is inferred from the product's marketing description; if a button exists in this chapter, it exists in the running application.
 
-## How to Read This Reference
+## 📖 How to Read This Reference
 
 Every function below follows the same nine-field template:
 
@@ -26,7 +43,7 @@ Two functions -- the global navigation bar and the pivot search box -- appear on
 
 ---
 
-## Global / Shared Elements
+## 🧭 Global / Shared Elements
 
 These render identically (same component, same code path) on most authenticated pages. Page-specific sections below note only where a page *differs* from what's documented here.
 
@@ -64,7 +81,7 @@ Not a clickable function, but a real, observable background behavior worth docum
 
 ---
 
-## Page: Sign In (`/login`)
+## 🔑 Page: Sign In (`/login`)
 
 ### Sign In
 
@@ -87,7 +104,7 @@ Not a clickable function, but a real, observable background behavior worth docum
 
 ---
 
-## Page: Create Account (`/register`)
+## 📝 Page: Create Account (`/register`)
 
 ### Create Account (Bootstrap Registration)
 
@@ -110,7 +127,7 @@ Not a clickable function, but a real, observable background behavior worth docum
 
 ---
 
-## Page: Home / Investigate (`/`)
+## 🏠 Page: Home / Investigate (`/`)
 
 ### Start Investigation (Home Search Box)
 
@@ -184,7 +201,7 @@ Not a clickable function, but a real, observable background behavior worth docum
 
 ---
 
-## Page: Live Investigation (`/lookup/new`)
+## 🔍 Page: Live Investigation (`/lookup/new`)
 
 This is the platform's core screen -- the composition root for a live, in-progress investigation. It opens a Server-Sent Events (SSE) connection and renders each panel below as its corresponding event arrives. There is no WebSocket anywhere in this product; the entire live-progress experience is SSE. For the full event lifecycle and provider-fan-out mechanics, see `backend-02-api-reference.md`'s `/lookup/stream` entry and `tech-02-dataflow.md`; this section focuses on what each resulting panel lets the user *do*.
 
@@ -591,7 +608,7 @@ This is the platform's core screen -- the composition root for a live, in-progre
 | **Output** | Downloads `ioc-assessment-<lookupId>.pdf`. |
 | **Backend Process** | Direct `fetch()` (not through `lib/api.ts`, but through the same `getApiUrl()` base-URL resolution) &rarr; `POST /lookup/{id}/export?format=pdf`. |
 | **Database Effect** | Read-only against the already-persisted lookup/assessment data; no new rows written. |
-| **Error Conditions** | A `404` (format not yet available on an older backend build) is shown as "Export format not yet available." rather than a raw error; other non-`ok` statuses show "Export failed with status &lt;code&gt;." A **VIEWER** clicking this button (which is not hidden from a VIEWER anywhere in the UI) gets a `403` from `lookup:export`, which surfaces as "Export failed with status 403." -- the button itself has no client-side role gate at all. Both PDF and CSV exports carry real, tested formula-injection/markup-injection protections against a maliciously-crafted IOC value or provider field ending up interpreted as executable spreadsheet/document content. |
+| **Error Conditions** | Any failed fetch (network error, non-`ok` response, or a genuine `404`) is shown as the frontend's generic fallback, "Export format not yet available." -- this string does not mean the format itself is unbuilt (it is, and works); it just means this particular request failed. Other non-`ok` statuses instead show "Export failed with status &lt;code&gt;." A **VIEWER** clicking this button (which is not hidden from a VIEWER anywhere in the UI) gets a `403` from `lookup:export`, which surfaces as "Export failed with status 403." -- the button itself has no client-side role gate at all. Both PDF and CSV exports carry real, tested formula-injection/markup-injection protections against a maliciously-crafted IOC value or provider field ending up interpreted as executable spreadsheet/document content. |
 | **Related Features** | Export Markdown, Export CSV, Export JSON (below) -- all four are offered side by side with no visual distinction between the two server-rendered formats and the two client-rendered ones. |
 
 ### Export Markdown
@@ -619,7 +636,7 @@ This is the platform's core screen -- the composition root for a live, in-progre
 | **Output** | Downloads `ioc-assessment-<lookupId>.csv`. |
 | **Backend Process** | `POST /lookup/{id}/export?format=csv`. |
 | **Database Effect** | Read-only. |
-| **Error Conditions** | Same as Export PDF (404 &rarr; "not yet available"; other failures &rarr; status-coded message; VIEWER &rarr; 403). Carries the same formula-injection protection as PDF (a field value that looks like a spreadsheet formula, e.g. starting with `=`, is neutralized before being written into the file). |
+| **Error Conditions** | Same as Export PDF (any failed request &rarr; the generic "not yet available" fallback string; other failures &rarr; status-coded message; VIEWER &rarr; 403). Carries the same formula-injection protection as PDF (a field value that looks like a spreadsheet formula, e.g. starting with `=`, is neutralized before being written into the file). |
 | **Related Features** | Export PDF. |
 
 ### Export JSON
@@ -694,7 +711,7 @@ This is the platform's core screen -- the composition root for a live, in-progre
 
 ---
 
-## Page: Completed Investigation (`/lookup/[id]`)
+## 📄 Page: Completed Investigation (`/lookup/[id]`)
 
 `app/lookup/[id]/page.tsx` renders **the exact same set of panels** documented above under `/lookup/new` -- same components, same props, same behavior -- fetched once via a single `getLookup(lookupId)` call (`GET /lookup/{id}`) instead of a live SSE stream. Rather than repeat every entry verbatim, this section documents only what's genuinely different here.
 
@@ -725,7 +742,7 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 
 ---
 
-## Page: Executive Dashboard (`/dashboard`)
+## 📊 Page: Executive Dashboard (`/dashboard`)
 
 ### View Executive KPI Tiles
 
@@ -771,7 +788,7 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 
 ---
 
-## Page: Provider Health (`/dashboard/provider-health`)
+## 🔌 Page: Provider Health (`/dashboard/provider-health`)
 
 ### View Provider Health Table
 
@@ -803,7 +820,7 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 
 ---
 
-## Page: IOC Basket (`/basket`)
+## 🧺 Page: IOC Basket (`/basket`)
 
 ### Select / Deselect Basket Item
 
@@ -889,11 +906,12 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 | **Error Conditions** | None distinct from Start Investigation's own. |
 | **Related Features** | Investigate Selected; Start Investigation. |
 
-**Page-level note -- Role Required:** every function on the Basket page, including simply *loading* it, calls `GET /basket` first, which requires `basket:manage`. That permission is granted to **ADMIN and ANALYST only** -- **VIEWER does not have it.** A VIEWER who navigates to `/basket` (nothing in the frontend prevents this; the Global Navigation Bar's Basket link is visible to every logged-in role) will see the page shell render, but the item list itself fails to load (the caught error is shown inline: "Failed to fetch"/the backend's `403` detail), and every action button is effectively non-functional for that role. This is a deliberate exception to the platform's usual "VIEWER gets broad read-only visibility" pattern -- the Basket is treated as a personal analyst workspace, not a read-only operational view.
+> [!IMPORTANT]
+> **Page-level note -- Role Required:** every function on the Basket page, including simply *loading* it, calls `GET /basket` first, which requires `basket:manage`. That permission is granted to **ADMIN and ANALYST only** -- **VIEWER does not have it.** A VIEWER who navigates to `/basket` (nothing in the frontend prevents this; the Global Navigation Bar's Basket link is visible to every logged-in role) will see the page shell render, but the item list itself fails to load (the caught error is shown inline: "Failed to fetch"/the backend's `403` detail), and every action button is effectively non-functional for that role. This is a deliberate exception to the platform's usual "VIEWER gets broad read-only visibility" pattern -- the Basket is treated as a personal analyst workspace, not a read-only operational view.
 
 ---
 
-## Page: Cases (`/cases`)
+## 📁 Page: Cases (`/cases`)
 
 ### View Case List
 
@@ -925,7 +943,7 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 
 ---
 
-## Page: Case Detail (`/cases/[id]`)
+## 🗒 Page: Case Detail (`/cases/[id]`)
 
 ### View Case Detail
 
@@ -985,9 +1003,10 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 
 ---
 
-## Page: Manage Providers (`/providers`)
+## ⚙ Page: Manage Providers (`/providers`)
 
-**Page-level note -- Role Required:** this page has **no client-side role gate at all** -- unlike `/admin`, any logged-in user can navigate here and the Global Navigation Bar's "Providers" link is visible to every role. However, **every single API call this page makes requires the `provider:manage` permission, which only ADMIN holds** (listing AI providers, listing IOC providers, fetching the audit log which needs `audit:read` -- also ADMIN-only -- configuring, testing, enabling/disabling, and setting-active). Every one of those calls on this page is wrapped in a `.catch(() => {})` that silently swallows the error. The practical, observable result: an ANALYST or VIEWER who visits `/providers` sees the page's tabs and layout render, but every tab's content stays empty (no providers listed, no audit log entries) with no error message at all -- not a `403` banner, not a redirect, just an empty-looking page. This is a real, current gap between "who can see this page" and "who can use it," documented here rather than glossed over.
+> [!IMPORTANT]
+> **Page-level note -- Role Required:** this page has **no client-side role gate at all** -- unlike `/admin`, any logged-in user can navigate here and the Global Navigation Bar's "Providers" link is visible to every role. However, **every single API call this page makes requires the `provider:manage` permission, which only ADMIN holds** (listing AI providers, listing IOC providers, fetching the audit log which needs `audit:read` -- also ADMIN-only -- configuring, testing, enabling/disabling, and setting-active). Every one of those calls on this page is wrapped in a `.catch(() => {})` that silently swallows the error. The practical, observable result: an ANALYST or VIEWER who visits `/providers` sees the page's tabs and layout render, but every tab's content stays empty (no providers listed, no audit log entries) with no error message at all -- not a `403` banner, not a redirect, just an empty-looking page. This is a real, current gap between "who can see this page" and "who can use it," documented here rather than glossed over.
 
 ### AI Providers: Expand / Edit Credentials
 
@@ -1131,9 +1150,10 @@ Every other function -- Threat Score Gauge, Provider Cards, Final Assessment, Re
 
 ---
 
-## Page: Administration (`/admin`)
+## 🔐 Page: Administration (`/admin`)
 
-**Page-level note -- Role Required:** unlike `/providers`, this page **does** guard itself client-side: it checks `isLoggedIn()` first (redirect to `/login`), then `getCurrentUser().role !== "admin"` (redirect all the way to `/`, not just an error message). Every mutating action on this page is additionally, independently enforced server-side by `require_permission("user:manage")` on every `/api/v1/admin/*` route -- the client-side check exists purely so a non-admin never sees a screen full of buttons that would all `403`, not as the actual security boundary.
+> [!NOTE]
+> **Page-level note -- Role Required:** unlike `/providers`, this page **does** guard itself client-side: it checks `isLoggedIn()` first (redirect to `/login`), then `getCurrentUser().role !== "admin"` (redirect all the way to `/`, not just an error message). Every mutating action on this page is additionally, independently enforced server-side by `require_permission("user:manage")` on every `/api/v1/admin/*` route -- the client-side check exists purely so a non-admin never sees a screen full of buttons that would all `403`, not as the actual security boundary.
 
 ### View Overview
 

@@ -1,4 +1,35 @@
-# Executive Summary
+# 🐧 HORIZON GRID Linux QA Report
+
+> [!NOTE]
+> This report certifies the initial Linux release, `horizon-grid_0.2.0_amd64.deb`. It predates, and
+> is superseded on release-readiness for the current version by, every changelog entry from v0.2.1
+> through the current v0.3.8 (see `standalone-changelog.md`) -- including the later Linux packaging
+> fixes and version bumps described in the Linux Release Notes and Changelog addenda. It remains
+> accurate as a historical record of what was actually tested and found for that original Linux
+> release.
+
+## 📋 Table of contents
+
+- [Executive Summary](#-executive-summary)
+- [Test Environment](#-test-environment)
+- [Packaging Decision: No AppImage](#-packaging-decision-no-appimage)
+- [Environment Details](#-environment-details)
+- [Test Suite Results (Three-Distro End-to-End Run)](#-test-suite-results-three-distro-end-to-end-run)
+  - [The Two Explained Failures (all three distributions)](#the-two-explained-failures-all-three-distributions)
+  - [Independent Confirmation Under Realistic (Default) Conditions](#independent-confirmation-under-realistic-default-conditions)
+- [Real Bugs Found and Fixed During This Effort](#-real-bugs-found-and-fixed-during-this-effort)
+- [Critical Prerequisite Finding: Docker Compose v2 Is Not in docker.io](#-critical-prerequisite-finding-docker-compose-v2-is-not-in-dockerio)
+- [AI Safety Validator: Confirmed Live on Linux](#-ai-safety-validator-confirmed-live-on-linux)
+- [Provider Behavior: Confirmed Live on Linux](#-provider-behavior-confirmed-live-on-linux)
+- [Security Review Summary](#-security-review-summary)
+- [Windows Regression](#-windows-regression)
+- [Cross-Platform Feature Parity](#-cross-platform-feature-parity)
+- [Known Limitations](#-known-limitations)
+- [Final Verdict](#-final-verdict)
+
+---
+
+# 📋 Executive Summary
 
 This is the real, executed quality-assurance report for the HORIZON GRID Linux release --
 `horizon-grid_0.2.0_amd64.deb` -- covering Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, and Debian 12
@@ -8,11 +39,13 @@ surfaced a real defect, that defect is reported here along with the fix that was
 re-verified -- and where a test result needed a caveat to be reported honestly, that caveat is given
 in full rather than smoothed over.
 
-**Verdict: LINUX RELEASE READY**, with the same category of disclosed, non-blocking limitations the
-Windows release already carries (see "Known Limitations" below) plus one Linux-specific one (no native
-desktop-GUI verification was possible from this build environment -- see "Test Environment").
+> [!IMPORTANT]
+> **Verdict: LINUX RELEASE READY**, with the same category of disclosed, non-blocking limitations the
+> Windows release already carries (see "Known Limitations" below) plus one Linux-specific one (no
+> native desktop-GUI verification was possible from this build environment -- see "Test
+> Environment").
 
-# Test Environment
+# 🧪 Test Environment
 
 This is the section to read before trusting any PASS/FAIL count below -- it explains exactly how these
 tests were run and what that does and doesn't prove.
@@ -26,19 +59,20 @@ and backend/frontend images this platform always uses). `apt install`, `apt remo
 `docker compose up --build`, real HTTP calls against a real running backend, and real `pg_dump` backups
 all happened for real, not mocked or simulated.
 
-**What this environment could not provide, honestly:** the build host for this release is a Windows
-machine running Docker Desktop (whose containers run inside its own Linux VM) -- there was no bare-metal
-Linux machine and no real desktop GUI session (GNOME/KDE/etc.) available to this testing process. That
-means:
-- No literal "double-click the desktop icon on a live desktop session" verification was performed.
-- No AppImage double-click test was performed -- moot anyway, since no AppImage was produced (see
-  "Packaging Decision" below).
-- Real browser screenshots of the running application were captured (Chrome on the build host, pointed
-  at the real container's published ports) -- these show the real application and real data, but the
-  browser chrome itself is not a native Linux desktop window. This is disclosed on every such screenshot
-  in the Installation Guide rather than presented as something it isn't.
-- Performance numbers reflect containers running under Docker Desktop's Linux VM on this Windows build
-  host, not bare-metal Linux hardware.
+> [!NOTE]
+> **What this environment could not provide, honestly:** the build host for this release is a
+> Windows machine running Docker Desktop (whose containers run inside its own Linux VM) -- there was
+> no bare-metal Linux machine and no real desktop GUI session (GNOME/KDE/etc.) available to this
+> testing process. That means:
+> - No literal "double-click the desktop icon on a live desktop session" verification was performed.
+> - No AppImage double-click test was performed -- moot anyway, since no AppImage was produced (see
+>   "Packaging Decision" below).
+> - Real browser screenshots of the running application were captured (Chrome on the build host,
+>   pointed at the real container's published ports) -- these show the real application and real
+>   data, but the browser chrome itself is not a native Linux desktop window. This is disclosed on
+>   every such screenshot in the Installation Guide rather than presented as something it isn't.
+> - Performance numbers reflect containers running under Docker Desktop's Linux VM on this Windows
+>   build host, not bare-metal Linux hardware.
 
 **Where the real default Compose project name mattered:** the three-distro test suite below
 deliberately used a non-default `COMPOSE_PROJECT_NAME` per distro (e.g. `hgtest_debian12`) to avoid
@@ -48,7 +82,7 @@ below) -- a separate, dedicated test using the real, default project name ran in
 Docker-in-Docker daemon specifically to remove any collision risk, and that test is reported separately
 and in full.
 
-# Packaging Decision: No AppImage
+# 📦 Packaging Decision: No AppImage
 
 HORIZON GRID is a multi-container Docker Compose platform (Postgres, Redis, Neo4j, OpenSearch, a FastAPI
 backend, a Next.js frontend, and two Celery workers) reached through a browser -- not a single GUI
@@ -58,7 +92,7 @@ decision -- a `.deb` package plus a CLI setup wizard plus a systemd unit, mirror
 installer already does (an installer plus a wizard that configures and drives the same Docker Compose
 stack) -- is recorded here as a deliberate architectural choice, not an oversight or a shortcut.
 
-# Environment Details
+# 💻 Environment Details
 
 | | |
 |---|---|
@@ -71,7 +105,7 @@ stack) -- is recorded here as a deliberate architectural choice, not an oversigh
 | Docker Engine | 29.3.1 (host daemon, shared by all sibling-container tests) |
 | Docker Compose | v5.5.0 (installed fresh, per distro, via `get.docker.com`) |
 
-# Test Suite Results (Three-Distro End-to-End Run)
+# ✅ Test Suite Results (Three-Distro End-to-End Run)
 
 Each distribution ran the identical, real, 35-step scripted test, exercising -- in this order --
 Docker/Compose availability, `apt install` of the real `.deb`, file-presence and permission checks,
@@ -136,7 +170,7 @@ the shared build host.
 `FAIL` lines in the three-distro suite above are the test harness's own artifact, fully explained, and
 independently disproven as a real defect by this test.
 
-# Real Bugs Found and Fixed During This Effort
+# 🐛 Real Bugs Found and Fixed During This Effort
 
 Consistent with this project's standing rule never to hide a failed test or a real defect, three genuine
 bugs were found during this work -- all three are already fixed, and the fixes are already reflected in
@@ -164,19 +198,22 @@ the `.deb` this report is about (not a future promise):
    (`0600`, `root:root`). This is a small, Linux-specific improvement; it does not change or regress the
    Windows script, which is correct for its own always-default-project-name usage.
 
-# Critical Prerequisite Finding: Docker Compose v2 Is Not in `docker.io`
+# 🚨 Critical Prerequisite Finding: Docker Compose v2 Is Not in docker.io
 
 Confirmed live, on all three target distributions: installing the distribution's own `docker.io` package
 does **not** provide the `docker compose` v2 plugin this application requires -- `docker compose version`
 fails outright afterward. Debian 12's own default repositories don't even offer a fallback
 `docker-compose-v2` package; only the deprecated standalone v1 `docker-compose` binary is available
-there. The correct, working install method -- confirmed live to actually provide `docker compose v5.5.0`
-on every one of the three targets -- is Docker's own official convenience script
-(`curl -fsSL https://get.docker.com | sh`) or Docker's own apt repository. This is documented prominently
-in the Linux Installation Guide and reflected in the package's own `Recommends:` line and its long
-description, rather than left for a user to discover the hard way.
+there.
 
-# AI Safety Validator: Confirmed Live on Linux
+> [!WARNING]
+> The correct, working install method -- confirmed live to actually provide `docker compose v5.5.0`
+> on every one of the three targets -- is Docker's own official convenience script
+> (`curl -fsSL https://get.docker.com | sh`) or Docker's own apt repository. This is documented
+> prominently in the Linux Installation Guide and reflected in the package's own `Recommends:` line
+> and its long description, rather than left for a user to discover the hard way.
+
+# 🤖 AI Safety Validator: Confirmed Live on Linux
 
 During screenshot capture (a separate, real instance, Debian 12), a live investigation of `8.8.8.8`
 produced a deterministic Threat Score of 26/100 ("Low") from the scoring engine. The configured AI
@@ -191,7 +228,7 @@ identically on Linux, against a different and weaker AI model. **This is a confi
 working correctly, not a defect** -- it is reported here precisely because a system that quietly accepted
 the AI's wrong "malicious" claim instead would have been the real problem.
 
-# Provider Behavior: Confirmed Live on Linux
+# 🔌 Provider Behavior: Confirmed Live on Linux
 
 The same `8.8.8.8` investigation confirmed every provider needing no credential works correctly and
 returns real data on Linux: Spamhaus DBL/ZEN (`ok`, a real DNS-based blocklist query), WHOIS/RDAP (`ok`,
@@ -206,7 +243,7 @@ failure reaching one external paste-site host; this was correctly isolated to th
 the Collector's own overall `ok` status -- exactly the per-source isolation this feature is documented to
 provide, not a Linux-specific defect.
 
-# Security Review Summary
+# 🔒 Security Review Summary
 
 | Property | Result |
 |---|---|
@@ -223,7 +260,7 @@ No new security surface was introduced beyond what the Windows installer already
 of; every meaningful protection (secrets-at-rest permission lock, root/elevation requirement, no
 credentials in logs, minimal network exposure) has a direct, verified Linux analog.
 
-# Windows Regression
+# 🪟 Windows Regression
 
 Zero files under `backend/`, `frontend/`, `docker-compose.yml`, `docker-compose.prod.yml`, or `windows/`
 were created, modified, or deleted during this entire Linux packaging effort -- verified directly by
@@ -231,14 +268,16 @@ inspecting file contents and modification timestamps. Every new file this effort
 new, additive `linux/` directory that nothing in the Windows installer or the application runtime
 references. This is a genuine, verifiable non-regression guarantee at the file level.
 
-**Disclosed honestly, not glossed over:** a live, interactive functional re-test of the currently
-Windows-installed platform (clicking through Service Status, running a real investigation, etc.) was
-**not** performed in this same pass, because doing so requires interactive Administrator elevation (a UAC
-prompt) that could not be granted in an unattended session. The file-level evidence above is a real and
-sufficient guarantee that nothing Windows-relevant was touched; it is reported as exactly that -- a
-structural guarantee -- rather than dressed up as a full functional click-through that did not happen.
+> [!NOTE]
+> **Disclosed honestly, not glossed over:** a live, interactive functional re-test of the currently
+> Windows-installed platform (clicking through Service Status, running a real investigation, etc.) was
+> **not** performed in this same pass, because doing so requires interactive Administrator elevation (a
+> UAC prompt) that could not be granted in an unattended session. The file-level evidence above is a
+> real and sufficient guarantee that nothing Windows-relevant was touched; it is reported as exactly
+> that -- a structural guarantee -- rather than dressed up as a full functional click-through that did
+> not happen.
 
-# Cross-Platform Feature Parity
+# 🔀 Cross-Platform Feature Parity
 
 | Feature | Windows | Linux |
 |---|---|---|
@@ -257,7 +296,7 @@ structural guarantee -- rather than dressed up as a full functional click-throug
 | Native desktop GUI installer/wizard | WinForms GUI | Terminal CLI wizard (by design -- see "Packaging Decision") |
 | systemd/service management | N/A (Docker Compose + Start Menu shortcuts) | systemd unit + `horizon-grid` CLI |
 
-# Known Limitations
+# 🚧 Known Limitations
 
 - No architecture other than x86_64 has been built or tested.
 - No distribution other than Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, and Debian 12 has been tested; this
@@ -278,7 +317,7 @@ structural guarantee -- rather than dressed up as a full functional click-throug
 None of these limitations are release-blocking; each is disclosed here specifically so a reader can
 decide for themselves rather than discover a gap the report didn't mention.
 
-# Final Verdict
+# 🏁 Final Verdict
 
 **LINUX RELEASE READY.**
 

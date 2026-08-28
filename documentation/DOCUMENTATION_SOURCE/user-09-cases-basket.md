@@ -1,4 +1,4 @@
-# Case Management
+# 🗂️ Case Management
 
 ## Why group IOCs together at all?
 
@@ -31,13 +31,14 @@ The second screenshot shows the same case after both of those actions have happe
 
 The case now shows one attached IOC (CVE-2021-44228) and one analyst note. As an investigation continues, more IOCs and more notes can be attached the same way, so that everything relevant to "Log4Shell Exposure Review" stays in one place rather than spread across separate, easily-forgotten lookups.
 
-# IOC Basket
+# 🧺 IOC Basket
 
 ## What it is (and what it isn't called)
 
 While working an investigation, an analyst often wants to keep track of a handful of IOCs they're personally paying attention to — not necessarily a formal case yet, just a running list of "things I'm keeping an eye on." The platform's real name for this feature is the **IOC Basket** (or just "Basket"). It is a personal scratch-list: an analyst adds IOCs to it while they investigate, and the Basket holds onto them for later.
 
-It's worth being precise about naming here: this feature is **not** called a "Watchlist" anywhere in the product. "Basket" is its actual name. It serves a purpose an analyst might informally think of in watchlist terms — a personal running list of IOCs to come back to — but the platform's own term for it is Basket, and that's the name used throughout its interface.
+> [!NOTE]
+> This feature is **not** called a "Watchlist" anywhere in the product — "Basket" is its actual name. It serves a purpose an analyst might informally think of in watchlist terms — a personal running list of IOCs to come back to — but the platform's own term for it is Basket, and that's the name used throughout its interface.
 
 ## Using the Basket
 

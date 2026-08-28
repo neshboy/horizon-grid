@@ -2,7 +2,25 @@
 
 Every IOC provider connector and every AI backend in this platform needs at least one piece of configuration — usually an API key, sometimes a base URL or model id — before it can do real work. This chapter is the authoritative, line-cited account of where that configuration comes from, how it is stored, and how it is read back at the moment an investigation actually runs, for both of the two credential systems that coexist in this codebase today: the original `.env`-only design, and the encrypted, database-backed runtime layer that was later built on top of it without removing it. No git history exists in this repository (`git status` at the repo root returns `fatal: not a git repository`), so the "before" state below is reconstructed from the legacy code paths that are still present and still load-bearing as a fallback, not from commit history.
 
-## Two Entry Points for a Credential
+## 📋 Table of contents
+
+- [Two Entry Points for a Credential](#-two-entry-points-for-a-credential)
+- [The Legacy Design: a Frozen Settings Singleton](#-the-legacy-design-a-frozen-settings-singleton)
+- [The Current Design: Encrypted, Database-Backed, Runtime-Mutable](#-the-current-design-encrypted-database-backed-runtime-mutable)
+  - [Storage: `provider_runtime_configs`](#storage-provider_runtime_configs)
+  - [Encryption: `app/core/crypto.py`](#encryption-appcorecryptopy)
+  - [Bridging old installs: `seed_from_env_if_empty()`](#bridging-old-installs-seed_from_env_if_empty)
+  - [The Runtime API Surface](#the-runtime-api-surface)
+- [Live Retrieval at Investigation Time: Two Different Mechanisms](#-live-retrieval-at-investigation-time-two-different-mechanisms)
+  - [IOC providers: a per-investigation `ContextVar` snapshot](#ioc-providers-a-per-investigation-contextvar-snapshot)
+  - [AI backends: a fresh client per call, not a `ContextVar`](#ai-backends-a-fresh-client-per-call-not-a-contextvar)
+- [A Real, Documented Historical Bug](#-a-real-documented-historical-bug-test-connection-success-but-the-investigation-still-failed)
+- [Before / After Summary](#-before--after-summary)
+- [Diagram](#-diagram)
+
+---
+
+## 🔑 Two Entry Points for a Credential
 
 A credential can enter the running system in exactly two ways:
 
@@ -15,7 +33,7 @@ Both configuration-mutating endpoints are gated by `require_permission("provider
 
 A third, deliberately non-persisting action exists on both sides: `POST /api/v1/providers/{provider_id}/test` (`backend/app/api/routes/providers.py:20–36`) and `POST /api/v1/ai/test` (`backend/app/api/routes/ai_config.py:39–56`) each make one real, minimal outbound call using whatever credential is currently sitting in the request body — never a value already saved anywhere — and never write it to `.env` or to the database. These are the endpoints behind every "Test Connection" button in both the wizard and the web UI.
 
-## The Legacy Design: a Frozen Settings Singleton
+## 🧊 The Legacy Design: a Frozen Settings Singleton
 
 Before the runtime layer existed, every provider's and every AI backend's configuration was `.env`-driven and fixed for the entire lifetime of the running backend process:
 
@@ -25,7 +43,7 @@ Before the runtime layer existed, every provider's and every AI backend's config
 
 The practical consequence: editing `.env` — whether by hand or via the wizard — had no effect on a backend process that was already running. This is the entire reason the runtime-config system described in the rest of this chapter exists, and it is also the exact root cause of a specific, documented behavioral gap covered in its own section below.
 
-## The Current Design: Encrypted, Database-Backed, Runtime-Mutable
+## 🔐 The Current Design: Encrypted, Database-Backed, Runtime-Mutable
 
 ### Storage: `provider_runtime_configs`
 
@@ -46,7 +64,7 @@ Credentials are Fernet-encrypted (symmetric, `cryptography.fernet.Fernet`) befor
 
 ### Bridging old installs: `seed_from_env_if_empty()`
 
-`runtime_config.py:443–493` copies the legacy `.env` values into the new table exactly once, the first time it ever runs on a given database: if `provider_runtime_configs` already has any row at all, it is a no-op (`:454–455`, so it never overwrites a value an administrator has already configured through the UI); otherwise, for each of the 11 AI backends (`_AI_ENV_SEED_MAP`, `:62–76`) and each of the 18 registered IOC providers (`_ENV_SEED_MAP`, `:49–60`, sourced from `app.providers.registry.get_all_providers()`), it reads the matching field off `get_settings()` and inserts a pre-encrypted row (`:458–472`, `:476–488`). It is invoked once per process start, from `app/main.py:50–58` (`@app.on_event("startup") async def _seed_runtime_config()`), wrapped in a try/except so a seeding failure never blocks boot (`main.py:59–60`). The function's own docstring states it is "idempotent and safe to call on every startup" (`runtime_config.py:448`) — this is what lets an existing `.env`-configured deployment upgrade to the new system without losing its working credentials or requiring a manual one-time migration script.
+`runtime_config.py:443–493` copies the legacy `.env` values into the new table exactly once, the first time it ever runs on a given database: if `provider_runtime_configs` already has any row at all, it is a no-op (`:454–455`, so it never overwrites a value an administrator has already configured through the UI); otherwise, for each of the 11 AI backends (`_AI_ENV_SEED_MAP`, `:62–76`) and each of the 18 registered IOC providers (`_ENV_SEED_MAP`, `:49–60`, sourced from `app.providers.registry.get_all_providers()`), it reads the matching field off `get_settings()` and inserts a pre-encrypted row (`:458–472`, `:476–488`). It is invoked once per process start, from `app/main.py:226–236` (`@app.on_event("startup") async def _seed_runtime_config()`, one of four startup hooks now registered there), wrapped in a try/except so a seeding failure never blocks boot. The function's own docstring states it is "idempotent and safe to call on every startup" (`runtime_config.py:448`) — this is what lets an existing `.env`-configured deployment upgrade to the new system without losing its working credentials or requiring a manual one-time migration script.
 
 ### The Runtime API Surface
 
@@ -65,7 +83,7 @@ All ten endpoints below live in `backend/app/api/routes/runtime.py`, prefix `/ap
 | `POST /ioc-providers/{provider_id}/record-test` | `provider:manage` | Record a prior `/providers/{id}/test` outcome. |
 | `GET /audit-log` | `audit:read` | Retrieve the `config_audit_log` history. |
 
-## Live Retrieval at Investigation Time: Two Different Mechanisms
+## ⚡ Live Retrieval at Investigation Time: Two Different Mechanisms
 
 Reading a credential back at the moment it is needed is handled differently for IOC providers than for AI backends, and the difference is deliberate.
 
@@ -89,7 +107,7 @@ One immutable snapshot per investigation, read-only for the duration of that inv
 
 The AI path does not need the snapshot pattern at all, because it takes a simpler route: it never keeps a long-lived, shared, mutable client instance in the request path in the first place. `_get_ai_client()` (`app/ai/service.py:102–145`) resolves the backend in three tiers — an explicit `backend_override` argument (used only by the AI-comparison "re-analyze with a different backend" feature, `service.py:125–126`) → the active runtime config, read fresh from Postgres on **every single call** via `get_active_ai_config()` (`service.py:128`, backed by `runtime_config.py:200–215`, which is not cached) → the legacy `Settings` singleton as a final fallback if no runtime row exists yet (`service.py:134–138`). `_build_client()` (`service.py:56–99`) then constructs a **brand-new client instance** for that one call — e.g. a fresh `AnthropicClient(api_key=..., model_id=...)` (`app/ai/anthropic_client.py:25–39`) — deliberately bypassing the module-level frozen singleton client (`get_anthropic_client()`, `anthropic_client.py:93–97`) that only reflects `Settings`. Because every call re-reads the database and rebuilds its own client from that read, switching the active AI backend via `POST /api/v1/runtime/ai-active` takes effect on the very next AI call made by *any* investigation, with no restart and no shared mutable state to protect. If the resolved client's `is_configured` is false, the call fails loudly: `RuntimeError(f"AI backend '{backend}' is not configured (missing API key/URL/model) -- configure it from the AI Providers panel or check .env")` (`service.py:140–144`).
 
-## A Real, Documented Historical Bug: "Test Connection: SUCCESS" but the Investigation Still Failed
+## 🐛 A Real, Documented Historical Bug: "Test Connection: SUCCESS" but the Investigation Still Failed
 
 The codebase and its accompanying repo-root reports independently corroborate one specific, real architectural bug that predates the runtime-config system, distinct from the mechanisms above.
 
@@ -103,7 +121,7 @@ This is independently confirmed in three separate, git-independent artifacts: `d
 
 For completeness: the exact phrase "API key not provided" does not appear anywhere in this codebase's source or documentation (confirmed by a case-insensitive search of `backend/app`, `docs/`, `documentation/`, and `windows/`, excluding vendored dependencies). The real, verified error strings are `f"{self.provider_name} is not configured (missing API key/credentials)."` (`base.py:143`) and `f"AI backend '{backend}' is not configured (missing API key/URL/model) -- ..."` (`service.py:141–144`).
 
-## Before / After Summary
+## 🔄 Before / After Summary
 
 | Aspect | Legacy (`.env` only) | Current (runtime-config layer) |
 |---|---|---|
@@ -114,7 +132,7 @@ For completeness: the exact phrase "API key not provided" does not appear anywhe
 | Audit trail | None | `config_audit_log` table, one row per configure/enable/disable/activate/test-result action |
 | Still in use today? | Yes — `Settings` remains the fallback when no runtime row exists, and is what `seed_from_env_if_empty()` reads from | Yes — the primary path once any row exists |
 
-## Diagram
+## 📐 Diagram
 
 [FIGURE: dev-05-runtime-configuration-and-credentials-diagram-1.png | Diagram: Diagram]
 Diagram: Credential lifecycle from wizard/UI entry through encrypted storage to per-investigation retrieval. Each investigation binds one immutable snapshot to its own `contextvars.Context` before spawning provider tasks, so two investigations racing across a credential change each see a single consistent configuration for their whole run -- never a mix of old and new mid-flight.

@@ -1,4 +1,4 @@
-# Backend Security Architecture
+# 🔒 Backend Security Architecture
 
 This chapter documents the four security-relevant subsystems of the FastAPI backend that a backend engineer, DevOps operator, or security reviewer needs to reason about before deploying or auditing HORIZON GRID: **authentication**, **authorization (RBAC)**, **credential/secrets management**, and **audit logging**. Every claim below is traceable to a specific file and, where useful, a line reference, obtained by direct inspection of `backend/app/` and `windows/` in this repository.
 
@@ -7,7 +7,16 @@ Each section ends with two explicit lists:
 - **Implemented** — mechanisms that exist in the running code today, verified by reading the implementation (not a comment, docstring, or marketing description of intent).
 - **Recommended (not yet implemented)** — controls a production-security review would normally expect, confirmed absent by searching the same code paths (e.g. no revocation table, no rate limiter on a given route). These are documented as honest gaps, not hidden. One item, the Fernet key's default derivation, is called out separately below because it is a documented design tradeoff rather than a missing feature.
 
-## 1. Authentication
+## 📋 Table of contents
+
+- [1. Authentication](#1--authentication)
+- [2. Authorization: Role-Based Access Control (RBAC)](#2--authorization-role-based-access-control-rbac)
+- [3. Credential and Secrets Management](#3--credential-and-secrets-management)
+- [4. Audit Logging](#4--audit-logging)
+- [5. CORS and Network Reachability](#5--cors-and-network-reachability)
+- [Summary: Implemented vs. Recommended](#-summary-implemented-vs-recommended)
+
+## 1. 🔑 Authentication
 
 Authentication is JWT-based. `backend/app/auth/security.py` issues tokens with `python-jose`, signing algorithm `HS256` (`jwt_algorithm` in `app/core/config.py:24`), and hashes passwords with `passlib`'s `bcrypt` scheme (`security.py:10`) — plaintext passwords are never persisted, only the bcrypt hash on `users.hashed_password`.
 
@@ -48,7 +57,7 @@ The 72-byte cap is bcrypt's own effective limit (bytes beyond 72 are silently ig
 - **No account lockout after repeated failed logins**, and no multi-factor authentication — neither concept exists anywhere in `app/auth/` or `app/models/user.py`.
 - **No password complexity rule beyond length** (no digit/symbol/case requirement).
 
-## 2. Authorization: Role-Based Access Control (RBAC)
+## 2. 🔐 Authorization: Role-Based Access Control (RBAC)
 
 The platform has exactly three roles, `Role.ADMIN`, `Role.ANALYST`, `Role.VIEWER` (`app/models/user.py:11-14`), stored on `users.role`. Authorization is a flat permission-string matrix, `ROLE_PERMISSIONS` (`app/models/user.py:31-44`), checked per-route by the `require_permission(permission: str)` dependency factory (`app/auth/rbac.py:50-62`): a route either declares a required permission string as a FastAPI dependency or it enforces none — there is no implicit default-deny/default-allow fallback beyond "no `require_permission` call means no permission check."
 
@@ -124,7 +133,7 @@ already-issued JWT.
 **Recommended (not yet implemented):**
 - **No row-level/ownership authorization beyond the basket.** `basket_items` is scoped to `owner_id` at the query level, but `cases` and `ioc_lookups` are visible to any authenticated user holding the relevant `*:read`/`*:write` permission — there is no per-case or per-lookup ACL, only the coarse role check. This is a documented design choice (cases/lookups are team-shared, not per-analyst), but worth stating plainly: any `analyst` can read and write any other analyst's cases and lookups.
 
-## 3. Credential and Secrets Management
+## 3. 🔏 Credential and Secrets Management
 
 There are two architecturally distinct places a secret can live, and a backend engineer needs to know which applies to a given credential before reasoning about exposure.
 
@@ -160,7 +169,10 @@ Diagram: Credential lifecycle -- `.env` vs. the encrypted runtime store. Path A 
 - **No secrets-manager integration** (Vault, AWS Secrets Manager, etc.) — both paths described above are self-contained (file-based or database-based), with no external secret store as an option.
 - **No Linux/macOS equivalent of the `icacls` file-permission lockdown.** The ACL hardening described above is Windows-installer-specific; a `.env` file created by `docker compose` directly on Linux relies on the operator's own umask/filesystem permissions, which this platform does not set or verify.
 
-## 4. Audit Logging
+> [!IMPORTANT]
+> An unedited `jwt_secret_key` doesn't just weaken JWT signing on its own — because the Fernet key for Path B falls back to a derivation of this same value, it also weakens runtime-credential encryption for any deployment that never sets `encryption_master_key`. The Windows installer always generates a real value; a bare `docker compose up` against `.env.example` without wizard involvement does not.
+
+## 4. 📝 Audit Logging
 
 `config_audit_log` (`app/models/runtime_config.py:58-75`) is an append-only table — it uses only `UUIDPrimaryKeyMixin`, deliberately not the shared `TimestampMixin`, because it has its own explicit `timestamp` column set by application code rather than a DB `server_default`. Every row carries `actor_user_id` (nullable FK to `users.id`), a denormalized `actor_email` (so history stays readable if the account is later deleted), an `action` string, and a free-text `detail` (`String(1000)`).
 
@@ -207,7 +219,7 @@ The log is exposed read-only via `GET /api/v1/runtime/audit-log?limit=200` (`app
 - **No tamper-evidence or immutability guarantee.** `config_audit_log` is "append-only" purely by convention (no code path updates or deletes a row); there is no database-level `REVOKE UPDATE/DELETE`, no cryptographic chaining/hashing between rows, and no export/retention policy.
 - **No enforced redaction of `detail`.** As noted above, the "never a credential" rule is a comment and a code-review norm, not a validated constraint.
 
-## 5. CORS and Network Reachability
+## 5. 🌐 CORS and Network Reachability
 
 `backend/app/main.py` gates every browser-originated cross-origin request through `CORSMiddleware`, configured as a private-network-shaped regex rather than a fixed origin list:
 
@@ -236,6 +248,9 @@ app.add_middleware(
 
 **This is a same-origin-policy relaxation, not the platform's authorization boundary.** A request from a matching origin still must carry a valid bearer token for every protected route (`app/auth/rbac.py`); CORS only controls whether a browser's JavaScript is allowed to *read* the response, not whether the request reaches the API. Matching by IP-shape only, not a specific port, is a deliberate simplification: restricting to a specific configured port was evaluated and would have been nearly free to add (`docker-compose.yml`'s `env_file: .env` already injects `HOST_PORT_FRONTEND` into the backend process with no additional wiring), but was judged to add plumbing without a real security improvement, since the actual boundary is authentication, not origin matching.
 
+> [!NOTE]
+> CORS here is a same-origin-policy relaxation, not the platform's authorization boundary. A request from a matching origin still must carry a valid bearer token for every protected route — CORS only controls whether a browser's JavaScript is allowed to read the response, not whether the request reaches the API.
+
 **`GET /network-info`** (`main.py`, declared directly on `app`, no `api_v1_prefix`, no auth dependency -- the same unauthenticated pattern as `/health`) echoes three `Settings` fields for the frontend's Network Access panel:
 
 ```python
@@ -262,7 +277,7 @@ async def network_info():
 - **`Get-LanIpAddress` is a point-in-time snapshot, not live.** A LAN IP change (common after a router restart) is not detected automatically; the operator must re-run the wizard's Configuration option. There is no background poller or scheduled re-detection.
 - **The firewall rule creation is best-effort, not verified post-install.** `New-AppFirewallRule` is wrapped in try/catch and logs a warning on failure rather than blocking setup (a locked-down/GPO-managed machine that rejects `New-NetFirewallRule` should not prevent the rest of installation from completing) -- but nothing in the wizard re-checks afterward that the rule actually exists.
 
-## Summary: Implemented vs. Recommended
+## 📋 Summary: Implemented vs. Recommended
 
 | Area | Strongest implemented control | Most significant open recommendation |
 |---|---|---|

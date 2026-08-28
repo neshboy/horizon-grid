@@ -1,4 +1,4 @@
-# A Real-World SOC Workflow
+# 🕵️ A Real-World SOC Workflow
 
 Every feature described so far is easier to trust once you see it used the way a SOC (Security Operations Center) analyst actually works: not by opening one tool at a time, but by following a single lead wherever it goes. The walkthrough below is not a hypothetical — it is the exact sequence an analyst followed in the platform, start to finish, while triaging a routine batch of indicators.
 
@@ -36,7 +36,7 @@ The note reads, in full: *"Confirmed CVE-2021-44228 (Log4Shell) via the platform
 
 ## Handing it off
 
-The investigation still needs to leave the platform and land in wherever the team tracks incident tickets. The analyst exports the findings as Markdown, which attaches cleanly to a ticket or incident-report document as readable, formatted text. JSON export is also available for anyone downstream who wants to parse the findings programmatically rather than read them. (PDF and CSV export are not yet available in this release — the export panel says so plainly rather than failing silently, so nobody wastes time waiting on an export that isn't coming.)
+The investigation still needs to leave the platform and land in wherever the team tracks incident tickets. The analyst exports the findings as Markdown, which attaches cleanly to a ticket or incident-report document as readable, formatted text. JSON, PDF, and CSV export are also available, for anyone downstream who wants to parse the findings programmatically, attach a formatted document, or import into a spreadsheet.
 
 ## Why this is faster than doing it by hand
 

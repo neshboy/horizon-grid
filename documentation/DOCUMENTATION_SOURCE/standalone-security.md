@@ -1,12 +1,31 @@
-# HORIZON GRID Security Reference
+# 🔒 HORIZON GRID Security Reference
 
-## Purpose and Scope
+## 🎯 Purpose and Scope
 
 This is a standalone security reference for HORIZON GRID, intended to be read on its own by a security reviewer, auditor, or prospective operator who does not have time to read the full documentation set. It pulls together, in one place, the controls that matter most when deciding whether to trust this platform with real indicators and real credentials: authentication, authorization, credential handling, input validation, outbound-request safety, export safety, the AI's relationship to the numbers it narrates, rate limiting, and audit logging -- plus an honest list of what is *not* yet in place.
 
 Every claim below is traceable to a specific source file in `backend/app/`, confirmed by direct inspection, not inferred from a docstring or a design intention. Three companion chapters in the full documentation set go deeper on individual subsystems and are referenced inline rather than repeated: the **Backend Security Architecture** chapter (JWT/RBAC/secrets/audit implementation detail, line-numbered), the **Security Architecture** technical appendix (network exposure, CORS), and the **Security and Data Handling** user-facing chapter (the same material explained for a non-engineer). This document's job is different from all three: it is the one file a reader can hand to someone outside the project and have it make sense without any other context.
 
-## 1. Authentication
+## 📚 Table of Contents
+
+- [🔑 1. Authentication](#-1-authentication)
+- [🔐 2. Authorization: Role-Based Access Control](#-2-authorization-role-based-access-control)
+- [💾 3. Credential Storage](#-3-credential-storage)
+- [🧹 4. Input Validation and IOC Handling](#-4-input-validation-and-ioc-handling)
+- [🚧 5. Server-Side Request Forgery (SSRF) Protection](#-5-server-side-request-forgery-ssrf-protection)
+- [📤 6. Export Security: CSV and PDF Injection Protections](#-6-export-security-csv-and-pdf-injection-protections)
+- [🤖 7. AI Prompt-Injection Posture: Why the AI Cannot Set Its Own Score](#-7-ai-prompt-injection-posture-why-the-ai-cannot-set-its-own-score)
+- [🧮 8. Scoring-Engine Integrity: The Correlation-Flood Fix](#-8-scoring-engine-integrity-the-correlation-flood-fix)
+- [🚦 9. Rate Limiting](#-9-rate-limiting)
+- [📋 10. Audit Logging](#-10-audit-logging)
+- [🌐 11. CORS and Network Exposure](#-11-cors-and-network-exposure-brief----see-the-security-architecture-appendix-for-full-detail)
+- [⚠️ 12. Known Limitations and Disclosed Risks](#️-12-known-limitations-and-disclosed-risks)
+- [⚔️ 13. Pentest Suite: Scope-Enforced Assessment and Gated Exploit Validation](#️-13-pentest-suite-scope-enforced-assessment-and-gated-exploit-validation)
+- [📑 Summary](#-summary)
+
+---
+
+## 🔑 1. Authentication
 
 Sign-in is JWT-based (`app/auth/security.py`, HS256 via `python-jose`), with passwords hashed by `passlib`'s `bcrypt` scheme -- a plaintext password is never persisted, only its hash. Two token types are minted at login: a 30-minute access token and a 7-day refresh token, each carrying `sub` (email), `role`, `token_version`, `type`, `iat`, and `exp` claims. `get_current_user` (`app/auth/rbac.py`), the dependency every protected route shares, only accepts a token whose `type` claim is `"access"`, and it re-reads `is_active` from the database on every single request rather than trusting anything cached in the token -- so disabling an account takes effect on that account's very next click, not whenever its token happens to expire.
 
@@ -22,9 +41,10 @@ An administrator resetting a user's password increments that user's `token_versi
 
 **Bootstrap and account creation.** The very first user ever created on an instance is automatically granted `ADMIN`; every registration attempt after that is rejected outright (`403`, "Self-registration is closed"). There is no seed script and no default account -- this bootstrap rule, exercised by the Windows Setup Wizard at install time, is the platform's only path to an initial administrator. Every account after that first one is created by an existing administrator from the Administration page, who picks its role up front.
 
-**What is honestly not yet in place:** no self-service "log out everywhere" (only an admin-driven password reset triggers revocation -- a user cannot invalidate their own other sessions without changing their password), no rate limiting on `/auth/register`, no account lockout on either endpoint, and no multi-factor authentication. `/auth/login` itself did gain a real per-account rate limiter in a later mission-critical-reliability review (v0.2.3) -- see §12. None of the remaining gaps are silently glossed over either.
+> [!NOTE]
+> **What is honestly not yet in place:** no self-service "log out everywhere" (only an admin-driven password reset triggers revocation -- a user cannot invalidate their own other sessions without changing their password), no rate limiting on `/auth/register`, no account lockout on either endpoint, and no multi-factor authentication. `/auth/login` itself did gain a real per-account rate limiter in a later mission-critical-reliability review (v0.2.3) -- see §12. None of the remaining gaps are silently glossed over either.
 
-## 2. Authorization: Role-Based Access Control
+## 🔐 2. Authorization: Role-Based Access Control
 
 Exactly three roles exist -- `ADMIN`, `ANALYST`, `VIEWER` (`app/models/user.py`'s `Role` enum) -- resolved through a single flat permission-string matrix, `ROLE_PERMISSIONS`, checked by one shared dependency, `require_permission(permission: str)` (`app/auth/rbac.py`). A route either declares a required permission string or it enforces none; there is no separate ad hoc authorization logic scattered through the codebase for any route this document covers.
 
@@ -55,7 +75,7 @@ A permission failure raises `HTTP 403` naming both the caller's own role and the
 
 A dedicated cross-cutting RBAC sweep performed during the most recent release cycle checked every mission-touched route against `ROLE_PERMISSIONS` end to end (route to dependency to permission string to role table), independently re-verified by a second adversarial pass. **Result: clean** -- no permission-string mismatch, no role silently missing an entry, no route granting wider or narrower access than the matrix intends. Full implementation detail (line references, the complete route-by-route enforcement table) is in the Backend Security Architecture chapter; that chapter also discloses the one currently unenforced permission (`lookup:export` was, until the fix described in §6 below, defined but not wired to its intended route) and the one deliberate scope choice (cases and lookups are team-visible to any role holding the relevant permission, not restricted per-owner -- there is no per-case ACL).
 
-## 3. Credential Storage
+## 💾 3. Credential Storage
 
 Two credential paths exist. `.env`-based settings (provider/AI keys set at container start) are frozen for the process lifetime and require a restart to change. The path that matters for this section is the newer one: **runtime-configured** provider and AI-backend credentials, entered live through the Manage Providers UI with no restart required.
 
@@ -72,17 +92,18 @@ def mask_secret(plaintext: str, visible_suffix: int = 4) -> str:
 
 `mask_secret()` replaces every character except the last four with `*`, and -- critically -- there is no function anywhere in this codebase that reverses it. No route ever returns a decrypted runtime-configured credential to a browser.
 
-**Why "Test Connection" requires retyping an already-saved key.** This is deliberate, not a UI oversight. `POST /providers/{provider_id}/test` and `POST /ai/test` both take the *candidate credentials to test* directly in the request body (`ProviderTestRequest.credentials: dict[str, str]`, `AITestRequest.credentials: dict[str, str]`) and make one real outbound call with exactly that value -- both routes' own docstrings state the credentials passed in are "never persisted, never read from settings." Nothing in the backend reads a previously-saved credential back out to test it, because there is no reversible representation of a saved credential anywhere to read: the database only ever holds ciphertext, and the API only ever hands back a masked string. If the frontend pre-filled a masked value like `*******3xyz` and submitted that as the "test," it would either fail meaninglessly against the real provider or -- worse -- give a false sense that the *saved* key was re-validated when nothing of the sort happened. Requiring the operator to type the real value again for a test is the direct, correct consequence of the masking and non-persistence guarantees above holding without exception, not a gap in convenience the UI simply hasn't gotten around to closing. This was confirmed, during the most recent release's QA cycle, to be a real point of confusion for a real user encountering it for the first time -- which is exactly why it is called out explicitly here rather than left to be rediscovered by surprise.
+> [!TIP]
+> **Why "Test Connection" requires retyping an already-saved key.** This is deliberate, not a UI oversight. `POST /providers/{provider_id}/test` and `POST /ai/test` both take the *candidate credentials to test* directly in the request body (`ProviderTestRequest.credentials: dict[str, str]`, `AITestRequest.credentials: dict[str, str]`) and make one real outbound call with exactly that value -- both routes' own docstrings state the credentials passed in are "never persisted, never read from settings." Nothing in the backend reads a previously-saved credential back out to test it, because there is no reversible representation of a saved credential anywhere to read: the database only ever holds ciphertext, and the API only ever hands back a masked string. If the frontend pre-filled a masked value like `*******3xyz` and submitted that as the "test," it would either fail meaninglessly against the real provider or -- worse -- give a false sense that the *saved* key was re-validated when nothing of the sort happened. Requiring the operator to type the real value again for a test is the direct, correct consequence of the masking and non-persistence guarantees above holding without exception, not a gap in convenience the UI simply hasn't gotten around to closing. This was confirmed, during the most recent release's QA cycle, to be a real point of confusion for a real user encountering it for the first time -- which is exactly why it is called out explicitly here rather than left to be rediscovered by surprise.
 
 On Windows installs, the legacy `.env` path is hardened at the filesystem level: `jwt_secret_key` and the datastore passwords are generated with .NET's cryptographically secure `RandomNumberGenerator` (not PowerShell's `Get-Random`), and the written file's NTFS ACL is immediately restricted to Administrators and SYSTEM only via `icacls`.
 
 [FIGURE: standalone-security-masked-credential.png | A runtime-configured provider's credential field showing only a masked value (e.g. "*******3xyz") in the Manage Providers UI -- the real key is never returned by any API response.]
 
-## 4. Input Validation and IOC Handling
+## 🧹 4. Input Validation and IOC Handling
 
 `LookupCreateRequest.value` -- the raw string a user submits for investigation -- is an unconstrained string on the server side. IOC-type detection (`app/ioc/detector.py`) is regex-based *classification* (deciding whether a string looks like an IPv4 address, a SHA256 hash, a domain, a CVE ID, and so on), not sanitization: it exists to route a value to the right providers, not to reject or clean dangerous input. This is a load-bearing design fact worth stating plainly, because it means downstream consumers of a raw IOC value -- exports, the AI prompt, provider connectors -- are each individually responsible for treating that value as untrusted, and this document's remaining sections (§6, §7) are exactly the record of where that responsibility was and wasn't discharged correctly. Registration's `RegisterRequest.password` has a server-enforced 8-character minimum (and a 72-byte maximum, matching bcrypt's own effective limit) but no complexity rule beyond length.
 
-## 5. Server-Side Request Forgery (SSRF) Protection
+## 🚧 5. Server-Side Request Forgery (SSRF) Protection
 
 One place in this codebase makes a server-side HTTP call to a host fully chosen by an operator, rather than a fixed provider domain: the Ollama `base_url` field, since a local AI backend can legitimately point at any host on the operator's own network. `app/core/url_safety.py`'s `assert_safe_outbound_url()` is the guard applied before that URL is ever fetched:
 
@@ -105,7 +126,7 @@ def assert_safe_outbound_url(url: str) -> None:
 
 Two design choices here are deliberate, not accidental gaps. First, only `http`/`https` schemes are permitted at all -- rejecting `file://`, `gopher://`, and every other scheme outright. Second, the function resolves the hostname and inspects every returned address rather than pattern-matching the URL string, which is what actually closes a DNS-rebinding-style bypass (a hostname that resolves differently at check time versus fetch time cannot be reasoned about safely from the string alone). Third, and most deliberately: it does **not** block loopback or RFC 1918 private-IP ranges. That is not an oversight -- Ollama's entire legitimate use case is a local or LAN model server (this platform's own default `OLLAMA_BASE_URL` points at `host.docker.internal`), so blocking private ranges would break real, intended functionality rather than stop a real attack. What it specifically blocks is link-local address space (`169.254.0.0/16`, `fe80::/10`), which has no legitimate Ollama use case and is where essentially every major cloud provider's instance-metadata service lives (`169.254.169.254`) -- the single highest-value SSRF target this particular code path could otherwise be tricked into reaching. This is a narrowly scoped, honestly-reasoned control for the one outbound-URL surface that exists today, not a generic egress firewall.
 
-## 6. Export Security: CSV and PDF Injection Protections
+## 📤 6. Export Security: CSV and PDF Injection Protections
 
 A user-supplied IOC value or AI-generated assessment text flows, unmodified, into two file-export formats server-side: CSV and PDF (`app/api/routes/lookup.py`). Both formats were found, during the most recent release's own adversarial QA pass, to have real injection vulnerabilities, and both were fixed and regression-tested before release.
 
@@ -117,7 +138,7 @@ A user-supplied IOC value or AI-generated assessment text flows, unmodified, int
 
 All three fixes are confirmed present in the current codebase and regression-tested, not merely proposed.
 
-## 7. AI Prompt-Injection Posture: Why the AI Cannot Set Its Own Score
+## 🤖 7. AI Prompt-Injection Posture: Why the AI Cannot Set Its Own Score
 
 The single most important security property of the AI layer is architectural, not a prompt instruction: **the risk numbers are computed before the AI is ever called, from a deterministic, non-AI scoring engine (`app/scoring/engine.py`, `SCORING_ENGINE_VERSION="1.0"`), and the AI is given those numbers as a fixed fact it can only narrate, never set.**
 
@@ -137,7 +158,7 @@ Two related, code-level guards close adjacent gaps in the same spirit: a groundi
 
 [FIGURE: standalone-security-score-before-ai.png | Diagram: the deterministic scoring engine computes overall_risk_score/confidence_score/malicious_probability/severity from provider and correlation evidence BEFORE any AI call; the AI receives those numbers as a fixed input and the values are mechanically re-applied to its output regardless of what it produces.]
 
-## 8. Scoring-Engine Integrity: The Correlation-Flood Fix
+## 🧮 8. Scoring-Engine Integrity: The Correlation-Flood Fix
 
 A deterministic score is only a real security property if the *inputs* to that determinism can't themselves be gamed. During the most recent release's adversarial red-team pass, exactly that gap was found and fixed in the correlation half of the scoring engine.
 
@@ -161,7 +182,7 @@ This fix was unit-tested (22/22 scoring-engine tests passing, including a new re
 
 One further, smaller item disclosed in the same review: `_provider_votes()` would treat a `NaN`/`Infinity` value in a provider's own detection-ratio fields as full-strength "malicious" rather than rejecting it outright. No live provider today actually produces such a value -- VirusTotal, the only connector populating those fields, derives them from its own server-computed statistics, not from attacker-controllable text -- so this is recorded as a non-blocking hardening recommendation, not an active exploit path.
 
-## 9. Rate Limiting
+## 🚦 9. Rate Limiting
 
 Exactly one rate limiter exists anywhere in this codebase: a Redis fixed-window limiter, keyed per authenticated user, applied solely to `POST /lookup/stream` -- the endpoint that launches a new investigation:
 
@@ -178,7 +199,7 @@ The reasoning is stated directly in the route's own rejection message: each look
 
 A second limiter exists on `/auth/login` (added in a later mission-critical-reliability review, v0.2.3): a per-account limiter keyed by email, defaulting to 10 attempts per 60 seconds, both configurable, returning `429` once exceeded -- a real defense against credential-stuffing/brute-force attempts against one specific account. `/auth/register` still has no rate limiting of any kind, and there is no rate limiting anywhere else in the API. This is stated plainly in §12 rather than left implicit.
 
-## 10. Audit Logging
+## 📋 10. Audit Logging
 
 `config_audit_log` is an append-only table capturing every provider/AI-backend configuration change and every user-management/authentication event, each row carrying a timestamp, an `actor_user_id` (nullable FK) plus a denormalized `actor_email` (so history stays readable even if the account is later disabled), an `action` string, and a free-text `detail` field capped at 1000 characters.
 
@@ -192,11 +213,11 @@ A second limiter exists on `/auth/login` (added in a later mission-critical-reli
 
 [FIGURE: standalone-security-audit-log.png | The Administration console's Audit Log tab, showing account changes and provider-configuration changes together in one chronological timeline, admin-only.]
 
-## 11. CORS and Network Exposure (brief -- see the Security Architecture appendix for full detail)
+## 🌐 11. CORS and Network Exposure (brief -- see the Security Architecture appendix for full detail)
 
 Browser-originated cross-origin requests are gated by a private-network-shaped CORS regex (matching `localhost`, `127.0.0.1`, and the three RFC 1918 private ranges over `http://` only) rather than a fixed origin list or a wildcard -- this codebase never sets `allow_origins=["*"]`. This is a same-origin-policy relaxation for LAN reachability, not the platform's authorization boundary: a request from a matching origin still needs a valid bearer token for every protected route regardless. Datastore containers (Postgres, Redis, Neo4j, OpenSearch) bind to loopback only; the backend API and frontend web app publish on all host network interfaces by default, restricted at the OS level on Windows installs by a firewall rule scoped to the **Private** network profile only, created at install time and removed on uninstall.
 
-## 12. Known Limitations and Disclosed Risks
+## ⚠️ 12. Known Limitations and Disclosed Risks
 
 This platform's own release process treats "known limitation, disclosed" as a materially different thing from "silently accepted risk." The following are pulled directly from the most recent release's QA report and the security appendices' own "Recommended (not yet implemented)" lists -- none of these are hidden, and none of them were found to be actively exploited in a running instance:
 
@@ -213,12 +234,18 @@ This platform's own release process treats "known limitation, disclosed" as a ma
 
 Two positive, verified findings from the same release round out this section honestly: a full cross-cutting RBAC sweep of every mission-touched route came back clean (§2), and a dedicated red-team review found **no SQL injection risk in any query** in the same body of work (every query is parameterized via SQLAlchemy Core), **no auth bypass, no privilege escalation, no cross-user data leak, no credential leak, no command injection, and no database corruption** anywhere in that release's surface. The scoring-engine correlation-flood fix (§8), in particular, has progressed all the way from "found, fixed, unit-tested" to fully live-verified end-to-end on a fresh, real, user-installed instance -- it is not carried in this list as an open item, precisely because it no longer is one.
 
-## 13. Pentest Suite: Scope-Enforced Assessment and Gated Exploit Validation
+## ⚔️ 13. Pentest Suite: Scope-Enforced Assessment and Gated Exploit Validation
 
 The Pentest Suite (full architecture: `backend-10-pentest-suite.md`; user-facing
 reference: [PENTEST_SUITE.md](PENTEST_SUITE.md)) is this platform's only subsystem
 capable of real exploit execution, so its safety model is documented here
 explicitly rather than folded into a general feature description.
+
+> [!WARNING]
+> Exploit Validation runs genuine, real exploit modules -- not a simulation.
+> Only ever point it at systems you own or are explicitly authorized to test.
+> The gates below (scope, target, finding, module selection, and a fresh
+> explicit confirmation every time) exist precisely because of that.
 
 **Scope enforcement is the root control.** Every assessment starts with an empty
 `scope_definition` (`{"cidrs": [...], "domains": [...]}`), and an empty scope
@@ -270,16 +297,17 @@ not an inference: if a real session opens, that finding is promoted to `CONFIRME
 confidence, because an opened session is a directly observed outcome, not a
 text-parsed guess.
 
-**Disclosed limitation, not yet hardened:** the global pentest kill switch
-(`is_global_kill_switch_engaged()`) is an in-memory, process-local flag, not backed by
-the database or a shared store. This is correct today only because the shipped
-deployment (`docker-compose.yml`/`docker-compose.prod.yml`) runs a single backend
-process with no `--workers` flag; if this were ever scaled to multiple worker
-processes or replicas, engaging the kill switch in the process handling that request
-would not propagate to the others. Flagged here as a latent deployment-topology risk
-found during adversarial review, not a currently exploitable one.
+> [!CAUTION]
+> **Disclosed limitation, not yet hardened:** the global pentest kill switch
+> (`is_global_kill_switch_engaged()`) is an in-memory, process-local flag, not backed by
+> the database or a shared store. This is correct today only because the shipped
+> deployment (`docker-compose.yml`/`docker-compose.prod.yml`) runs a single backend
+> process with no `--workers` flag; if this were ever scaled to multiple worker
+> processes or replicas, engaging the kill switch in the process handling that request
+> would not propagate to the others. Flagged here as a latent deployment-topology risk
+> found during adversarial review, not a currently exploitable one.
 
-## Summary
+## 📑 Summary
 
 | Area | Strongest control in place | Most significant disclosed gap |
 |---|---|---|

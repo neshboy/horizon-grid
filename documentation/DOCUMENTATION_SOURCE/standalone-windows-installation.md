@@ -1,10 +1,28 @@
-# HORIZON GRID Standalone Windows Installation — A Complete Walkthrough
+# 🪟 HORIZON GRID Standalone Windows Installation — A Complete Walkthrough
 
-## Why this document exists
+## 📋 Table of contents
+
+- [🗺️ Why this document exists](#️-why-this-document-exists)
+- [✅ System Requirements](#-system-requirements)
+- [📦 The Installer File](#-the-installer-file)
+- [▶️ Running the Installer](#️-running-the-installer)
+- [🧙 The Setup Wizard, Page by Page](#-the-setup-wizard-page-by-page)
+- [🚦 First Launch](#-first-launch)
+- [🗂️ Start Menu Shortcuts](#️-start-menu-shortcuts)
+- [🔥 Firewall Rule](#-firewall-rule)
+- [📁 Data Location](#-data-location)
+- [🔄 Upgrade / Reconfigure](#-upgrade--reconfigure)
+- [🗑️ Uninstalling](#️-uninstalling)
+- [🐛 A Real Bug That Was Found and Fixed: The Fresh-Install Password Mismatch](#-a-real-bug-that-was-found-and-fixed-the-fresh-install-password-mismatch)
+- [🔗 See Also](#-see-also)
+
+---
+
+## 🗺️ Why this document exists
 
 `user-03-installation.md` and `tech-06-windows-deployment.md` already cover the installer from the administrator's point of view and from the architecture's point of view, respectively. This document sits between them: a single, start-to-finish walkthrough of a real standalone Windows install — every Setup Wizard page in the order it actually appears, every Start Menu shortcut, where data actually lives on disk, how to upgrade or reconfigure later, how to uninstall (including the destructive path), and a real installer bug that was found and fixed during this project. It draws directly from `windows/installer.iss` and `windows/wizard/Setup-Wizard.ps1` — nothing here is inferred from the installer's general shape.
 
-## System Requirements
+## ✅ System Requirements
 
 The installer's own `[Code]`-section prerequisite check (`Check-Prerequisites.ps1`) verifies these before copying any files, and the same script backs the "Diagnostics" shortcut's `prerequisites.txt` output for after-the-fact troubleshooting:
 
@@ -23,7 +41,7 @@ A failed hard check does not silently abort the install. It surfaces a "Continue
 
 Docker Desktop is the one prerequisite you have to solve yourself before running the installer: HORIZON GRID's real services (Postgres, Redis, Neo4j, OpenSearch, the backend, the frontend, and the Celery worker/beat processes) run as Docker containers, and nothing about the installer replaces that with a native Windows service. See `tech-06-windows-deployment.md` for the full architectural rationale.
 
-## The Installer File
+## 📦 The Installer File
 
 The compiled installer follows a fixed naming pattern set by `installer.iss`'s `OutputBaseFilename`:
 
@@ -31,7 +49,7 @@ The compiled installer follows a fixed naming pattern set by `installer.iss`'s `
 HORIZON-GRID-Setup-<version>.exe
 ```
 
-For example, the current build produces `HORIZON-GRID-Setup-0.2.2.exe`. The visible product name throughout the installer's own UI (title bar, publisher field, Start Menu group) is "HORIZON GRID" — but the installer deliberately does **not** derive the on-disk installation folder name from that branding. It installs to:
+For example, the current build produces `HORIZON-GRID-Setup-0.3.8.exe`. The visible product name throughout the installer's own UI (title bar, publisher field, Start Menu group) is "HORIZON GRID" — but the installer deliberately does **not** derive the on-disk installation folder name from that branding. It installs to:
 
 ```
 %ProgramFiles%\IOC Intelligence Platform\
@@ -39,7 +57,7 @@ For example, the current build produces `HORIZON-GRID-Setup-0.2.2.exe`. The visi
 
 This is intentional, not an oversight: every PowerShell script the wizard and Start Menu shortcuts run afterward (`Common.ps1`'s `$script:InstallDir`/`$script:DataDir`) resolves this exact folder name independent of anything in `installer.iss`. If the visible product name and the on-disk folder name were the same variable, a fresh install would land under `Program Files\HORIZON GRID` while every script installed alongside it kept looking for `Program Files\IOC Intelligence Platform` — breaking the install it had just performed, not just cosmetically mismatching a name. Section "Data Location" below covers the same reasoning for `ProgramData`.
 
-## Running the Installer
+## ▶️ Running the Installer
 
 `user-03-installation.md` already covers the first-stage Inno Setup screens (destination folder, optional desktop icon task, ready-to-install summary, file copy) in full — that flow is unchanged here and is not repeated. Two details worth calling out precisely because they're easy to miss:
 
@@ -48,7 +66,7 @@ This is intentional, not an oversight: every PowerShell script the wizard and St
 
 [FIGURE: standalone-installer-run.png | The Inno Setup installer's file-copy progress, immediately before it hands off to the Setup Wizard.]
 
-## The Setup Wizard, Page by Page
+## 🧙 The Setup Wizard, Page by Page
 
 The Setup Wizard is a real WinForms desktop application (`windows/wizard/Setup-Wizard.ps1`) — not a web page, not part of the Inno Setup UI. On launch it checks whether it's running with a genuinely elevated token and, if not, re-launches itself via a UAC prompt: being a member of the Administrators group is not sufficient on its own, because Windows gives a normally-launched process (including one started from a Start Menu shortcut, or from the installer's own postinstall step) a filtered token that cannot pass the ACL grants the wizard needs to make later. Declining that UAC prompt ends the wizard with an explanatory message box rather than continuing in a broken, can't-write-anything state.
 
@@ -117,11 +135,11 @@ Shows the local URL (`http://localhost:<port>`) and, if one was detected, the LA
 
 [FIGURE: standalone-wizard-finish.png | The Setup Complete page showing both the local and LAN access links.]
 
-## First Launch
+## 🚦 First Launch
 
 If you left "Open the platform now" checked, your browser opens straight to the sign-in page once the wizard window closes. If not, or if you're returning later, use the **Open Platform** shortcut described below — it's the reliable way to start the platform from a cold boot, not just a bookmark.
 
-## Start Menu Shortcuts
+## 🗂️ Start Menu Shortcuts
 
 `installer.iss`'s `[Icons]` section creates one Start Menu group containing:
 
@@ -142,11 +160,11 @@ A desktop icon replicating "Open Platform" is also created if you selected that 
 
 [FIGURE: standalone-start-menu.png | The HORIZON GRID Start Menu group showing all shortcuts.]
 
-## Firewall Rule
+## 🔥 Firewall Rule
 
 During "Start Installation," the wizard creates a single inbound Windows Firewall rule (named "HORIZON GRID") allowing TCP traffic on the frontend and backend ports, scoped specifically to the **Private** network profile — never Domain, never Public. This is what makes the platform reachable from other devices on the same trusted home or office network without any manual firewall configuration, while deliberately not exposing it to a public or untrusted network. Reconfiguring ports later removes and recreates this rule with the new port numbers rather than leaving a stale duplicate behind. Uninstalling — either "Remove Application" or "Remove Everything" — always removes this rule, regardless of which uninstall path you choose, since a firewall rule isn't user data.
 
-## Data Location
+## 📁 Data Location
 
 Installed program files live under `%ProgramFiles%\IOC Intelligence Platform\app\` — the backend and frontend source, the Docker Compose files (including `docker-compose.prod.yml`, the production overlay that drops development bind-mounts and switches to production start commands), and the wizard/operational scripts. This tree is read-mostly; it's what `docker compose` builds images from.
 
@@ -162,7 +180,7 @@ Writable, per-machine data lives separately, under `%ProgramData%\IOC Intelligen
 
 The entire `ProgramData\IOC Intelligence Platform\` tree is locked down to the Administrators and SYSTEM accounts only, via `icacls`, immediately after it's created — no other account on the machine can read the `.env` file's secrets. Because Docker Compose's own `env_file: .env` directive resolves relative to the Compose project directory rather than wherever a `--env-file` flag points, a synchronized working copy of `.env` also exists at `{app}\app\.env`, re-locked to the same Administrators+SYSTEM ACL on every single `docker compose` invocation — by design, there are two on-disk copies of the secrets, and both are protected identically, not just the first one.
 
-## Upgrade / Reconfigure
+## 🔄 Upgrade / Reconfigure
 
 Re-running the **Configuration** shortcut on a machine that already has the platform installed changes the wizard's behavior in two concrete ways, both driven by the wizard detecting an existing `.env` file at startup:
 
@@ -171,18 +189,21 @@ Re-running the **Configuration** shortcut on a machine that already has the plat
 
 From there, the wizard proceeds through the identical page sequence, and "Start Installation" re-runs the same `docker compose up -d --build` and health-poll sequence used on a fresh install. Your investigation data, cases, watchlists, and history are never touched by anything in this flow — only the settings you actually change in the wizard.
 
-## Uninstalling
+## 🗑️ Uninstalling
 
 Launching the uninstaller (Start Menu shortcut, or Windows Settings → Apps) presents a choice before anything is removed:
 
 - **Remove Application (the default, "Yes" option)** — stops the running containers (without the `-v` flag, so volumes and therefore all data survive) and removes the installed program files. Your configuration, credentials, and all investigation data (cases, watchlists, notes, the database itself) are left exactly as they were. Reinstalling later picks up right where you left off.
 - **Remove Everything (the "No" option, followed by a second confirmation)** — this is the explicit, destructive opt-in. It requires typing `DELETE` (all capital letters) into a confirmation box before proceeding; a plain Yes/No click is not enough for an action this irreversible. Once confirmed, it runs `docker compose down -v` (the `-v` is what actually deletes the named data volumes — Postgres, Neo4j, OpenSearch) and deletes the entire `ProgramData\IOC Intelligence Platform\` tree. There is no automatic backup taken as part of this path; if you might want the data back, use "Backup Database Now" first, or choose "Remove Application" instead.
 
+> [!WARNING]
+> "Remove Everything" permanently deletes the Docker volumes (Postgres, Neo4j, OpenSearch data) and the entire ProgramData configuration tree, with no automatic backup taken first. Typing `DELETE` is required precisely because this cannot be undone — run "Backup Database Now" beforehand if there's any chance you'll want the data back.
+
 A silent/unattended uninstall (`/VERYSILENT`) always takes the non-destructive "keep data" path automatically, since there's no one present to answer the confirmation prompt — "Remove Everything" is reachable only through the interactive uninstall flow, on purpose.
 
 [FIGURE: standalone-uninstall-confirm.png | The uninstaller's "Remove Everything" DELETE-confirmation dialog.]
 
-## A Real Bug That Was Found and Fixed: The Fresh-Install Password Mismatch
+## 🐛 A Real Bug That Was Found and Fixed: The Fresh-Install Password Mismatch
 
 During this project, a real installation failure was reported and root-caused: on a machine where an earlier, abandoned install attempt had left a Postgres data volume behind (for example, an install that was started and then cancelled, or that failed before ever being cleanly uninstalled), a later fresh install would crash-loop the backend container immediately, failing every time on a Postgres authentication error.
 
@@ -190,7 +211,7 @@ The underlying cause was a genuine gap in how the pieces fit together, not a typ
 
 The fix, in `Common.ps1`'s `Remove-StaleDatabaseVolumeIfFreshInstall`, detects this specific situation and clears it automatically: on a genuinely fresh install only (never on an upgrade or reconfigure of a real existing install, which correctly reuses its real existing password and must never have its volume touched), the wizard looks up any Postgres data volume left behind by Docker Compose's own project/volume labels — not a hardcoded volume name, since that label lookup stays correct even if the underlying project structure ever changes — and removes it before writing the new configuration. Without a matching `.env`, that orphaned volume's data was already unreachable anyway (nothing on the machine still knew its real password either), so removing it trades an inaccessible, silently-broken leftover for a clean, working fresh install; it is not a data-loss risk in any install that was actually completed successfully. The installer has been rebuilt from this fixed source.
 
-## See Also
+## 🔗 See Also
 
 - `user-03-installation.md` — the administrator-facing walkthrough of the first-stage Inno Setup screens and LAN access, in plain-language terms.
 - `tech-06-windows-deployment.md` — the architectural view: the Program Files/ProgramData split, ACL protections, and what "Start Installation" executes under the hood.

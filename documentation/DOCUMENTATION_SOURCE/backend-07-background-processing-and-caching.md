@@ -1,10 +1,21 @@
-# Background Processing and Caching
+# 🔄 Background Processing and Caching
 
 This chapter covers two backend subsystems that operate outside the hot path of an interactive lookup: the **Celery worker/beat stack** (`backend/app/workers/`) and **Redis** (`backend/app/core/cache.py`), which serves as the provider-result cache, the rate limiter, and the Celery message transport. They are covered together because they share one physical dependency — a single Redis container backs the cache, the rate limiter, and Celery's broker/result-backend, split across three logical database indexes.
 
 The fact to internalize first: **`POST /api/v1/lookup/stream` — the core investigation endpoint — never touches Celery.** Provider fan-out, correlation, AI summarization, and the final assessment run entirely in-process inside the FastAPI request/response lifecycle and stream back as Server-Sent Events. Celery exists for exactly one job, described below, with no code path that can block or delay a live investigation.
 
-## Celery: what actually runs
+> [!NOTE]
+> `POST /api/v1/lookup/stream` never touches Celery. Provider fan-out, correlation, AI summarization, and the final assessment all run in-process inside the FastAPI request/response lifecycle. Celery exists for exactly one job (below), with no code path that can block or delay a live investigation.
+
+## 📋 Table of contents
+
+- [🧵 Celery: what actually runs](#-celery-what-actually-runs)
+- [🐳 How the worker and beat containers are wired](#-how-the-worker-and-beat-containers-are-wired)
+- [💾 Redis: the shared dependency](#-redis-the-shared-dependency)
+- [🚧 Operational notes and gaps](#-operational-notes-and-gaps)
+- [Summary](#-summary)
+
+## 🧵 Celery: what actually runs
 
 `backend/app/workers/celery_app.py` defines the Celery application:
 
@@ -61,7 +72,7 @@ Concurrency note: the task function itself is synchronous (`def run_osint_crawl(
 
 That is the entire task registry. No other `@celery_app.task` decorator exists anywhere in the backend codebase — confirmed by the fact that `celery_app.py`'s `include=["app.workers.tasks"]` names the only module Celery is told to import tasks from, and that module defines exactly one.
 
-## How the worker and beat containers are wired
+## 🐳 How the worker and beat containers are wired
 
 Both `celery_worker` and `celery_beat` in `docker-compose.yml` build from the **same backend image** as the FastAPI `backend` service (`build: {context: ./backend}`), and differ only in their `command:`:
 
@@ -76,7 +87,7 @@ The Kubernetes manifests (`k8s/base/celery-worker-deployment.yaml`, `k8s/base/ce
 
 Production Compose (`docker-compose.prod.yml`) leaves both commands unchanged and only strips bind-mounted `volumes:` (`volumes: !reset []`), the same treatment given to `backend`/`frontend`. Its header comment notes why: WSL2 bind-mount permissions under Program Files caused `celery_beat`'s schedule-file writes to fail with `PermissionError` in dev, motivating removing volumes across the board.
 
-## Redis: the shared dependency
+## 💾 Redis: the shared dependency
 
 Redis (`redis:7-alpine`) is the one piece of infrastructure the two subsystems in this chapter share, partitioned into three logical database indexes on a single Redis instance/container rather than three separate processes:
 
@@ -142,7 +153,7 @@ Defaults are `lookup_rate_limit_max_calls = 10` and `lookup_rate_limit_window_se
 
 Being Redis-backed, this limiter stays correct if the FastAPI backend is horizontally scaled to multiple replicas — the module's stated reason for not using an in-process counter. Contrast the crawler's own **separate** in-process limiter, `AsyncMinIntervalLimiter` (`app/crawler/sources/rate_limit.py`), which spaces out GitHub (6.0s) and Reddit (1.1s) search calls within the crawler's OSINT sub-sources using a plain `asyncio.Lock` + monotonic clock. It is intentionally not Redis-backed and not shared with `RateLimiter`, since it only needs to bound one process's own outbound rate to a third-party API, not enforce a global cross-replica cap.
 
-## Operational notes and gaps
+## 🚧 Operational notes and gaps
 
 - **No dedicated automated tests target `app/core/cache.py` or `app/workers/tasks.py` directly.** No `test_cache*.py` or `test_workers*.py`/`test_tasks*.py` file exists under `backend/app/tests/`. Cache coverage is indirect, via provider/orchestrator tests exercising cache-hit/miss branches as a side effect; the hourly task has no unit test of its own.
 - **No cache metrics or hit/miss counters are exposed.** The only observability into cache behavior is the `from_cache` boolean on each `ProviderResult`, visible per-lookup — there is no aggregate hit-rate metric on the Prometheus `/metrics` endpoint.
@@ -152,6 +163,6 @@ Being Redis-backed, this limiter stays correct if the FastAPI backend is horizon
 [FIGURE: backend-07-background-processing-and-caching-diagram-1.png | Diagram: Operational notes and gaps]
 Diagram: Celery worker/beat topology and the three logical Redis database indexes (`/0` cache + rate-limit, `/1` broker, `/2` result backend) shared between the FastAPI backend, the Celery worker, and the Celery beat scheduler. A single Redis outage takes down both the cache/rate-limiter and the Celery broker/backend at once, since all three indexes live in one physical process.
 
-## Summary
+## 📋 Summary
 
 Celery is real, running infrastructure in every deployment of this platform (Compose and Kubernetes alike), but currently backs exactly one job — an hourly re-crawl of OSINT sources for recently-investigated, crawler-eligible IOCs, capped at 25 per run — with no involvement in the interactive, SSE-streamed lookup pipeline, which runs entirely in-process. Redis is the shared substrate for both subsystems, split by logical index into a provider-result cache plus fixed-window rate limiter (`/0`) and a Celery broker/result-backend pair (`/1`, `/2`). The cache is positive-only (no `NO_DATA`/error caching) with a one-hour default TTL and no manual invalidation path; the rate limiter is per authenticated user on the lookup-creation endpoint, chosen specifically because a Redis-backed counter stays correct under horizontal scaling, unlike the crawler's separate, process-local `AsyncMinIntervalLimiter`. Redis should be treated as a hard dependency of the live lookup path via the rate limiter, not just a cache, and Celery should not be assumed to be doing more than this one documented hourly job.

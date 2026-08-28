@@ -1,12 +1,26 @@
-# HORIZON GRID Threat Scoring — How the Number Is Actually Computed
+# 🧮 HORIZON GRID Threat Scoring — How the Number Is Actually Computed
 
-## Why this document exists
+## 💡 Why this document exists
 
 Every investigation in HORIZON GRID ends with a threat score from 0-100, a confidence percentage, a malicious-probability percentage, and a severity band (none/low/medium/high/critical). This document explains exactly how those four numbers are produced — not an approximation, the real formula, taken directly from `app/scoring/engine.py` (`SCORING_ENGINE_VERSION = "1.0"`), the module that computes them.
 
-**The single most important fact about this engine: it is deterministic, not AI-generated.** The score is computed from real, structured evidence — provider verdicts and correlation-graph relationships — using fixed weights and formulas, before the AI is ever called. The AI is handed the finished number as a given fact and asked only to explain it in prose. It cannot invent a different number, and if it tries, the platform overwrites its output with the real one and re-validates the whole assessment against that real number before anything is saved. This is covered in full in the AI Guide; this document is about the number itself.
+> [!IMPORTANT]
+> **The single most important fact about this engine: it is deterministic, not AI-generated.** The score is computed from real, structured evidence — provider verdicts and correlation-graph relationships — using fixed weights and formulas, before the AI is ever called. The AI is handed the finished number as a given fact and asked only to explain it in prose. It cannot invent a different number, and if it tries, the platform overwrites its output with the real one and re-validates the whole assessment against that real number before anything is saved. This is covered in full in the AI Guide; this document is about the number itself.
 
-## Threat score ≠ confidence — read this before anything else
+## 📚 Table of Contents
+
+- [⚖️ Threat score ≠ confidence — read this before anything else](#️-threat-score--confidence--read-this-before-anything-else)
+- [🧩 The two inputs that build the score](#-the-two-inputs-that-build-the-score)
+  - [Component 1: provider-verdict consensus (65 points)](#component-1-provider-verdict-consensus-65-points)
+  - [Component 2: correlation-graph evidence (35 points)](#component-2-correlation-graph-evidence-35-points)
+- [🛡️ Security Assessment findings: a floor, not an additive term](#️-security-assessment-findings-a-floor-not-an-additive-term)
+- [🚨 Severity bands](#-severity-bands)
+- [🧾 Versioning and auditability](#-versioning-and-auditability)
+- [📐 Worked example](#-worked-example)
+
+---
+
+## ⚖️ Threat score ≠ confidence — read this before anything else
 
 A HORIZON GRID assessment might show:
 
@@ -22,7 +36,7 @@ These are two different questions with two different answers:
 
 A high score with low confidence is a real, correct, and useful combination — it means "this looks bad, but verify it before treating it as certain," not "the platform doesn't know what it's doing." A future analyst should always read both numbers together, never the score alone.
 
-## The two inputs that build the score
+## 🧩 The two inputs that build the score
 
 The 0-100 malicious-evidence budget is split across two additive components that sum to 100 points:
 
@@ -61,7 +75,7 @@ Each qualifying edge carries a confidence value; the sum of qualifying edge conf
 
 **A real vulnerability was found and fixed here during this project's own red-team testing, and it is worth explaining because it shapes how this component behaves today.** Several providers (AlienVault OTX, ThreatFox, MalwareBazaar) build these relationships from free-text fields in community-submitted threat intelligence — meaning a single free, unprivileged account on one of those services could previously publish a submission listing several distinct (but fabricated) malware-family names about *any* indicator, generating several separate graph edges from one source with zero real corroboration, and push an innocent indicator's score into the "high" severity band. This was reproduced numerically during adversarial testing and fixed by applying the *same* corroboration-multiplier logic used for provider votes to correlation edges as well — keyed on the number of distinct providers that actually asserted a qualifying relationship, not the number of edges. A flood of fabricated claims from one source is now capped at the same 40% ceiling a lone provider vote receives; genuine agreement from two or more independent providers scales back up toward full strength, exactly as before. This closed the gap without weakening real, corroborated findings.
 
-## Security Assessment findings: a floor, not an additive term
+## 🛡️ Security Assessment findings: a floor, not an additive term
 
 If the Security Assessment Toolkit (active scanning — port/TLS/DNS/HTTP checks) has ever run against this indicator, its most severe finding acts as a **floor** on `overall_risk_score` and `confidence_score` only:
 
@@ -75,7 +89,7 @@ If the Security Assessment Toolkit (active scanning — port/TLS/DNS/HTTP checks
 
 This is deliberately a floor (`overall_risk_score = max(reputation_score, sa_floor)`), not an addition, and it is deliberately **excluded from `malicious_probability`**. The reasoning: a direct technical observation this platform made itself right now (an open critical vulnerability the scanner actually touched) is trustworthy without needing cross-provider corroboration the way a third-party reputation opinion does — but a vulnerability finding ("this target is dangerous to leave reachable") is a fundamentally different claim than "this indicator is a confirmed malicious actor." An unpatched, exposed service on an otherwise-unknown IP does not by itself prove that IP is malicious — but it absolutely should raise the overall risk picture regardless of what any reputation feed says. Keeping the two numbers separate means `malicious_probability` always means exactly what it says, and a severe technical exposure correctly cannot, by itself, force a "malicious" verdict — but it can, correctly, still force a "high" or "critical" overall risk score.
 
-## Severity bands
+## 🚨 Severity bands
 
 `overall_risk_score` is mapped to a severity label using fixed, documented thresholds (a starting judgment call, not a statistically calibrated model — there is no labeled dataset this platform trains against):
 
@@ -87,11 +101,11 @@ This is deliberately a floor (`overall_risk_score = max(reputation_score, sa_flo
 | ≥ 10 | Low |
 | < 10 | None |
 
-## Versioning and auditability
+## 🧾 Versioning and auditability
 
 Every persisted assessment records `scoring_engine_version` (currently `"1.0"`) and a full `scoring_breakdown` — every intermediate number that went into the final score (mean provider vote, corroboration factor, correlation fraction, security-assessment floor, and so on) — alongside the final numbers. This was itself a real gap found and fixed during this project: the engine always computed this breakdown, but an early version of the integration discarded it before saving. It is now persisted on every assessment, so a past score can always be explained and traced back to exactly which version of the weighting scheme produced it, rather than requiring anyone to trust the number on faith.
 
-## Worked example
+## 📐 Worked example
 
 A real live investigation during this project's own testing, with AlienVault OTX as the only provider casting a vote (malicious, lone provider — 40% corroboration strength) plus one corroborated malware-family correlation edge:
 

@@ -2,17 +2,29 @@
 
 A **provider** is a self-contained connector class in the platform's backend that queries one external data source — a threat-intelligence feed, a vulnerability database, a DNS blocklist, a certificate-transparency log, a sandbox scanner, or an OSINT (open-source intelligence) crawler — for information about a single IOC (indicator of compromise) submitted to a lookup. All 18 providers shipped with the platform are registered in `backend/app/providers/registry.py` (`_ALL_PROVIDERS`) and share one common interface, described below.
 
-## Common Provider Interface
+## 📋 Table of contents
+
+- [Common Provider Interface](#-common-provider-interface)
+- [Concurrent Fan-Out Execution Model](#-concurrent-fan-out-execution-model)
+- [Redis Caching Layer](#-redis-caching-layer)
+- [The 18 Registered Providers](#-the-18-registered-providers)
+- [Wizard Coverage and the "6 Providers with No UI" Discrepancy](#-wizard-coverage-and-the-6-providers-with-no-ui-discrepancy)
+- [Runtime IOC Provider Configuration (No Restart)](#-runtime-ioc-provider-configuration-no-restart)
+- [The Same Live-Test Pattern, Extended to AI Backends](#-the-same-live-test-pattern-extended-to-ai-backends)
+
+---
+
+## 🔌 Common Provider Interface
 
 Every provider implements the same three-part contract, so the orchestrator (the component that fans a lookup out to providers — see below) never needs provider-specific logic:
 
-- **`supports(ioc_type)`** — a boolean check for whether this provider is eligible to run against the specific kind of indicator submitted. `ioc_type` is one of 31 values in the platform's `IOCType` enum (`app/ioc/types.py`), assigned to the raw input by the IOC-type detector before any provider runs. A provider is only invoked if `supports()` returns true for the lookup's detected type (e.g. `hybrid_analysis` only supports `sha256`; `whois_rdap` supports `domain`, `ipv4`, `ipv6`, and `asn`).
+- **`supports(ioc_type)`** — a boolean check for whether this provider is eligible to run against the specific kind of indicator submitted. `ioc_type` is one of 33 values in the platform's `IOCType` enum (`app/ioc/types.py`), assigned to the raw input by the IOC-type detector before any provider runs. A provider is only invoked if `supports()` returns true for the lookup's detected type (e.g. `hybrid_analysis` only supports `sha256`; `whois_rdap` supports `domain`, `ipv4`, `ipv6`, and `asn`).
 - **`configured`** — a boolean property reporting whether the provider currently has what it needs to run (typically a credential). Some providers are unconditionally configured because they require no credential at all — for example `nvd` has `requires_key = False` and `configured = True` unconditionally. Others require specific fields to be present — for example `censys` is only `configured` when **both** a Personal Access Token and an Organization ID are set; either alone leaves it not configured.
 - **`run()`** (via the shared `BaseProvider.run()`) — executes the actual outbound call (HTTP request, DNS query, etc.) and returns a normalized `ProviderResult`. This call is wrapped with a timeout and retry policy applied uniformly across all providers: `provider_timeout_seconds` (default 20 seconds) and `provider_max_retries` (default 2), with exponential backoff implemented via the `tenacity` library (`wait_exponential(multiplier=0.5, max=4)`).
 
 Before `run()` is invoked, each provider call first checks the Redis cache layer (described below); a cache hit skips the outbound call entirely.
 
-## Concurrent Fan-Out Execution Model
+## ⚡ Concurrent Fan-Out Execution Model
 
 For a given lookup, `run_all_providers()` (`backend/app/providers/orchestrator.py`) does **not** call providers one after another. It fans out **concurrently** to every registered provider whose `supports(ioc_type)` is true, using `asyncio.create_task` to launch all eligible provider calls at once and `asyncio.as_completed` to consume each result as soon as it finishes, in whatever order calls actually complete. Each provider call independently goes through: Redis cache check → `BaseProvider.run()` (timeout/retry as above) → normalized `ProviderResult`. As each result arrives, it is persisted to Postgres and streamed to the client immediately (rather than the pipeline waiting for every provider to finish before persisting or streaming anything).
 
@@ -22,13 +34,13 @@ The platform's integration test suite exercises this concurrency directly agains
 
 *"Provider A" and "Provider B" above are illustrative stand-ins for any two of the up to 18 registered providers eligible for a given IOC type — the fan-out is not limited to two.*
 
-## Redis Caching Layer
+## 💾 Redis Caching Layer
 
 Provider results are cached in Redis to avoid repeating identical outbound lookups. The cache key format is `provider_cache:{provider_id}:{ioc_type}:{sha256(value)}` (`app/core/cache.py`), and the time-to-live is `provider_cache_ttl_seconds`, which defaults to 3600 seconds (1 hour). This provider-result cache lives on Redis logical DB index `/0`, kept separate from the Celery broker (`/1`) and Celery result backend (`/2`) that run on the same Redis instance.
 
 Two providers additionally maintain their own cache on top of this (visible in the Notes column of the table below): `cisa_kev` keeps an in-memory cached copy of its catalog with a 1-hour TTL, and `mitre_attack` caches its STIX bundle for 1 hour. These are provider-internal caches, distinct from the shared Redis provider-result cache described above.
 
-## The 18 Registered Providers
+## 📋 The 18 Registered Providers
 
 | Provider | Category | Supported IOC types | Key requirement | Notes |
 |---|---|---|---|---|
@@ -51,17 +63,21 @@ Two providers additionally maintain their own cache on top of this (visible in t
 | `censys` | passive_dns | ipv4, ipv6 | Personal Access Token **and** Organization ID both required | Platform API v3 |
 | `internet_intelligence` | osint | domain, ipv4, malware_family, threat_actor, campaign, cve, file_name | none | OSINT crawler wrapping GitHub/Reddit/RSS/pastebin sources (`app/crawler/`) |
 
-**A deliberately tested safety guarantee, specific to these two newest providers:** both `urlscan` and `google_safe_browsing` are built so that a genuine failure — a rejected/invalid API key, an unreachable API, or a rate limit — is always reported as an error or unknown status, never as a false "clean"/"safe" result. `google_safe_browsing.py`'s own module docstring states the invariant directly: an empty or missing `matches` field on a genuine HTTP 200 response is the *only* input that may ever produce a "clean" verdict; every other outcome — a non-200 status, a network error or timeout, or a response body that doesn't parse the way the API contract promises — routes through the same error-handling path, which always sets a `{"verdict": "unknown", ...}` payload rather than anything that could be mistaken downstream for a real clean scan. This was confirmed with a real, live chaos test that supplied deliberately invalid credentials to both providers' real external APIs: the invalid key was rejected with `status=error`, Safe Browsing's own verdict field read `"unknown"` (never `"clean"`), and the investigation's overall verdict was reported as `UNKNOWN` rather than benign or clean.
+> [!IMPORTANT]
+> **A deliberately tested safety guarantee, specific to these two newest providers:** both `urlscan` and `google_safe_browsing` are built so that a genuine failure — a rejected/invalid API key, an unreachable API, or a rate limit — is always reported as an error or unknown status, never as a false "clean"/"safe" result. `google_safe_browsing.py`'s own module docstring states the invariant directly: an empty or missing `matches` field on a genuine HTTP 200 response is the *only* input that may ever produce a "clean" verdict; every other outcome — a non-200 status, a network error or timeout, or a response body that doesn't parse the way the API contract promises — routes through the same error-handling path, which always sets a `{"verdict": "unknown", ...}` payload rather than anything that could be mistaken downstream for a real clean scan. This was confirmed with a real, live chaos test that supplied deliberately invalid credentials to both providers' real external APIs: the invalid key was rejected with `status=error`, Safe Browsing's own verdict field read `"unknown"` (never `"clean"`), and the investigation's overall verdict was reported as `UNKNOWN` rather than benign or clean.
 
-## Wizard Coverage and the "6 Providers with No UI" Discrepancy
+## 🧙 Wizard Coverage and the "6 Providers with No UI" Discrepancy
 
-The Windows setup **wizard** (`windows/wizard/Setup-Wizard.ps1`, `$ProviderDefs`) presents a Provider Configuration screen listing exactly 8 entries: `virustotal`, `abuseipdb`, `otx`, `abusech` (a single combined entry covering the shared abuse.ch key used by `urlhaus`, `threatfox`, and `malwarebazaar`), `nvd`, `hybrid_analysis`, `censys`, and `phishtank`. Counting the three abuse.ch-backed connectors individually, those 8 wizard entries map to 10 of the platform's 16 backend providers. A sample of the wizard's entries was independently checked against the corresponding provider's code and matched exactly — for example, the wizard's Censys note ("Requires both a Personal Access Token and an Organization ID") matches `censys.py`'s configured check precisely, and the wizard's abuse.ch note ("one free Auth-Key covers all three connectors") matches all three connectors reading the same `abusech_auth_key` setting.
+The Windows setup **wizard** (`windows/wizard/Setup-Wizard.ps1`, `$ProviderDefs`) presents a Provider Configuration screen listing exactly 8 entries: `virustotal`, `abuseipdb`, `otx`, `abusech` (a single combined entry covering the shared abuse.ch key used by `urlhaus`, `threatfox`, and `malwarebazaar`), `nvd`, `hybrid_analysis`, `censys`, and `phishtank`. Counting the three abuse.ch-backed connectors individually, those 8 wizard entries map to 10 of the platform's 18 backend providers. A sample of the wizard's entries was independently checked against the corresponding provider's code and matched exactly — for example, the wizard's Censys note ("Requires both a Personal Access Token and an Organization ID") matches `censys.py`'s configured check precisely, and the wizard's abuse.ch note ("one free Auth-Key covers all three connectors") matches all three connectors reading the same `abusech_auth_key` setting.
 
-The remaining 6 backend providers — `crtsh`, `cisa_kev`, `mitre_attack`, `whois_rdap`, `spamhaus`, and `internet_intelligence` — have real, working backend implementations but **do not appear anywhere in the wizard's UI**. This is a documented discrepancy between the wizard and the backend provider registry, but it is flagged as **consistent behavior, not a bug**: all six of these providers have `requires_key = False` — there is no credential for a user to enter in the first place. Because the wizard's Provider Configuration screen exists specifically to collect and test credentials, a provider with nothing to configure has nothing to show there. This is corroborated on the backend side: `backend/app/providers/connection_test.py`'s handler dictionary (which powers the wizard's live "Test" button, `POST /api/v1/providers/{id}/test`) likewise defines no test handler for these six providers, falling back to a message that explicitly identifies them as requiring no credential.
+The remaining 8 backend providers split into two different groups, for two different reasons:
 
-In short: 8 wizard entries cover 10 providers that have a credential-related field to configure — 8 of those (`virustotal`, `abuseipdb`, `otx`, and the three abuse.ch-backed connectors, plus `hybrid_analysis`, `censys`) require a key to function at all, while 2 (`nvd`, `phishtank`) only accept an optional key to raise their rate limit rather than strictly needing one. The other 6 providers run unconditionally with no credential of any kind and correctly have no wizard entry and no connection-test handler.
+- **6 need no credential at all** — `crtsh`, `cisa_kev`, `mitre_attack`, `whois_rdap`, `spamhaus`, and `internet_intelligence` have real, working backend implementations but **do not appear anywhere in the wizard's UI**. This is a documented discrepancy between the wizard and the backend provider registry, but it is flagged as **consistent behavior, not a bug**: all six of these providers have `requires_key = False` — there is no credential for a user to enter in the first place. Because the wizard's Provider Configuration screen exists specifically to collect and test credentials, a provider with nothing to configure has nothing to show there. This is corroborated on the backend side: `backend/app/providers/connection_test.py`'s handler dictionary (which powers the wizard's live "Test" button, `POST /api/v1/providers/{id}/test`) likewise defines no test handler for these six providers, falling back to a message that explicitly identifies them as requiring no credential.
+- **2 do need a credential but are still absent from the wizard on both platforms** — `urlscan` and `google_safe_browsing` require an API key to function, yet neither the Windows wizard nor the Linux terminal wizard presents a field for them. Both are configured after install, from the app's own Providers page instead of the setup wizard.
 
-## Runtime IOC Provider Configuration (No Restart)
+In short: 8 wizard entries cover 10 providers that have a credential-related field to configure — 8 of those (`virustotal`, `abuseipdb`, `otx`, and the three abuse.ch-backed connectors, plus `hybrid_analysis`, `censys`) require a key to function at all, while 2 (`nvd`, `phishtank`) only accept an optional key to raise their rate limit rather than strictly needing one. Of the remaining 8 providers, 6 run unconditionally with no credential of any kind and correctly have no wizard entry and no connection-test handler, while the other 2 (`urlscan`, `google_safe_browsing`) do need a credential but are configured post-install instead of through the wizard.
+
+## 🔄 Runtime IOC Provider Configuration (No Restart)
 
 Everything described above — the `configured` property, the credential fields, and the enabled/disabled state of each of the platform's registered providers — was, prior to this session, entirely `.env`-driven and frozen for the lifetime of the running process: `app/core/config.py`'s `get_settings()` is a process-lifetime `@lru_cache` singleton, so changing a provider's key or toggling it off meant editing `.env` and restarting the Docker containers before the change had any effect.
 
@@ -73,9 +89,9 @@ The provider-availability model also gained a new state to describe this. Previo
 
 Finally, `POST /api/v1/lookup/stream` gained an optional `provider_ids` field: passing a list of provider IDs restricts that one investigation to exactly those providers, regardless of how many are otherwise enabled and configured platform-wide, without affecting any other investigation.
 
-## The Same Live-Test Pattern, Extended to AI Backends
+## 🧪 The Same Live-Test Pattern, Extended to AI Backends
 
-The `POST /api/v1/providers/{id}/test` mechanism described above — the one behind each provider's live wizard "Test" button — has a direct counterpart for the AI layer. Until this session, none of the platform's AI backends (Ollama, Anthropic, Bedrock, Gemini, or Groq — see the *AI Architecture* chapter for the backends themselves) had any live connection test at all; a new `POST /api/v1/ai/test` endpoint (`backend/app/api/routes/ai_config.py`, `backend/app/ai/connection_test.py`) now gives every one of them a real "Test Connection" button in the wizard's AI Configuration screen, mirroring the provider-side pattern rather than introducing a new one.
+The `POST /api/v1/providers/{id}/test` mechanism described above — the one behind each provider's live wizard "Test" button — has a direct counterpart for the AI layer. None of the platform's AI backends had any live connection test until a `POST /api/v1/ai/test` endpoint (`backend/app/api/routes/ai_config.py`, `backend/app/ai/connection_test.py`) was added; it now gives every one of the platform's eleven AI backends (Ollama, Anthropic, AWS Bedrock, Google Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI/Grok, Mistral, and OpenRouter — see the *AI Architecture* chapter for the backends themselves) a real "Test Connection" button in the wizard's AI Configuration screen, mirroring the provider-side pattern rather than introducing a new one.
 
 The same design rule that governs the provider-side tester carries over deliberately: the endpoint always tests the *candidate* credentials currently entered in the form, never the application's stored/active configuration. Because the test path never reads from or writes to the saved config, trying out a not-yet-saved key can never race with — or accidentally disturb — whatever backend and key the running platform is actually using for real investigations.
 

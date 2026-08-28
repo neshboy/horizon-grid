@@ -4,7 +4,7 @@ This chapter describes the backend as an *operational system*: which Docker cont
 
 All facts below are drawn directly from `docker-compose.yml`, `docker-compose.prod.yml`, `backend/Dockerfile`, `backend/app/main.py`, `backend/app/core/config.py`, `backend/app/core/db.py`, `backend/app/core/runtime_config.py`, `backend/app/auth/rbac.py`, and `backend/app/api/routes/lookup.py`.
 
-## 1. Docker Service Inventory
+## 🐳 1. Docker Service Inventory
 
 `docker-compose.yml` defines eight services: four datastores, three backend-codebase processes (the FastAPI app plus two Celery roles), and the frontend. See the Database Architecture chapter for what Postgres/Redis/Neo4j/OpenSearch are actually used for, and the Security Architecture chapter for the network-exposure rationale behind the port bindings below.
 
@@ -31,7 +31,7 @@ Operationally relevant details:
 [FIGURE: backend-01-overview-and-lifecycle-diagram-1.png | Diagram: 1. Docker Service Inventory]
 Diagram: Docker Service Topology and Dependency Graph. Dotted arrows are Compose `depends_on` health gates, not runtime data paths -- `backend` and `celery_worker` wait on Postgres and Redis health checks, `celery_beat` waits on Redis only, and `frontend` waits only for `backend` to exist, not to be healthy.
 
-## 2. Application Startup Lifecycle
+## ⚙️ 2. Application Startup Lifecycle
 
 Startup happens in three layers, in this exact order, every time the `backend` container starts.
 
@@ -46,11 +46,21 @@ Two consequences follow: running the built image directly (bypassing Compose) st
 
 ### 2.2 FastAPI application construction (import time)
 
-Everything in `backend/app/main.py` at module scope runs once, before Uvicorn accepts any connection: structured logging is configured first (`structlog.configure(processors=[JSONRenderer()])`); the `@lru_cache`'d `Settings` singleton is constructed and frozen for the process lifetime (`get_settings()`); the `FastAPI` app is built with `openapi_url=f"{settings.api_v1_prefix}/openapi.json"` and `docs_url="/docs"`; `CORSMiddleware` is added with `allow_origins=["http://localhost:3000"] if settings.debug else []` (since `debug` defaults to `True`, a deployment that never sets `DEBUG=false` will only ever allow `localhost:3000` as a CORS origin, regardless of where the frontend is actually hosted); `Instrumentator().instrument(app).expose(app, endpoint="/metrics")` is wired in ahead of every router so it observes all of them; then ten routers are registered via `app.include_router(..., prefix=settings.api_v1_prefix)` in this fixed order: `auth`, `lookup`, `providers`, `ai_config`, `analysis`, `hunting`, `pivot`, `basket`, `cases`, `runtime` (`app/main.py:38-47`). Finally, `GET /health` is registered directly on `app`, outside any router and outside the `/api/v1` prefix, requiring no authentication -- this is the endpoint a container healthcheck or load balancer should target.
+Everything in `backend/app/main.py` at module scope runs once, before Uvicorn accepts any connection: structured logging is configured first (`structlog.configure(processors=[JSONRenderer()])`); the `@lru_cache`'d `Settings` singleton is constructed and frozen for the process lifetime (`get_settings()`); the `FastAPI` app is built with `openapi_url=f"{settings.api_v1_prefix}/openapi.json"` and `docs_url="/docs"`; `CORSMiddleware` is added with `allow_origins=["http://localhost:3000"] if settings.debug else []` (since `debug` defaults to `True`, a deployment that never sets `DEBUG=false` will only ever allow `localhost:3000` as a CORS origin, regardless of where the frontend is actually hosted); `Instrumentator().instrument(app).expose(app, endpoint="/metrics")` is wired in ahead of every router so it observes all of them; then fifteen routers are registered via `app.include_router(..., prefix=settings.api_v1_prefix)` in this fixed order: `auth`, `lookup`, `providers`, `ai_config`, `analysis`, `hunting`, `pivot`, `basket`, `cases`, `runtime`, `admin`, `security_assessment`, `pentest`, `pentest_exploit`, `dashboard` (`app/main.py:173-187`) -- the last five (admin, the Security Assessment Toolkit, the Pentest Suite's two routers, and the dashboard) are each covered in their own chapter, not this one. Finally, four endpoints are registered directly on `app`, outside any router and outside the `/api/v1` prefix, all requiring no authentication: `GET /health` (a deliberately dependency-free liveness probe that stays fast and infra-independent so it still works against a bare CI runner with no Postgres/Redis running), `GET /health/detailed` (the real dependency-aware check -- pings Postgres and Redis, returns `503` if Postgres is down, `200` with `status:"degraded"` if only Redis is down), `GET /network-info` (a point-in-time snapshot of the Windows wizard's last-detected LAN IP), and `GET /metrics`.
 
-### 2.3 The `startup` event: seeding runtime provider configuration
+> [!NOTE]
+> `GET /health/detailed`, not the plain `GET /health` above it, is the endpoint a container healthcheck, load balancer, or the platform's own reliability watchdog should target -- confirmed live that plain `/health` still returns `200` with Postgres fully stopped, which is exactly the failure a watchdog needs to detect and `/health` by design cannot report.
 
-`app.main` registers exactly one `@app.on_event("startup")` handler, `_seed_runtime_config()`, calling `seed_from_env_if_empty()` (`app/core/runtime_config.py`), once per process start, after the app is fully constructed but before Uvicorn begins accepting connections. If `provider_runtime_configs` already has any row, this is a no-op. Otherwise, for each of the 11 AI backends and 18 registered IOC providers, it reads that backend's/provider's credential fields off the frozen `Settings` singleton (i.e. whatever was in `.env` at container start) and inserts a `ProviderRuntimeConfig` row, Fernet-encrypting credentials before writing (full mechanism in the Provider/AI Runtime Configuration chapter). The handler is wrapped in its own `try/except Exception`, logging and continuing rather than crashing the process on failure (`main.py:57-60`) -- a failed seed leaves providers reporting as unconfigured rather than blocking startup.
+### 2.3 The `startup` events: warnings, seeding runtime provider configuration, and orphan recovery
+
+`app.main` registers four `@app.on_event("startup")` handlers, run in this fixed order, once per process start, after the app is fully constructed but before Uvicorn begins accepting connections:
+
+1. `_warn_if_jwt_secret_is_a_placeholder()` -- logs a loud warning if `JWT_SECRET_KEY` is still `.env.example`'s literal placeholder string, since every JWT the process issues is only as strong as that value.
+2. `_warn_if_msf_rpc_password_is_a_placeholder()` -- the same check for the Metasploit RPC password behind the Pentest Suite's exploit-validation feature (mitigated in practice by `msfrpcd` being bound to `127.0.0.1` only, but still worth flagging on a fresh install).
+3. `_seed_runtime_config()` -- this subsection's focus, detailed below.
+4. `_recover_orphaned_running_lookups()` -- flips any `IOCLookup` row still `status=RUNNING` at process start back to `FAILED`. A hard kill (OOM, `docker kill`, power loss) gives the previous process zero chance to run its own cleanup, so any row already `RUNNING` the instant a fresh process starts cannot belong to a request that process is handling -- it is necessarily orphaned from a previous instance.
+
+`_seed_runtime_config()` calls `seed_from_env_if_empty()` (`app/core/runtime_config.py`). If `provider_runtime_configs` already has any row, this is a no-op. Otherwise, for each of the 11 AI backends and 18 registered IOC providers, it reads that backend's/provider's credential fields off the frozen `Settings` singleton (i.e. whatever was in `.env` at container start) and inserts a `ProviderRuntimeConfig` row, Fernet-encrypting credentials before writing (full mechanism in the Provider/AI Runtime Configuration chapter). The handler is wrapped in its own `try/except Exception`, logging and continuing rather than crashing the process on failure (`main.py:233-236`) -- a failed seed leaves providers reporting as unconfigured rather than blocking startup.
 
 ### 2.4 Uvicorn serving
 
@@ -59,7 +69,7 @@ Once the startup event completes, Uvicorn accepts TCP connections on `0.0.0.0:80
 [FIGURE: backend-01-overview-and-lifecycle-diagram-2.png | Diagram: 2.4 Uvicorn serving]
 Diagram: Startup Sequence -- Migrate, Construct, Seed, Serve. Only step 1 is baked into the Compose `command:`, not the Docker image itself; steps 2-4 all happen inside the single `uvicorn app.main:app` process, in that fixed order, every time it starts.
 
-## 3. Request Lifecycle: the General Case
+## 🌐 3. Request Lifecycle: the General Case
 
 Every protected endpoint (everything except `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, and the unauthenticated `GET /health`) follows the same shape: **authenticate -> authorize -> route handler -> persistence**.
 
@@ -70,7 +80,7 @@ Every protected endpoint (everything except `POST /auth/register`, `POST /auth/l
 
 Example: `PATCH /api/v1/cases/{case_id}` resolves `require_permission("case:write")`, loads the case via `_load_case()` (`404` if missing), applies only the fields present in the body via `model_dump(exclude_unset=True)`, and returns the full serialized case -- all on the single request-scoped session, committed implicitly when it closes cleanly.
 
-## 4. Request Lifecycle: the Streamed Lookup (`POST /api/v1/lookup/stream`)
+## 📡 4. Request Lifecycle: the Streamed Lookup (`POST /api/v1/lookup/stream`)
 
 The lookup-creation endpoint is the one exception to "single request-scoped session, return JSON," because it holds one HTTP connection open for the tens of seconds a full investigation takes (provider fan-out, per-provider AI summaries, correlation, final AI assessment) and streams progress as Server-Sent Events instead of blocking until completion. `stream_lookup()` (`app/api/routes/lookup.py:51-`):
 
@@ -98,6 +108,6 @@ Every other write in the pipeline -- `CorrelationEdgeRecord` rows, the `FinalAss
 [FIGURE: backend-01-overview-and-lifecycle-diagram-3.png | Diagram: 4. Request Lifecycle: the Streamed Lookup (`POST /api/v1/lookup/stream`)]
 Diagram: SSE Lookup Request Lifecycle. The generator commits after every single step rather than once at the end, and owns its own database session independent of the request-scoped one -- both choices exist specifically so a disconnect or mid-pipeline exception never leaves already-completed provider/correlation work uncommitted or the lookup stuck in `RUNNING`.
 
-## 5. Summary
+## ✅ 5. Summary
 
-The backend's operational shape: eight Compose services (four datastores, the FastAPI process, two Celery roles that never touch the live lookup path, and the frontend), started with a migrate-then-serve sequence baked into the `backend`/`celery_*` commands rather than the container image, followed by a best-effort runtime-config seed on the FastAPI `startup` event. Every authenticated request follows authenticate -> authorize -> thin route handler -> service module -> persistence via a single request-scoped session -- except `POST /api/v1/lookup/stream`, which trades that simplicity for a self-managed, commit-per-step session and an SSE event stream engineered to survive both mid-pipeline exceptions and mid-stream client disconnects without losing already-completed work.
+The backend's operational shape: eight Compose services (four datastores, the FastAPI process, two Celery roles that never touch the live lookup path, and the frontend), started with a migrate-then-serve sequence baked into the `backend`/`celery_*` commands rather than the container image, followed by four best-effort FastAPI `startup` events -- two placeholder-credential warnings, the runtime-config seed, and orphaned-lookup recovery. Every authenticated request follows authenticate -> authorize -> thin route handler -> service module -> persistence via a single request-scoped session -- except `POST /api/v1/lookup/stream`, which trades that simplicity for a self-managed, commit-per-step session and an SSE event stream engineered to survive both mid-pipeline exceptions and mid-stream client disconnects without losing already-completed work.

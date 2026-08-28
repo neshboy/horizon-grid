@@ -2,11 +2,11 @@
 
 This section closes the technical appendix by separating what HORIZON GRID actually does today from what its existing architecture is positioned to grow into. An **IOC (Indicator of Compromise)** is the artifact a user submits for lookup — an IP address, domain, URL, file hash, CVE ID, etc. A **provider** is a connector to one external threat-intelligence, vulnerability, or OSINT data source that the platform queries for a given IOC. Everything in "Current Capabilities" below is a recap of functionality documented elsewhere in this appendix and verified directly against source code; it introduces no new claims. Everything in "Future Possibilities" is explicitly speculative and is scoped strictly to work that the existing architecture already provisions for.
 
-## Current Capabilities
+## ✅ Current Capabilities
 
-*(Updated for v0.2.4 — the counts below were re-verified directly against `backend/app/ioc/types.py`, `backend/app/providers/registry.py`, and `backend/app/core/runtime_config.py` at documentation time; the AI-backend and provider counts in earlier revisions of this page were stale and have been corrected.)*
+*(Updated for v0.3.8 — the counts below were re-verified directly against `backend/app/ioc/types.py`, `backend/app/providers/registry.py`, and `backend/app/core/runtime_config.py` at documentation time; the AI-backend and provider counts in earlier revisions of this page were stale and have been corrected.)*
 
-- **Streaming lookup pipeline**: `POST /api/v1/lookup/stream` is a Server-Sent Events (SSE) endpoint, rate-limited to 10 calls/60s per user by default (Redis fixed-window limiter). It classifies the submitted value into one of 32 `IOCType` values, then fans out concurrently to every registered provider that supports that type.
+- **Streaming lookup pipeline**: `POST /api/v1/lookup/stream` is a Server-Sent Events (SSE) endpoint, rate-limited to 10 calls/60s per user by default (Redis fixed-window limiter). It classifies the submitted value into one of 33 `IOCType` values, then fans out concurrently to every registered provider that supports that type.
 - **18 working providers** — `virustotal`, `abuseipdb`, `otx`, `urlhaus`, `threatfox`, `malwarebazaar`, `crtsh`, `nvd`, `cisa_kev`, `mitre_attack`, `whois_rdap`, `urlscan`, `google_safe_browsing`, `hybrid_analysis`, `spamhaus`, `phishtank`, `censys`, and the Internet Intelligence Collector — each normalized behind a common `BaseProvider` interface with per-provider timeout/retry and Redis-backed result caching. See the Provider Guide for the full per-provider breakdown.
 - **Eleven interchangeable AI backends**: Ollama (local, no key), Anthropic, AWS Bedrock, Google Gemini, Groq, OpenAI, Kimi (Moonshot AI), DeepSeek, xAI (Grok), Mistral AI, and OpenRouter — all exposed through one identical `call_claude_json()` method, so the rest of the application never branches on which backend is active. Backend selection fails fast with a clear error if the chosen backend isn't configured, and switching is a runtime action with no restart.
 - **A deterministic, non-AI threat-scoring engine** (versioned, currently `1.0`) computes `overall_risk_score`, `confidence_score`, `malicious_probability`, and a severity band from provider-verdict consensus and correlation-graph evidence *before* the AI's final assessment runs — the AI receives that score as a fixed input to narrate and is validated against it, rather than being the source of it. See the Threat Scoring guide for the full formula.
@@ -22,11 +22,12 @@ This section closes the technical appendix by separating what HORIZON GRID actua
 - **Scheduled OSINT re-crawl**: a single Celery Beat job (`run_osint_crawl`, hourly) re-crawls OSINT sources for IOCs looked up in the last 24 hours; the synchronous lookup pipeline itself does not go through Celery.
 - **Role-based access control and auth**: JWT-based authentication (first registered user automatically becomes admin; self-registration is then rejected for everyone else, who must be created by an admin from the Administration console with their role chosen up front — genuinely supporting multiple administrator accounts, not one hardcoded superuser), a 3-role permission matrix enforced via a `require_permission()` dependency on every route, not just hidden in the UI.
 - **Windows and Linux deployment paths**: an Inno Setup installer and WinForms Setup Wizard (Windows) and a `.deb` package (Linux) that configure providers (each with a live "Test" button; some require an API key/token, several work without one), write secrets via a CSPRNG, and run Docker Compose as the actual runtime — plus a parallel Kubernetes/Kustomize deployment alternative.
-- **Automated backend test coverage**: an actively maintained pytest unit + integration suite (383 passed, 39 skipped as of the v0.2.4 regression run) covering IOC detection, provider connectors, AI grounding logic, the correlation engine, the deterministic scoring engine, and the real orchestrator end-to-end.
+- **Automated backend test coverage**: an actively maintained pytest unit + integration suite (335 passed with no infrastructure required; 380 passed, 39 skipped for the full suite requiring Postgres/Redis) covering IOC detection, provider connectors, AI grounding logic, the correlation engine, the deterministic scoring engine, and the real orchestrator end-to-end.
 
-## Future Possibilities
+## 🔮 Future Possibilities
 
-**None of the items below exist today. They are described here only as architecturally plausible next steps.**
+> [!IMPORTANT]
+> None of the items below exist today. They are described here only as architecturally plausible next steps.
 
 The architecture already provisions infrastructure and patterns that go further than what is currently wired up. The items below are scoped strictly to that existing provisioning — nothing here is a new subsystem.
 

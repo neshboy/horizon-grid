@@ -1,8 +1,8 @@
-# Administering a Linux Install
+# 🐧 Administering a Linux Install
 
 This section maps the actions covered in the Windows Admin Guide to their real Linux equivalents. The underlying platform (Docker Compose, the FastAPI backend, the Next.js frontend, Postgres/Redis/Neo4j/OpenSearch) is identical on both platforms -- only the outer packaging/administration layer differs.
 
-## Admin actions: Windows vs. Linux
+## 🔧 Admin actions: Windows vs. Linux
 
 | Windows Admin Guide action | Linux equivalent | Notes |
 |---|---|---|
@@ -18,9 +18,14 @@ This section maps the actions covered in the Windows Admin Guide to their real L
 | Uninstall | `sudo apt remove horizon-grid` / `sudo apt purge horizon-grid` | See below; `horizon-grid uninstall` itself only prints this guidance, it does not perform removal |
 | Version | `horizon-grid version` | |
 
-On reconfigure of an existing install, re-entering the existing admin email+password signs in for the wizard session and enables live "Test Connection" calls (`POST /api/v1/providers/{id}/test`, `POST /api/v1/ai/test`) -- identical to Windows. On a fresh install, Test Connection cannot work yet at the provider/AI wizard pages because no backend is running at that point in the flow -- this is an application-level fact true on both platforms, not a Linux limitation.
+On reconfigure of an existing install, re-entering the existing admin email+password signs in for the wizard session and enables live "Test Connection" calls (`POST /api/v1/providers/{id}/test`, `POST /api/v1/ai/test`) -- identical to Windows.
 
-## File locations: Program Files/ProgramData vs. FHS paths
+> [!NOTE]
+> On a fresh install, Test Connection cannot work yet at the provider/AI wizard
+> pages because no backend is running at that point in the flow -- this is an
+> application-level fact true on both platforms, not a Linux limitation.
+
+## 📁 File locations: Program Files/ProgramData vs. FHS paths
 
 | Windows | Linux | Contents |
 |---|---|---|
@@ -33,7 +38,7 @@ On reconfigure of an existing install, re-entering the existing admin email+pass
 
 Both platforms' Compose project directory shares the basename `app`, so both produce the same Docker Compose project label (`com.docker.compose.project=app`) by design -- useful to know if you're correlating `docker compose ps` output across platforms.
 
-## Uninstall model: remove vs. purge
+## 🧹 Uninstall model: remove vs. purge
 
 Linux uses two distinct `apt` verbs, mirroring the Windows uninstaller's own keep-data/remove-everything choice:
 
@@ -42,8 +47,15 @@ Linux uses two distinct `apt` verbs, mirroring the Windows uninstaller's own kee
 
 Cleanup is **label-based** (`com.docker.compose.project=<project>`), not a hardcoded container-name guess, so it works correctly even if you've customized `COMPOSE_PROJECT_NAME`. A dedicated isolated test using the real default project name (`app`) confirmed this logic fully: 12/12 checks passed, including "all containers removed" and "all volumes removed." The full three-distro suite reported the same purge/remove behavior with two non-blocking failures per distro that were specific to that test harness's own project-naming choice (used only to avoid colliding with another instance on the shared test host) -- see **HORIZON_GRID_LINUX_QA_REPORT.pdf** for the complete, unfiltered results.
 
-One packaging fix worth knowing about: earlier builds of `apt purge`/`apt remove` could leave one small untracked file behind (`/opt/horizon-grid/app/.env`, a runtime-written copy dpkg's manifest never tracked), which blocked full removal of that directory. This is fixed in the package's `postrm` script -- the Linux analog (via dpkg not tracking the file, rather than an ACL block) of a documented Windows uninstaller fix for the same underlying problem.
+> [!NOTE]
+> One packaging fix worth knowing about: earlier builds of `apt purge`/`apt
+> remove` could leave one small untracked file behind
+> (`/opt/horizon-grid/app/.env`, a runtime-written copy dpkg's manifest never
+> tracked), which blocked full removal of that directory. This is fixed in
+> the package's `postrm` script -- the Linux analog (via dpkg not tracking the
+> file, rather than an ACL block) of a documented Windows uninstaller fix for
+> the same underlying problem.
 
-## Firewall handling
+## 🔥 Firewall handling
 
 Windows Firewall is always present and gets a guaranteed rule from the installer. Linux has no equivalent guarantee -- `horizon-grid configure` and the CLI make a best-effort detection of `ufw` or `firewalld` if active and configure them accordingly, clearly reporting either what it configured or that no firewall manager was detected, rather than assuming one exists.

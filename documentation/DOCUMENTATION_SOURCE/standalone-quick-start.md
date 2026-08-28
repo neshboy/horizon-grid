@@ -1,10 +1,30 @@
-# HORIZON GRID — Quick Start Guide
+# 🛰️ HORIZON GRID — Quick Start Guide
 
 This guide assumes you have never installed, configured, or used a threat-intelligence tool before. Every term gets explained the first time it comes up, and every step tells you exactly what to click. By the end, you will have installed HORIZON GRID, configured two real intelligence providers and an AI backend, run your first investigation, and know how to read what it tells you — including the one distinction that trips up almost everyone the first time (threat score and confidence are **not** the same number, and they don't mean the same thing).
 
 If you want the deeper mechanics behind any step here — every Setup Wizard page, system requirements, upgrading, uninstalling — see the **Windows Installation** guide. This document is deliberately the short version.
 
-## Step 1: Install HORIZON GRID
+## 📋 Table of contents
+
+- [📦 Step 1: Install HORIZON GRID](#-step-1-install-horizon-grid)
+- [🧙 Step 2: Launch — The Setup Wizard Does the Rest](#-step-2-launch--the-setup-wizard-does-the-rest)
+- [🚪 Step 3: What "localhost," Ports, and "Frontend vs. Backend" Actually Mean](#-step-3-what-localhost-ports-and-frontend-vs-backend-actually-mean)
+- [🌐 Step 4: Open the Platform in Your Browser](#-step-4-open-the-platform-in-your-browser)
+- [🔑 Step 5: Log In](#-step-5-log-in)
+- [🔌 Step 6: Configure Your First Providers](#-step-6-configure-your-first-providers)
+- [🤖 Step 7: Configure an AI Backend](#-step-7-configure-an-ai-backend)
+- [🔍 Step 8: Run Your First Investigation](#-step-8-run-your-first-investigation)
+- [🗂️ Step 9: Read the Provider Results](#️-step-9-read-the-provider-results)
+- [🧮 Step 10: Threat Score and Confidence Are Two Different Questions](#-step-10-threat-score-and-confidence-are-two-different-questions)
+- [📝 Step 11: Read the AI's Assessment](#-step-11-read-the-ais-assessment)
+- [📤 Step 12: Export Your First Report](#-step-12-export-your-first-report)
+- [🩺 Step 13: Check Provider Health](#-step-13-check-provider-health)
+- [📊 Step 14: The Executive Dashboard](#-step-14-the-executive-dashboard)
+- [🧭 Where to Go Next](#-where-to-go-next)
+
+---
+
+## 📦 Step 1: Install HORIZON GRID
 
 Three things, in order:
 
@@ -14,7 +34,7 @@ Three things, in order:
 
 [FIGURE: 04-installer-finished.png | The installer's final "Completing Setup" screen, with the box checked to launch the Setup Wizard immediately afterward.]
 
-## Step 2: Launch — The Setup Wizard Does the Rest
+## 🧙 Step 2: Launch — The Setup Wizard Does the Rest
 
 The Setup Wizard walks you through a fixed sequence of pages: Welcome, Administrator Account, AI Configuration, Threat Intelligence Providers, Network Ports, and a final Ready to Install summary. For this quick start, the important thing to know is that you don't have to get everything right here — every choice on every one of these pages can be changed later from inside the app itself or by re-running the wizard from the **Configuration** shortcut. So it's fine to click through the Administrator Account page (this is the one page that matters most — it's covered in Step 5 below) and accept the defaults everywhere else; Steps 6 and 7 of this guide show you how to configure your first provider and AI backend from inside the running app, which works identically whether you filled anything in here or not.
 
@@ -22,7 +42,7 @@ Once you click "Start Installation" on the summary page, the wizard downloads an
 
 [FIGURE: standalone-wizard-finish.png | The Setup Wizard's "Setup Complete" page, showing the local address to open the platform on this computer and, if detected, a second address for other devices on the same network.]
 
-## Step 3: What "localhost," Ports, and "Frontend vs. Backend" Actually Mean
+## 🚪 Step 3: What "localhost," Ports, and "Frontend vs. Backend" Actually Mean
 
 Before you open a browser, it's worth understanding three words you're about to see, because they'll come up constantly:
 
@@ -34,7 +54,7 @@ Behind those two, the platform also runs a handful of internal ports for its own
 
 [FIGURE: quickstart-ports-diagram.png | Diagram: your browser talking to the frontend on port 3000, the frontend talking to the backend on port 8000, and the backend talking to its own database and supporting services on internal, locked-down ports that nothing outside this computer can reach.]
 
-## Step 4: Open the Platform in Your Browser
+## 🌐 Step 4: Open the Platform in Your Browser
 
 Open any web browser on the same computer and go to:
 
@@ -46,15 +66,16 @@ That's the address the Setup Wizard's final page showed you (Step 2's screenshot
 
 [FIGURE: quickstart-browser-address-bar.png | A browser's address bar with http://localhost:3000 entered, about to load the HORIZON GRID sign-in page.]
 
-## Step 5: Log In
+## 🔑 Step 5: Log In
 
 Sign in with the administrator email and password you set on the Setup Wizard's Administrator Account page. There's no separate "create an account" step to do here — the wizard already registered that account for you as part of finishing installation, and on a brand-new install, whoever's account that was automatically became the administrator.
 
 [FIGURE: 15-login.png | The Sign in page — enter the administrator email and password you set during the Setup Wizard.]
 
-One thing worth knowing for later: HORIZON GRID only lets the very first account on a fresh install register itself this way. If a colleague needs an account after that, you (the administrator) create it for them from the Administration page and pick their role at that point — they can't just sign themselves up.
+> [!NOTE]
+> HORIZON GRID only lets the very first account on a fresh install register itself this way. If a colleague needs an account after that, you (the administrator) create it for them from the Administration page and pick their role at that point — they can't just sign themselves up.
 
-## Step 6: Configure Your First Providers
+## 🔌 Step 6: Configure Your First Providers
 
 A **provider**, in HORIZON GRID, is any outside source the platform can ask about an indicator — a malware database, a government vulnerability catalog, a DNS blocklist, and so on. Out of the box, several of the platform's 18 built-in providers need absolutely nothing from you and are already switched on; others need a free (or paid) API key from that service before they'll return anything. Let's configure one of each, so you can see both patterns.
 
@@ -72,7 +93,7 @@ Sign in as the administrator, then open **Providers** in the top navigation, and
 
 You don't need to configure all 18 providers to get useful results — the platform works correctly with any subset configured, including just these two. Every future investigation automatically uses whichever providers are enabled and relevant to the type of indicator you submit.
 
-## Step 7: Configure an AI Backend
+## 🤖 Step 7: Configure an AI Backend
 
 Every investigation ends with an AI-written explanation of what was found. HORIZON GRID supports eleven interchangeable AI backends, and you pick one from the same **Providers** page, under the **AI Providers** tab.
 
@@ -82,7 +103,7 @@ For a genuinely zero-cost way to get started, expand **Ollama**. This runs a sma
 
 [FIGURE: 33-manage-providers-ai-edit-masked.png | An AI backend's row expanded for editing, showing the masked API key field, the model field, and the Test Connection / Save / Set Active controls.]
 
-## Step 8: Run Your First Investigation
+## 🔍 Step 8: Run Your First Investigation
 
 You're ready. Go to the platform's home page, and type an IOC — an **Indicator of Compromise**, meaning a specific piece of evidence like an IP address, domain, URL, file hash, or CVE ID — into the search box. For this first run, use:
 
@@ -96,26 +117,28 @@ This is Google's public DNS resolver — a real, well-known, entirely legitimate
 
 Click submit. The platform detects the indicator type, queries every provider you've enabled that supports IP addresses, and starts streaming results back to the page within seconds — you don't need to refresh anything.
 
-## Step 9: Read the Provider Results
+## 🗂️ Step 9: Read the Provider Results
 
 As each provider finishes, a card appears with that provider's own verdict. Watch for exactly this kind of pattern, because it's real and it's instructive: **Spamhaus** may show a verdict of malicious — but if you read the reason it gives, it's a query-permission error ("public/open resolver not permitted to query Spamhaus"), not an actual detection of anything harmful. Meanwhile **AbuseIPDB** shows zero abuse reports, and **VirusTotal** reports it clean.
 
 [FIGURE: 17-investigation-benign-ip-result.png | Provider result cards arriving live for 8.8.8.8 — Spamhaus flags it malicious for an unrelated DNS-policy reason, while AbuseIPDB and VirusTotal both report it clean.]
 
-This is the single most important habit to build on day one: **a provider's verdict label is not the whole story — read the reason underneath it.** Providers disagreeing with each other is normal, expected behavior, not a bug, and it's exactly why the next two steps matter so much.
+> [!IMPORTANT]
+> This is the single most important habit to build on day one: **a provider's verdict label is not the whole story — read the reason underneath it.** Providers disagreeing with each other is normal, expected behavior, not a bug, and it's exactly why the next two steps matter so much.
 
-## Step 10: Threat Score and Confidence Are Two Different Questions
+## 🧮 Step 10: Threat Score and Confidence Are Two Different Questions
 
 Once every provider has reported in, the page shows a **Threat Score** — a single number from 0 to 100 with a plain-language severity label (none/low/medium/high/critical) — and, right next to it, a separate **Confidence** percentage. It is genuinely easy to assume these are the same kind of number measured twice. They are not, and mixing them up is the single most common misreading of this platform.
 
 - **Threat Score** asks: *how malicious does the evidence look?* It's built from two things added together — how much the providers that responded actually agree the indicator is bad, and any malicious-looking relationships the correlation engine found (shared malware families, MITRE ATT&CK techniques, exploited CVEs). One provider flagging something, with nobody else agreeing, only ever pulls this number up a limited amount on its own — it takes several independent providers agreeing to push it toward its maximum.
 - **Confidence** asks a completely different question: *how much should you trust that score?* This number is calculated from how much the providers agreed with **each other** — not from how bad the finding looks. If your providers all point the same direction, confidence stays high. If they're split — exactly like the 8.8.8.8 example above, where Spamhaus disagrees with AbuseIPDB and VirusTotal — confidence drops, specifically *because* of that disagreement, even if the Threat Score itself is still sitting at a moderate or high number.
 
-So a real, correct result can legitimately look like "Threat Score: high, Confidence: low" — and that combination means exactly what it sounds like: *the evidence leans toward malicious, but it's thin or conflicted, so verify it yourself before treating it as settled.* It is not the platform contradicting itself. For the exact formula behind both numbers, including a real worked example with the underlying arithmetic, see the **Threat Scoring** guide.
+> [!NOTE]
+> A real, correct result can legitimately look like "Threat Score: high, Confidence: low" — and that combination means exactly what it sounds like: *the evidence leans toward malicious, but it's thin or conflicted, so verify it yourself before treating it as settled.* It is not the platform contradicting itself. For the exact formula behind both numbers, including a real worked example with the underlying arithmetic, see the **Threat Scoring** guide.
 
 [FIGURE: quickstart-threat-score-confidence.png | The Threat Score gauge (0-100, with a Severity label) shown next to the separate Confidence percentage on the same investigation — two different numbers answering two different questions.]
 
-## Step 11: Read the AI's Assessment
+## 📝 Step 11: Read the AI's Assessment
 
 Scroll down to the **Final Assessment** section. This is the AI's consolidated read on the whole investigation, written only after every provider has reported back — and for a case like 8.8.8.8, a good AI assessment will say so directly: something to the effect of "considered malicious by Spamhaus, but its reputation as clean is supported by AbuseIPDB and VirusTotal," rather than quietly picking a side. Every Final Assessment also carries a small badge naming exactly which AI backend and model produced it (for example, `ollama / llama3.2:3b`), so you always know what generated a given explanation.
 
@@ -123,31 +146,33 @@ Don't stop at the prose, though. The same page includes an **Evidence Ledger** �
 
 [FIGURE: 18-investigation-benign-ip-full.png | The full investigation page for 8.8.8.8: the Final Assessment's Executive Summary explaining the Spamhaus-vs-AbuseIPDB/VirusTotal disagreement, alongside the Evidence Ledger and Verdict Analysis tools.]
 
-## Step 12: Export Your First Report
+## 📤 Step 12: Export Your First Report
 
 In the sidebar of the investigation page, open the export controls. You'll see four buttons: **Export JSON**, **Export Markdown**, **Export CSV**, and **Export PDF** — all four produce a real downloaded file today, built from the same investigation you're looking at on screen, and the CSV/PDF paths carry real, tested protections against a malicious value trying to smuggle a spreadsheet formula or injected markup into the exported file. Pick Markdown if you want something readable to paste into a ticket or a chat message, or JSON if you want the structured data for another tool.
 
 [FIGURE: 21-investigation-export-menu.png | The export sidebar on a completed investigation page, showing all four working export buttons: JSON, Markdown, CSV, and PDF.]
 
-One role-related note for later, once you're not the only user: PDF and CSV export require a specific permission that Admin and Analyst accounts have but a Viewer account does not — a Viewer can still export Markdown or JSON (those build locally in the browser with no permission check) but gets blocked specifically on PDF/CSV.
+> [!NOTE]
+> One role-related note for later, once you're not the only user: PDF and CSV export require a specific permission that Admin and Analyst accounts have but a Viewer account does not — a Viewer can still export Markdown or JSON (those build locally in the browser with no permission check) but gets blocked specifically on PDF/CSV.
 
-## Step 13: Check Provider Health
+## 🩺 Step 13: Check Provider Health
 
 Now that you've run at least one real investigation, open **Provider Health** in the top navigation (under the Operations group). This page answers a different question than any single investigation does: *is every provider actually working right now, across the whole platform, not just in this one lookup?* Each row shows status — Healthy, Degraded, Down, or Unknown — across four separate time windows (1 hour, 24 hours, 7 days, 30 days), built from real, database-backed outcomes of every call that provider has actually made.
 
-One honest guarantee worth knowing up front: a provider you haven't exercised yet in a given window always shows **Unknown**, never **Healthy** — silence isn't evidence of health. And a provider that correctly reports "nothing found" for a given indicator (which is normal — no single provider's dataset covers every indicator) counts as a healthy, successful outcome, not a failure.
+> [!NOTE]
+> One honest guarantee worth knowing up front: a provider you haven't exercised yet in a given window always shows **Unknown**, never **Healthy** — silence isn't evidence of health. And a provider that correctly reports "nothing found" for a given indicator (which is normal — no single provider's dataset covers every indicator) counts as a healthy, successful outcome, not a failure.
 
 [FIGURE: dashboard-provider-health.png | The Provider Health page, showing real per-provider status across four time windows, with Healthy/Degraded/Down/Unknown always paired with a distinct icon and label, not color alone.]
 
 You can also check the backend by itself is up, at any time, without logging in at all, by opening `http://localhost:8000/health` directly in a browser — it returns a short, raw reply like `{"status":"ok","service":"HORIZON GRID"}`.
 
-## Step 14: The Executive Dashboard
+## 📊 Step 14: The Executive Dashboard
 
 Finally, open **Dashboard** in the top navigation (the Command group) — this is the "one operational picture" the platform is built around. It shows seven live numbers at a glance: active investigations, critical/high-risk IOC count, open cases and open critical cases (as two separate numbers), average threat score, provider health percentage, and AI success rate over the last 30 days — every single one computed live from the real database, never hardcoded. Next to the tiles, an Executive Summary card gives you a short AI-written narrative explaining what those numbers mean; if the AI backend is unreachable when the page loads, this card honestly falls back to a plain, number-accurate template sentence instead, and tells you which one you're looking at with an "AI-generated" or "Template fallback" badge.
 
 [FIGURE: dashboard-executive-overview.png | The Executive Dashboard: seven live KPI tiles, the labeled AI-generated (or template-fallback) executive summary, and a compact provider-health widget linking through to the full Provider Health page.]
 
-## Where to Go Next
+## 🧭 Where to Go Next
 
 You've now installed the platform, configured a no-key provider and a key-required provider, picked an AI backend, run and read a real investigation, exported it, and checked both the provider fleet's health and the platform-wide dashboard. From here:
 

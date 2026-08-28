@@ -1,16 +1,35 @@
-# HORIZON GRID Testing & QA — The Complete Evidence, By Category
+# 🧪 HORIZON GRID Testing & QA — The Complete Evidence, By Category
 
-## Why this document exists
+## 💡 Why this document exists
 
 `tech-08-testing-qa.md` already gives a snapshot of the automated test suite and the one full manual install-to-uninstall QA pass (`FINAL_END_TO_END_TEST_REPORT.md`, version 0.1.0, 2026-08-11). Since that chapter was written, several more missions ran against this codebase — a Multi-User RBAC admin console, a Security Assessment Toolkit, LAN/network deployment, a deterministic scoring engine, an Executive Dashboard and Provider Health page, and a final cross-cutting release pass — each with its own QA report and its own real test numbers. This document does not repeat `tech-08`'s content; it organizes **all of that evidence, from every QA pass, by test category** (unit, integration, security/RBAC, provider, AI, scoring, concurrency/performance, installer) rather than by mission, and states plainly, category by category, what is actually proven versus what is described qualitatively because no exact number exists. Every test name below was confirmed by directly reading the file it comes from; every pass/fail figure is quoted from a named report, not recalculated or blended with any other report's number.
 
 The single most current, most authoritative source for pass/fail totals is `FINAL_RELEASE_QA_REPORT.md`, referenced throughout as "the Final Release QA Report." Where an earlier report (`ADMIN_RBAC_QA_REPORT.md`, `SECURITY_ASSESSMENT_QA_REPORT.md`, `LAN_DEPLOYMENT_QA_REPORT.md`) recorded its own whole-suite snapshot at an earlier point in the project, that number is quoted too, dated, and never averaged or merged with a number from a different report — consistent with the practice `tech-08-testing-qa.md` already established.
 
-## Category 1: Unit Tests
+> [!NOTE]
+> Every dated, per-report figure below (202, 228, 307, 308, 337, etc.) is quoted verbatim from the named report it came from and is intentionally left exactly as that report stated it, not recalculated. Since those reports were written, further missions (including the Pentest Suite) added still more test coverage; the current, most-recent whole-suite baseline — **335 unit tests passing standalone, and 380 passed / 39 skipped for the full suite** — is stated in the project README and is the number to cite for "how many tests does this project have today." Nothing below should be read as contradicting that current figure; it is older, dated evidence this chapter preserves on purpose.
+
+## 📚 Table of Contents
+
+- [🔬 Category 1: Unit Tests](#-category-1-unit-tests)
+- [🔗 Category 2: Integration Tests](#-category-2-integration-tests)
+- [🔐 Category 3: Security / RBAC Tests](#-category-3-security--rbac-tests)
+- [🔌 Category 4: Provider Tests](#-category-4-provider-tests)
+- [🤖 Category 5: AI Tests](#-category-5-ai-tests)
+- [🧮 Category 6: Scoring Engine Tests](#-category-6-scoring-engine-tests)
+- [⚡ Category 7: Concurrency / Performance Tests](#-category-7-concurrency--performance-tests)
+- [📦 Category 8: Installer / Manual End-to-End QA](#-category-8-installer--manual-end-to-end-qa)
+- [🔢 The Two Numbers Worth Remembering, Side By Side](#-the-two-numbers-worth-remembering-side-by-side)
+- [🚫 What Is Still Not Automated (Disclosed, Not Hidden)](#-what-is-still-not-automated-disclosed-not-hidden)
+- [🧭 What This Means Together](#-what-this-means-together)
+
+---
+
+## 🔬 Category 1: Unit Tests
 
 **Purpose.** Exercise one function or class in isolation — no Postgres, no Redis, no Docker, and (with the exception of respx-mocked HTTP, described below) no real network call of any kind. A unit test failure points at exactly one piece of logic, not at infrastructure.
 
-**Where they live.** `backend/app/tests/unit/` — **26 files** as of this writing (up from the 13 files `tech-08-testing-qa.md` recorded; the difference is entirely new coverage added by later missions: `test_ai_connection_test.py`, `test_crypto.py`, `test_dashboard_service.py`, `test_dashboard_summary.py`, `test_runtime_config.py`, `test_runtime_context.py`, `test_scoring_engine.py`, `test_security_assessment_service.py`, `test_security_assessment_tools.py`, `test_urlscan_io.py`, `test_google_safe_browsing.py`, `test_users_service.py`, `test_lookup_export.py` — no existing unit-test file was removed).
+**Where they live.** `backend/app/tests/unit/` — **33 files** as of this writing (up from the 13 files `tech-08-testing-qa.md` recorded; the difference is entirely new coverage added by later missions: `test_ai_connection_test.py`, `test_crypto.py`, `test_dashboard_service.py`, `test_dashboard_summary.py`, `test_runtime_config.py`, `test_runtime_context.py`, `test_scoring_engine.py`, `test_security_assessment_service.py`, `test_security_assessment_tools.py`, `test_urlscan_io.py`, `test_google_safe_browsing.py`, `test_users_service.py`, `test_lookup_export.py`, `test_ai_config_ollama_models.py`, `test_ai_service_ollama_ssrf.py`, `test_crawler_collector.py`, `test_crawler_rate_limit.py`, `test_orchestrator_retry.py`, `test_spamhaus_provider.py`, `test_msf_client.py`, `test_pentest_exploit.py`, `test_pentest_orchestrator.py` (the last three added by the Pentest Suite mission) — no existing unit-test file was removed).
 
 **Real example test names, drawn directly from the files:**
 
@@ -27,11 +46,11 @@ The single most current, most authoritative source for pass/fail totals is `FINA
 
 **Real pass/fail picture.** No single, isolated "unit tests only" number is reported anywhere across the QA history — every report that gives a whole-number count runs the unit and integration layers together (see Category 2 below and the Final Release QA Report's Section 12 figures). The one exception is the scoring engine's own file, which is small and self-contained enough to be counted on its own: **22 passed, 0 failed**, covered in full under Category 6.
 
-## Category 2: Integration Tests
+## 🔗 Category 2: Integration Tests
 
 **Purpose.** Exercise a real request path through the actual FastAPI application — real routing, real dependency injection, real permission checks, and (for most files in this directory) a real Postgres/Redis connection — with only the outermost edges faked: the real 18-provider registry is never imported, and any HTTP a fake provider happens to trigger is respx-mocked.
 
-**Where they live.** `backend/app/tests/integration/` — **12 files** as of this writing (up from `tech-08`'s recorded 3: `test_lookup_flow.py`, `test_lookup_stream_persistence.py`, `test_api_health.py`. The 9 new files — `test_admin_rbac_api.py`, `test_admin_users.py`, `test_auth_registration.py`, `test_dashboard_api.py`, `test_dashboard_service_db.py`, `test_deterministic_scoring.py`, `test_lookup_export_permissions.py`, `test_runtime_config_persistence.py`, `test_security_assessment_api.py` — were added by the RBAC, Dashboard/Provider-Health, Scoring, Export, Runtime-Config, and Security Assessment missions respectively).
+**Where they live.** `backend/app/tests/integration/` — **15 files** as of this writing (up from `tech-08`'s recorded 3: `test_lookup_flow.py`, `test_lookup_stream_persistence.py`, `test_api_health.py`. The 12 new files — `test_admin_rbac_api.py`, `test_admin_users.py`, `test_auth_registration.py`, `test_auth_login_rate_limit.py`, `test_dashboard_api.py`, `test_dashboard_service_db.py`, `test_deterministic_scoring.py`, `test_lookup_export_permissions.py`, `test_runtime_config_persistence.py`, `test_security_assessment_api.py`, `test_pentest_api.py`, `test_pentest_exploit_api.py` — were added by the RBAC, login-rate-limiting, Dashboard/Provider-Health, Scoring, Export, Runtime-Config, Security Assessment, and Pentest Suite missions respectively).
 
 **Real example test names:**
 
@@ -45,7 +64,7 @@ The single most current, most authoritative source for pass/fail totals is `FINA
 
 **Real pass/fail picture.** Integration tests are always counted together with unit tests in every whole-suite figure this document cites; see Categories 6 and 8 for the exact numbers (337p/3f/5e on the dev-tree host venv; 307-308p/0f/38 skipped inside the installed copy's container, the difference being before/after the scoring-engine anti-flood fix (Category 6) and the connection-test wiring fix (Category 4) were propagated).
 
-## Category 3: Security / RBAC Tests
+## 🔐 Category 3: Security / RBAC Tests
 
 **Purpose.** Prove — by real HTTP call against the real running app, not by reading the permission matrix and assuming it's wired up correctly — that HORIZON GRID's exactly-3-role model (ADMIN/ANALYST/VIEWER) is enforced on every route, that a role change or account disable takes effect immediately (not just on next login), and that no privilege-escalation or IDOR path exists.
 
@@ -67,7 +86,7 @@ The single most current, most authoritative source for pass/fail totals is `FINA
 
 **A real bug this category caught and closed, worth naming because it's exactly the kind of thing RBAC tests exist to catch:** before the RBAC console was built, `reset_password()` changed a user's stored password hash but left every already-issued access/refresh token valid until natural expiry (refresh tokens default to 7 days) — the opposite of what an administrator resetting a password for security reasons would expect. The fix added a `token_version` column, bumped on every reset and checked on every request; `test_password_reset_immediately_invalidates_existing_tokens` is the regression test that keeps this fixed.
 
-## Category 4: Provider Tests
+## 🔌 Category 4: Provider Tests
 
 **Purpose.** Prove that each of the 18 registered connectors maps a real HTTP status code and response shape to the correct `ProviderStatus`/verdict — and, above every other concern for this category, prove that a provider failure or an unreachable/rate-limited call can **never** be misread as a clean/safe result. This is checked far more rigorously than "does the happy path work."
 
@@ -84,7 +103,7 @@ The single most current, most authoritative source for pass/fail totals is `FINA
 
 **A real, instructive gap this category's own history surfaced.** Passing unit tests for a provider's `fetch()` logic does not automatically mean every *other* code path involving that provider is wired up. After both new providers' 27 unit tests were already green and a live investigation had already been run successfully against each, a separate post-reinstall QA pass found that their "Test Connection" button — a distinct dispatcher (`app/providers/connection_test.py`) used only by the standalone credential-testing UI, not by a real investigation — had simply never been given entries for either provider, so clicking Test Connection returned a generic "has no live connection test" message regardless of whether the credential was valid. This did not affect any real investigation (which uses the already-correct `fetch()` path exclusively), but it is a concrete illustration of why "the provider's tests pass" and "every button touching that provider works" are different claims — the fix added `_check_google_safe_browsing`/`_check_urlscan` functions mirroring each provider's own real API call, confirmed live against the real running container afterward.
 
-## Category 5: AI Tests
+## 🤖 Category 5: AI Tests
 
 **Purpose.** Prove the deterministic guardrails around the AI layer actually hold — that it never fabricates a finding from zero evidence, that it can narrate but never override the deterministic score, that a self-contradictory output gets retried rather than silently accepted, and that a genuine generation failure is honestly reported rather than papered over with a fake success.
 
@@ -100,7 +119,7 @@ The single most current, most authoritative source for pass/fail totals is `FINA
 
 **Real pass/fail picture.** The Final Release QA Report lists "AI can narrate but never override the score" and "AI executive summary never fabricates a number" both as **PASS**, each backed by a code trace of the re-validation/grounding logic plus a real forced-failure test proving the fallback path is genuine rather than aspirational — not a bare test count, but a direct statement of what was verified and how.
 
-## Category 6: Scoring Engine Tests
+## 🧮 Category 6: Scoring Engine Tests
 
 **Purpose.** Prove the deterministic scoring engine (`app/scoring/engine.py`, `SCORING_ENGINE_VERSION = "1.0"`) computes `overall_risk_score`/`confidence_score`/`malicious_probability`/`severity` correctly and resists manipulation — this is the one category with a real, numerically-reproduced adversarial vulnerability found and fixed during the project, not merely a hypothetical one considered and dismissed. The full formula is documented in `standalone-threat-scoring.md`; this section covers only the testing evidence.
 
@@ -120,7 +139,7 @@ The single most current, most authoritative source for pass/fail totals is `FINA
 - That same 22/22 result was re-run and re-confirmed **inside the installed copy's own fresh container**, on a genuinely fresh install, after an earlier draft of the report had disclosed this specific live re-verification as still pending (the containers had been down for a real, concurrent installer test at the time). Both the fix and its live confirmation are real and complete as of the current report — nothing about this vulnerability remains open.
 - One disclosed, non-blocking hardening item, not a live exploit today: `_provider_votes()` would treat a NaN/Infinity value as a full-strength "malicious" vote rather than rejecting it outright. No live provider currently produces such a value (VirusTotal, the only provider populating the affected fields, derives them from its own server-computed detection stats, not from attacker-controllable free text) — recorded as a recommended follow-up, not a release blocker.
 
-## Category 7: Concurrency / Performance Tests
+## ⚡ Category 7: Concurrency / Performance Tests
 
 **Purpose.** This is the one category most easily confused with the manual, single-pass QA walkthrough covered in Category 8 — but it is deliberately different in kind. Most of this document's manual-QA evidence comes from a single tester doing a single lifecycle run once; this category covers the small number of tests, both automated and load-based, that specifically exercise *simultaneous* access to a shared resource, and the one genuine repeated-trial load test that exists in the project.
 
@@ -140,7 +159,7 @@ The single most current, most authoritative source for pass/fail totals is `FINA
 
 **A disclosed, non-blocking characteristic, not a bug.** The AI-generated executive summary can become slow specifically under heavy *concurrent* load when the platform is configured to use a local Ollama backend, because a single local model serializes generation requests one at a time. This does not affect data correctness — the KPI numbers behind the summary are always the current, real, deterministic values regardless of how long the narrative itself takes — and it does not affect the Dashboard's core KPI tiles or the Provider Health page, both pure database reads unaffected by AI backend choice. An administrator expecting many concurrent dashboard users should prefer a cloud AI backend (Claude/Bedrock/Gemini/Groq) over a local model for a consistently fast summary under load.
 
-## Category 8: Installer / Manual End-to-End QA
+## 📦 Category 8: Installer / Manual End-to-End QA
 
 **Purpose.** Everything above is `pytest`. This category is not — it is a real person (or, per this project's own established practice, an AI QA process operating under an explicit rule of *never* running a destructive install action itself) clicking through the actual compiled Windows installer, injecting real failures, and confirming real recovery. There is no automated test suite for the Setup Wizard's WinForms UI; this is the only place its correctness is checked at all.
 
@@ -159,7 +178,7 @@ Per this project's own practice, that fix was never confirmed by having the AI Q
 3. Missing Test Connection wiring for the two newest providers: found on that same fresh instance, fixed, confirmed live against the real running container.
 4. The regression suite was re-run on that same fresh, post-reinstall container — with both the scoring-engine anti-flood fix (Category 6) and the connection-test wiring fix (Category 4) now propagated — and reported **308 passed, 0 failed, 38 skipped**, up from **307 passed, 0 failed, 38 skipped** on the previous (pre-reinstall) instance, which had neither fix yet. The scoring-engine tests specifically, re-run in that same fresh container: **22 passed, 0 failed**.
 
-## The Two Numbers Worth Remembering, Side By Side
+## 🔢 The Two Numbers Worth Remembering, Side By Side
 
 Because this project produced test counts from more than one environment at more than one point in time, and because the Source Code Documentation's `dev-06-testing-and-build.md` chapter documents that this project's two local host virtualenvs (`backend/.venv`, `backend/.venv_test`) have themselves drifted from `requirements.txt` and from each other (differing `pytest`, `bcrypt`, `cryptography`, and `python-whois` versions — enough to cause spurious collection failures unrelated to any real code defect), the two figures actually worth remembering, both taken from the Final Release QA Report and neither blended with the other, are:
 
@@ -170,12 +189,12 @@ Because this project produced test counts from more than one environment at more
 
 The host-venv run's 3 failures and 5 errors are the same pre-existing, documented, unrelated issues carried across this entire project — `test_lookup_flow.py`'s concurrency/cache-timing tests and `test_lookup_stream_persistence.py`'s async-teardown issue — never caused by any change described in this document. The container run's 38 skips are host-only integration tests that correctly auto-skip because their target service isn't reachable from inside the container's own network namespace (see Category 2) — a known, pre-existing environment characteristic, not a coverage gap. **Both figures are real, both are honestly reported with their caveats attached, and neither one is the "wrong" number — they are two different, both-correct answers to two different questions ("what does the raw dev checkout report" versus "what does the actual shipped, installed product report").**
 
-## What Is Still Not Automated (Disclosed, Not Hidden)
+## 🚫 What Is Still Not Automated (Disclosed, Not Hidden)
 
 - **The frontend has zero automated tests.** `frontend/package.json` declares `"test": "vitest run"` and lists Vitest as a devDependency, but a repo-wide search for `*.test.*`/`*.spec.*` under `frontend/` finds no files. `npm test` today runs Vitest against an empty suite. The closest substitute that exists is real browser automation: `documentation/build/walkthrough-*.js` scripts drive a real, locally-installed Chrome via `puppeteer-core` (already a documentation-build dependency, repurposed for QA) to click through actual rendered pages — the RBAC console's own QA pass used exactly this to create, search, edit, disable, and re-enable a real user through the real UI, and to confirm a demoted user's Administration link genuinely disappears and a direct `/admin` URL visit redirects away. This is real, but it is a targeted walkthrough script per feature, not a repeatable frontend test suite.
 - **The Setup Wizard's own WinForms UI has no automated test coverage and, per the LAN Deployment QA Report's own documented attempt, could not be driven end-to-end by synthetic UI input from this project's own automation tooling** — four independent Win32/UI-Automation techniques were tried and each was confirmed blocked at the input-delivery layer (not by any defect in the wizard itself; passive operations like screenshots and property reads worked throughout). The mitigation used instead was invoking the wizard's own underlying production functions directly against the installed copy and confirming their real, live effect — proof of the underlying logic, not a pixel-verified screenshot of the wizard clicking through itself.
 - **No coverage-percentage figure is asserted anywhere in the source or in any QA report.** `pytest-cov` is a declared dependency but is never invoked with `--cov` anywhere found in the repository. Every number in this document is a pass/fail/skip/error count or a named, dated test — never an estimated coverage percentage.
 
-## What This Means Together
+## 🧭 What This Means Together
 
 Automated tests (Categories 1-6) prove specific, narrow, repeatable claims about specific pieces of logic — a provider's status mapping, the scoring engine's corroboration math, the RBAC matrix's enforcement at the route layer, the AI's grounding and no-fabrication guarantees — each backed by a real test with a real, honest name describing exactly what it proves. The one genuine repeated-trial load test (Category 7) proves a claim automated unit/integration tests structurally cannot: that the system survives real concurrent load, not just correct logic under a single request. The manual QA history (Category 8) proves the one thing none of the above can: that the actual compiled installer, run for real by a real user against a real machine, actually works — and it is precisely this category that caught the two real, reported issues (the password-mismatch crash and the missing Test Connection wiring) that a fully green automated suite had already missed, because neither one was a logic bug in code any unit test exercises. Taken together, the honest picture is: a real, if partial, automated regression net on the backend; zero automated frontend tests, partially offset by targeted real-browser walkthroughs; one genuine, repeated concurrent-load test that found and fixed a complete-failure mode; and a manual installer QA history that has, so far, found and fixed every defect it has ever found — including, most recently, a real installer crash confirmed fixed by the user's own hands, not just by this project's own say-so.

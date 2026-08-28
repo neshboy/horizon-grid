@@ -1,4 +1,4 @@
-# Security and Data Handling
+# 🔒 Security and Data Handling
 
 This section explains, in plain language, how HORIZON GRID handles your sign-in, your provider credentials, and — most importantly — the actual indicator data you investigate. It is meant to be read by anyone using the tool, not just engineers. A far more detailed, code-level Security Architecture appendix exists later in this document for readers who want the full technical picture; this section is its beginner-friendly companion.
 
@@ -42,7 +42,8 @@ This is the part worth reading carefully, because it's central to how the platfo
 
 When you submit an IOC (Indicator of Compromise — an IP address, domain, URL, file hash, or CVE ID, i.e. a standardized identifier for a publicly known software vulnerability, that you want to investigate) for a lookup, the platform does not just search its own local database. For every configured provider that supports that type of indicator, the platform sends the literal value you entered — the actual IP address, the actual domain name, the actual file hash — out to that provider's own service, because that is the only way those services can check it against their own intelligence. This is true across essentially the whole provider lineup: threat-intelligence services like VirusTotal, AbuseIPDB, and AlienVault OTX; public lookups like WHOIS/RDAP and Certificate Transparency; and everything in between. If a provider isn't configured (no key entered, or not applicable to that indicator type), it simply isn't contacted and contributes nothing — but any provider that is configured and supports that IOC type will see the value you're investigating.
 
-Practically, that means: **be mindful before investigating something genuinely sensitive.** If you're looking up an internal hostname, an internal IP address, or a file hash tied to an active, confidential incident, remember that value is being transmitted to whichever external providers you've enabled — the same way it would be if you pasted it into any of those providers' own websites. That's simply how multi-provider IOC lookups work, not a flaw specific to this platform, but it's a habit worth having regardless of which tool you're using.
+> [!IMPORTANT]
+> Practically, that means **be mindful before investigating something genuinely sensitive.** If you're looking up an internal hostname, an internal IP address, or a file hash tied to an active, confidential incident, remember that value is being transmitted to whichever external providers you've enabled — the same way it would be if you pasted it into any of those providers' own websites. That's simply how multi-provider IOC lookups work, not a flaw specific to this platform, but it's a habit worth having regardless of which tool you're using.
 
 ## AI Analysis: Local by Default, Cloud if You Choose
 

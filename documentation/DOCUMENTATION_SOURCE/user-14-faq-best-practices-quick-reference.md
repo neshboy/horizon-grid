@@ -1,4 +1,4 @@
-# Frequently Asked Questions
+# ❓ Frequently Asked Questions
 
 **Do I need every provider configured to use the platform?**
 No. Every provider that needs an API key is optional -- the platform works with any subset configured, including none. Providers that need no key at all (WHOIS/RDAP, Spamhaus, crt.sh, NIST NVD, CISA KEV, MITRE ATT&CK, PhishTank, the Internet Intelligence Collector) always run regardless. An investigation with zero paid providers configured still produces a real result from whichever free sources apply to that IOC type.
@@ -21,7 +21,7 @@ Only the specific IOC value you investigate is sent to whichever providers are e
 **Where do I go to change a provider's API key later?**
 The "Providers" link in the workspace navigation opens Manage Providers, with separate tabs for AI Providers and IOC (threat-intelligence) Providers. Changes there take effect immediately -- no restart, no reinstall, no editing configuration files.
 
-# Best Practices
+# ✅ Best Practices
 
 - **Start with the free providers, add paid ones as you need them.** Because every provider is optional, there's no reason to hold off using the platform while waiting on API key approvals -- WHOIS/RDAP, Spamhaus, and the OSINT collector already provide real signal with zero configuration.
 - **Use Test Connection before relying on a newly-entered key.** It makes one real, minimal request to the provider and reports a genuine result (authenticated, invalid key, rate-limited, unavailable) -- never just "the field is non-empty."
@@ -30,7 +30,7 @@ The "Providers" link in the workspace navigation opens Manage Providers, with se
 - **Add an IOC to a Case as soon as it's part of a real investigation, not after.** Cases keep the analyst's notes, IOCs, and reasoning together as the investigation develops, rather than requiring reconstruction later.
 - **If comparing AI backends, compare on the same evidence, not a fresh lookup.** The AI Comparison panel's whole point is holding the evidence constant so the only variable is which AI produced the read -- re-running a brand-new investigation instead would also change the provider data and defeat the comparison.
 
-# Quick Reference
+# 📌 Quick Reference
 
 | I want to... | Where |
 |---|---|

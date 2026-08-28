@@ -2,7 +2,37 @@
 
 This guide is the complete, one-entry-per-provider reference for all 18 intelligence providers built into HORIZON GRID. *tech-04-provider-architecture.md* covers how the provider system works as a whole — the shared `BaseProvider` contract, the concurrent fan-out model, the Redis caching layer, and the runtime (no-restart) configuration architecture — and isn't repeated here at length. *user-06-providers.md* covers the same 18 providers from a plain-language, what-does-this-mean-for-an-analyst angle. This guide sits between them: for every provider, exactly what it is, what it needs, how to turn it on, how to prove it's working, and precisely how it fails when it fails.
 
-## How to Read Every Entry Below
+## 📚 Table of Contents
+
+- [📖 How to Read Every Entry Below](#-how-to-read-every-entry-below)
+  - [How a result appears in an investigation](#how-a-result-appears-in-an-investigation)
+  - [Configuring a provider (Manage Providers UI)](#configuring-a-provider-manage-providers-ui)
+  - [Testing a provider — and the retype-required behavior](#testing-a-provider--and-the-retype-required-behavior)
+  - [Provider Health — is it actually working right now](#provider-health--is-it-actually-working-right-now)
+  - [Who can do what — the standing RBAC rule for every provider](#who-can-do-what--the-standing-rbac-rule-for-every-provider)
+  - [The shared status vocabulary](#the-shared-status-vocabulary)
+- [🎯 Threat Intelligence Providers (10)](#-threat-intelligence-providers-10)
+  - [VirusTotal](#virustotal) · [AbuseIPDB](#abuseipdb) · [AlienVault OTX](#alienvault-otx) · [URLhaus](#urlhaus) · [ThreatFox](#threatfox) · [MalwareBazaar](#malwarebazaar) · [Google Safe Browsing](#google-safe-browsing) · [Spamhaus DBL/ZEN](#spamhaus-dblzen) · [PhishTank](#phishtank) · [MITRE ATT&CK](#mitre-attck)
+- [🧪 Sandbox Providers (2)](#-sandbox-providers-2)
+  - [urlscan.io](#urlscanio) · [Hybrid Analysis (Falcon Sandbox)](#hybrid-analysis-falcon-sandbox)
+- [📜 Certificate Intelligence Providers (1)](#-certificate-intelligence-providers-1)
+  - [crt.sh](#crtsh)
+- [🐛 Vulnerability Providers (2)](#-vulnerability-providers-2)
+  - [NIST NVD](#nist-nvd) · [CISA Known Exploited Vulnerabilities (KEV)](#cisa-known-exploited-vulnerabilities-kev)
+- [📇 WHOIS Providers (1)](#-whois-providers-1)
+  - [WHOIS/RDAP](#whoisrdap)
+- [🌐 Passive DNS Providers (1)](#-passive-dns-providers-1)
+  - [Censys](#censys)
+- [🔎 OSINT Providers (1)](#-osint-providers-1)
+  - [Internet Intelligence Collector](#internet-intelligence-collector)
+- [🔬 Deep Dive: The "UNKNOWN Is Not SAFE" Guarantee](#-deep-dive-the-unknown-is-not-safe-guarantee)
+  - [Google Safe Browsing's invariant, stated directly in its own code](#google-safe-browsings-invariant-stated-directly-in-its-own-code)
+  - [urlscan.io's invariant: never fabricate a verdict, and never fabricate a result from an incomplete scan](#urlscanios-invariant-never-fabricate-a-verdict-and-never-fabricate-a-result-from-an-incomplete-scan)
+  - [The proof: a real, live chaos test with deliberately invalid credentials](#the-proof-a-real-live-chaos-test-with-deliberately-invalid-credentials)
+
+---
+
+## 📖 How to Read Every Entry Below
 
 A few mechanics are identical across all 18 providers. Rather than repeat them 18 times, they're described once here; each provider's entry below only calls out what's actually different about that provider.
 
@@ -22,7 +52,8 @@ Every provider is configured from the same place: the **Providers** page (`/prov
 
 Every provider row also has a **Test Connection** button. It calls `POST /api/v1/providers/{provider_id}/test`, which makes one real, minimal HTTP request against that provider's actual external API using the *candidate* credential value(s) currently typed into that row's form fields — never the already-saved, stored credential. This is deliberate: the test endpoint has no way to read the encrypted, stored credential (and no reason to — it exists specifically so an administrator can try out a not-yet-saved key without it ever touching the live configuration).
 
-The practical consequence, worth stating plainly: **to re-test a credential you already saved and that's already working, you have to retype it into the field first.** If the field is left empty, "Test Connection" tests an empty string, and — correctly — reports that as a failure. That failure does not mean your saved, active key stopped working; it means the *test you just ran* had nothing to test. The field's masked placeholder is a visual hint that a value already exists there, not a stand-in value the test can silently use.
+> [!NOTE]
+> The practical consequence, worth stating plainly: **to re-test a credential you already saved and that's already working, you have to retype it into the field first.** If the field is left empty, "Test Connection" tests an empty string, and — correctly — reports that as a failure. That failure does not mean your saved, active key stopped working; it means the *test you just ran* had nothing to test. The field's masked placeholder is a visual hint that a value already exists there, not a stand-in value the test can silently use.
 
 Where a provider has a real live test handler (12 of the 18 do — listed per-provider below), the response is one of several specific, genuine outcomes (authenticated success with real latency, a rejected/invalid key, a rate limit, or a network error) — never a generic pass/fail. Where a provider has no test handler at all (the same 6 providers that need no credential), clicking Test Connection still runs and still returns a real, honest response: the connector's fallback message, `"'{provider_id}' has no live connection test (it may require no key, e.g. Spamhaus, crt.sh, CISA KEV, MITRE ATT&CK, WHOIS/RDAP)."`
 
@@ -53,7 +84,7 @@ Every provider result carries exactly one of these statuses (`app/providers/base
 
 ---
 
-# Threat Intelligence Providers (10)
+# 🎯 Threat Intelligence Providers (10)
 
 These are the reputation, blocklist, and community-intelligence sources — the platform's `threat_intel` category. Nine of the ten answer "has anyone seen this indicator before, and was it bad?"; the tenth, MITRE ATT&CK, is reference data rather than a reputation check and is called out as different where it matters.
 
@@ -209,7 +240,7 @@ These are the reputation, blocklist, and community-intelligence sources — the 
 
 ---
 
-# Sandbox Providers (2)
+# 🧪 Sandbox Providers (2)
 
 These execute or scan the target live, rather than only consulting a pre-built database.
 
@@ -245,7 +276,7 @@ These execute or scan the target live, rather than only consulting a pre-built d
 
 ---
 
-# Certificate Intelligence Providers (1)
+# 📜 Certificate Intelligence Providers (1)
 
 ## crt.sh
 
@@ -264,7 +295,7 @@ These execute or scan the target live, rather than only consulting a pre-built d
 
 ---
 
-# Vulnerability Providers (2)
+# 🐛 Vulnerability Providers (2)
 
 These answer a different kind of question than the rest of this guide: not "is this indicator bad," but "how serious is this known software vulnerability, and is it actually being exploited."
 
@@ -300,7 +331,7 @@ These answer a different kind of question than the rest of this guide: not "is t
 
 ---
 
-# WHOIS Providers (1)
+# 📇 WHOIS Providers (1)
 
 ## WHOIS/RDAP
 
@@ -319,7 +350,7 @@ These answer a different kind of question than the rest of this guide: not "is t
 
 ---
 
-# Passive DNS Providers (1)
+# 🌐 Passive DNS Providers (1)
 
 ## Censys
 
@@ -338,7 +369,7 @@ These answer a different kind of question than the rest of this guide: not "is t
 
 ---
 
-# OSINT Providers (1)
+# 🔎 OSINT Providers (1)
 
 ## Internet Intelligence Collector
 
@@ -357,11 +388,12 @@ These answer a different kind of question than the rest of this guide: not "is t
 
 ---
 
-# Deep Dive: The "UNKNOWN Is Not SAFE" Guarantee
+# 🔬 Deep Dive: The "UNKNOWN Is Not SAFE" Guarantee
 
 urlscan.io and Google Safe Browsing get separate, deeper treatment here because of what a wrong answer from either one would actually mean in practice. Both are used, in effect, to answer "is this specific URL/domain safe to open right now?" — and for both, the single most damaging kind of bug imaginable is not a crash or a slow response; it's a *false negative*: a genuine API failure (an invalid key, an outage, a rate limit) getting silently rendered on screen as "clean" or "safe." An analyst who trusts that a URL scanned "clean" when the provider that was supposed to check it actually never got a real answer is worse off than an analyst who was told plainly "this check didn't run."
 
-Both connectors were built, from the start, around a single non-negotiable invariant: **a genuine failure is always reported as `error`, `timeout`, or `rate_limited` — never anything that could be rendered on screen as a clean or safe result.**
+> [!IMPORTANT]
+> Both connectors were built, from the start, around a single non-negotiable invariant: **a genuine failure is always reported as `error`, `timeout`, or `rate_limited` — never anything that could be rendered on screen as a clean or safe result.**
 
 ## Google Safe Browsing's invariant, stated directly in its own code
 
@@ -394,4 +426,5 @@ Concretely: the invalid key was rejected by the real external API with `status=e
 
 [FIGURE: 41-safe-browsing-chaos-test-unknown.png | An investigation result with a deliberately invalid Google Safe Browsing API key configured, showing the provider card reporting an error status and an "unknown" verdict rather than any variation of "clean" or "safe."]
 
-The practical takeaway for anyone relying on either of these two providers: if you ever see `unknown` from Google Safe Browsing or urlscan.io on an investigation, treat it exactly as what it is — the check did not complete, for a real, specific, logged reason (check the provider card's own error message and the Provider Health page) — and never as a quiet, safe "nothing to worry about."
+> [!TIP]
+> The practical takeaway for anyone relying on either of these two providers: if you ever see `unknown` from Google Safe Browsing or urlscan.io on an investigation, treat it exactly as what it is — the check did not complete, for a real, specific, logged reason (check the provider card's own error message and the Provider Health page) — and never as a quiet, safe "nothing to worry about."

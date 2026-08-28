@@ -1,8 +1,22 @@
-# Mission-Critical Operations Manual
+# 🛡️ Mission-Critical Operations Manual
 
-This manual is written for a HORIZON GRID deployment at a remote, physically-hard-to-reach, mission-critical site: installed once, expected to run correctly for a long time, with no developer access afterward. It documents exactly what changed to make that possible, what an on-site operator (who may have no Docker/Linux/PowerShell background) actually needs to do, and — honestly — what is still a known limitation rather than a solved problem. Where this manual and an older chapter (Operations Guide, Windows/Linux Administration) disagree on a fact like a restart policy or a health-check endpoint, **this manual is current; the older chapter predates this hardening pass and has not yet been fully rewritten.**
+This manual is written for a HORIZON GRID deployment at a remote, physically-hard-to-reach, mission-critical site: installed once, expected to run correctly for a long time, with no developer access afterward. It documents exactly what changed to make that possible, what an on-site operator (who may have no Docker/Linux/PowerShell background) actually needs to do, and — honestly — what is still a known limitation rather than a solved problem.
 
-## 1. What changed, and why
+> [!IMPORTANT]
+> Where this manual and an older chapter (Operations Guide, Windows/Linux Administration) disagree on a fact like a restart policy or a health-check endpoint, **this manual is current; the older chapter predates this hardening pass and has not yet been fully rewritten.**
+
+## 📋 Table of contents
+
+- [1. What changed, and why](#1--what-changed-and-why)
+- [2. Zero-hands operation: what now happens automatically, and what still needs a human](#2--zero-hands-operation-what-now-happens-automatically-and-what-still-needs-a-human)
+- [3. Health monitoring, precisely](#3--health-monitoring-precisely)
+- [4. Backup and restore, step by step](#4--backup-and-restore-step-by-step)
+- [5. Disaster-recovery scenarios, and what to actually do](#5--disaster-recovery-scenarios-and-what-to-actually-do)
+- [6. Security hardening summary](#6--security-hardening-summary)
+- [7. Known limitations (disclosed, not fixed, in this hardening pass)](#7--known-limitations-disclosed-not-fixed-in-this-hardening-pass)
+- [8. Where to look next](#8--where-to-look-next)
+
+## 1. 🔧 What changed, and why
 
 A dedicated reliability review (documented in full in the project's own commit history) found and fixed the following real gaps. Each is a genuine before/after change, not a theoretical improvement:
 
@@ -23,7 +37,7 @@ A dedicated reliability review (documented in full in the project's own commit h
 15. **Redis now has a persistent volume.** Confirmed live before this fix: a value set, then a container restart (an image update, a reconfigure), silently reset it to empty. Nothing stored there is a system of record (provider-result cache, rate-limiter counters, the Celery broker), but a routine reconfigure resetting every rate limiter and the whole cache was still a real, avoidable behavior change.
 16. **The AI-outcome badge on the Final Assessment panel now distinguishes a genuine AI failure from a correct "nothing to assess" decision.** Both previously rendered the identical "No AI call (no evidence to assess)" text — the backend already tracked which case applied (`ai_outcome`: `success` / `failed` / `skipped_no_evidence`) and sent it in every response, but the frontend's type didn't declare the field and no component read it. Confirmed live against a real `ai_outcome="failed"` row that the backend was already sending the field correctly — this was a pure frontend gap.
 
-## 2. Zero-hands operation: what now happens automatically, and what still needs a human
+## 2. 🔁 Zero-hands operation: what now happens automatically, and what still needs a human
 
 **Fully automatic, no operator action required, once configured:**
 - The platform starts itself after any host reboot (including an unattended one after a power outage).
@@ -37,7 +51,7 @@ A dedicated reliability review (documented in full in the project's own commit h
 - **Recovering from a genuinely exhausted disk.** Log rotation (10 MB × 3 files per service) and backup pruning bound *this platform's own* growth, but do not free space consumed by something else on the machine.
 - **Applying a new installer/version.** This is a deliberate, reviewed action (see the pre-upgrade backup in §1.5), not a silent background update.
 
-## 3. Health monitoring, precisely
+## 3. 🩺 Health monitoring, precisely
 
 | Check | Endpoint / command | What it actually proves | Who calls it |
 |---|---|---|---|
@@ -48,7 +62,7 @@ A dedicated reliability review (documented in full in the project's own commit h
 
 `/health` and `/health/detailed` both report `version` and `uptime_seconds` — "is it healthy, and what version/uptime is it on" is answerable in one request, in well under a second, matching the requirement that remote-site status be checkable quickly without a developer present.
 
-## 4. Backup and restore, step by step
+## 4. 💾 Backup and restore, step by step
 
 **Taking a backup manually:** Windows Start Menu → **Backup Database Now**, or `sudo horizon-grid backup`. Both run `pg_dump` inside the live Postgres container (no separate `psql`/`pg_dump` install needed on the host) and prune to the 10 most recent snapshots automatically.
 
@@ -60,7 +74,7 @@ A dedicated reliability review (documented in full in the project's own commit h
 
 **What is and isn't covered by a backup:** the Postgres database (all investigations, cases, users, runtime provider/AI configuration) is what `pg_dump` captures. It does **not** include `.env` (API keys, JWT secret, database credentials — back this up separately, e.g. by copying `config\.env` / `/etc/horizon-grid/.env` to a secure location) or the Redis cache (deliberately not a system of record — see §1.15).
 
-## 5. Disaster-recovery scenarios, and what to actually do
+## 5. 🚨 Disaster-recovery scenarios, and what to actually do
 
 - **Unattended host reboot (e.g. after a power outage).** No action needed — boot-time auto-start (§1.3) brings the stack back up on its own. Verify with `Service Status` / `horizon-grid status` once reachable.
 - **Backend process becomes unresponsive but the container is still "running."** No action needed for the first 5 minutes — the watchdog (§1.4) detects and restarts it automatically. If `watchdog.log` shows repeated failed recovery attempts, this indicates a persistent problem (e.g. a corrupted database) that a restart alone cannot fix — proceed to the restore procedure (§4) or Diagnostics.
@@ -68,7 +82,7 @@ A dedicated reliability review (documented in full in the project's own commit h
 - **Forgotten administrator password / all administrators disabled.** There is deliberately no insecure universal backdoor. Recovery requires direct database access (an administrator with host/root access can update `users.hashed_password` directly, or restore a backup from before the lockout) — this is a known, disclosed limitation of a system with no remote support channel, not an unaddressed gap; building a passwordless backdoor would itself be a worse security posture for a mission-critical, physically-inaccessible deployment.
 - **Disk approaching full.** Log rotation and backup pruning bound this platform's own footprint; there is currently no automated alert when the underlying disk itself is low (see §6, Known Limitations).
 
-## 6. Security hardening summary
+## 6. 🔒 Security hardening summary
 
 - Outbound SSRF guard on the Ollama AI-call path (§1.7) — blocks link-local addresses including cloud instance-metadata services, on both the runtime-config and `.env`-only paths.
 - Login brute-force rate limiting (§1.8), fixed-window per attempted email.
@@ -78,7 +92,7 @@ A dedicated reliability review (documented in full in the project's own commit h
 - Nmap (the port-scanning tool) is invoked via a hardcoded argument list per profile, never a shell, never with a caller-supplied flag — see the Security Assessment Toolkit chapter for the full design.
 - A **known, disclosed, not-yet-closed gap**: the SSRF check validates a DNS resolution snapshot; the real outbound HTTP call re-resolves independently afterward, leaving a narrow DNS-rebinding TOCTOU window. Not fixed in this pass — disclosed here rather than silently left undocumented.
 
-## 7. Known limitations (disclosed, not fixed, in this hardening pass)
+## 7. 🚧 Known limitations (disclosed, not fixed, in this hardening pass)
 
 Per this project's own certification standard — certify only what was actually implemented and verified, not what was intended — the following are real, identified gaps that remain open:
 
@@ -89,7 +103,7 @@ Per this project's own certification standard — certify only what was actually
 - **No off-host/off-site backup copy option** — backups are always written to local disk only. For a genuinely remote, physically-inaccessible site, a local-disk-only backup does not protect against the disk/host itself failing.
 - **A full multi-hour soak/long-run test's results are reported separately** (see the release-gate certification report) rather than claimed here in advance of that run completing.
 
-## 8. Where to look next
+## 8. 🧭 Where to look next
 
 - **Windows/Linux Administration** chapters — day-to-day shortcuts and commands (superseded on restart-policy and health-endpoint specifics by §1 and §3 of this manual, otherwise still accurate).
 - **Operations Guide** — Celery/cache internals, deployment topology detail.

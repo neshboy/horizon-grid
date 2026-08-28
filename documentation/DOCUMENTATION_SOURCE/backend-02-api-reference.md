@@ -2,7 +2,7 @@
 
 This chapter is the exhaustive endpoint-by-endpoint reference for the HORIZON GRID backend's HTTP API. Every route defined under `backend/app/api/routes/*.py` is documented here — method, path, purpose, authentication/permission requirement, request body, response shape, and error cases — traced directly to the route source. Narrative context (why the pipeline is shaped this way, how the pieces fit together) is covered in the Architecture and Data Flow chapters; this chapter is deliberately just the contract.
 
-All 51 routes share one global prefix, `settings.api_v1_prefix = "/api/v1"` (`backend/app/core/config.py:20`), applied in `backend/app/main.py:38-47` via `app.include_router(..., prefix=settings.api_v1_prefix)`. Routers are registered, and therefore documented below, in this order: **auth → lookup → providers → ai_config → analysis → hunting → pivot → basket → cases → runtime**, plus a newer `dashboard` router documented as an addendum in §11 below. (`app/main.py` also registers `routes/admin.py` and `routes/security_assessment.py` after `runtime` and ahead of `dashboard` in real registration order; both are out of scope for this update and are not yet covered by this reference.)
+All 51 routes share one global prefix, `settings.api_v1_prefix = "/api/v1"` (`backend/app/core/config.py:20`), applied in `backend/app/main.py:173-187` via `app.include_router(..., prefix=settings.api_v1_prefix)`. Routers are registered, and therefore documented below, in this order: **auth → lookup → providers → ai_config → analysis → hunting → pivot → basket → cases → runtime**, plus a newer `dashboard` router documented as an addendum in §11 below. (`app/main.py` also registers four further routers in real registration order -- `routes/admin.py` (7 endpoints), `routes/security_assessment.py` (6 endpoints), `routes/pentest.py` (18 endpoints), and `routes/pentest_exploit.py` (6 endpoints) -- after `runtime` and ahead of `dashboard`. These back the Administration panel, the per-lookup Security Assessment Toolkit, and the standalone Pentest Suite respectively; all four are out of scope for this reference and are covered in their own chapters.)
 
 | # | Router file | Base path | Endpoints |
 |---|---|---|---|
@@ -18,12 +18,29 @@ All 51 routes share one global prefix, `settings.api_v1_prefix = "/api/v1"` (`ba
 | 10 | `routes/runtime.py` | `/api/v1/runtime` | 10 |
 | 11 | `routes/dashboard.py` | `/api/v1/dashboard` | 2 |
 
-**Total: 51 endpoints.** Two additional endpoints are defined directly in `app/main.py`, outside `app/api/routes/`, and are out of scope for this reference but noted for completeness at the end of the chapter: `GET /health` (`main.py:63-65`, no prefix, no auth) and `GET /metrics` (Prometheus instrumentator, `main.py:36`).
+**Total: 51 endpoints.** Four additional endpoints are defined directly in `app/main.py`, outside `app/api/routes/`, and are out of scope for this reference but noted for completeness at the end of the chapter: `GET /health`, `GET /health/detailed`, `GET /network-info`, and `GET /metrics`.
 
 [FIGURE: backend-02-api-reference-diagram-1.png | Diagram: API Reference]
 Diagram: Router registration order and base paths, all mounted under the global `/api/v1` prefix. Registration order determines only documentation order here -- FastAPI's routing is path-based, not order-sensitive, except where two routers could otherwise share an ambiguous prefix (none do in this codebase).
 
-## How to Read This Reference
+## 📋 Table of contents
+
+- [How to Read This Reference](#-how-to-read-this-reference)
+- [1. Authentication — routes/auth.py](#-1-authentication--routesauthpy)
+- [2. IOC Lookup — routes/lookup.py](#-2-ioc-lookup--routeslookuppy)
+- [3. Providers — routes/providers.py](#-3-providers--routesproviderspy)
+- [4. AI Configuration — routes/ai_config.py](#-4-ai-configuration--routesai_configpy)
+- [5. Lookup Analysis — routes/analysis.py](#-5-lookup-analysis--routesanalysispy)
+- [6. Threat Hunting — routes/hunting.py](#-6-threat-hunting--routeshuntingpy)
+- [7. Pivoting — routes/pivot.py](#-7-pivoting--routespivotpy)
+- [8. IOC Basket — routes/basket.py](#-8-ioc-basket--routesbasketpy)
+- [9. Case Management — routes/cases.py](#-9-case-management--routescasespy)
+- [10. Runtime Configuration — routes/runtime.py](#-10-runtime-configuration--routesruntimepy)
+- [11. Dashboard — routes/dashboard.py](#-11-dashboard--routesdashboardpy)
+- [Out-of-Scope Endpoints](#-out-of-scope-endpoints)
+- [Summary: Endpoint and Permission Counts](#-summary-endpoint-and-permission-counts)
+
+## 📖 How to Read This Reference
 
 Every endpoint below follows the same template:
 
@@ -45,7 +62,7 @@ There are exactly three roles (`app/models/user.py:11-14`): `admin`, `analyst`, 
 
 ---
 
-## 1. Authentication — `routes/auth.py`
+## 🔑 1. Authentication — `routes/auth.py`
 
 Base path `/api/v1/auth`. All four endpoints are unauthenticated at the route level except `/me`; `/register` and `/login` are the only ways to obtain a token in the first place.
 
@@ -94,7 +111,7 @@ Base path `/api/v1/auth`. All four endpoints are unauthenticated at the route le
 
 ---
 
-## 2. IOC Lookup — `routes/lookup.py`
+## 🔍 2. IOC Lookup — `routes/lookup.py`
 
 Base path `/api/v1/lookup`. This is the core investigation pipeline: creating a lookup, streaming its lifecycle, re-running the AI assessment, and reading back results.
 
@@ -157,7 +174,7 @@ Base path `/api/v1/lookup`. This is the core investigation pipeline: creating a 
 
 ---
 
-## 3. Providers — `routes/providers.py`
+## 🔌 3. Providers — `routes/providers.py`
 
 Base path `/api/v1/providers`. Read-only health reporting plus a live credential test used by the setup wizard and the Manage Providers UI.
 
@@ -182,7 +199,7 @@ Base path `/api/v1/providers`. Read-only health reporting plus a live credential
 
 ---
 
-## 4. AI Configuration — `routes/ai_config.py`
+## 🤖 4. AI Configuration — `routes/ai_config.py`
 
 Base path `/api/v1/ai`. Live AI-backend credential testing and model-list discovery for the setup wizard / Manage Providers UI.
 
@@ -211,7 +228,7 @@ Base path `/api/v1/ai`. Live AI-backend credential testing and model-list discov
 
 ---
 
-## 5. Lookup Analysis — `routes/analysis.py`
+## 🧠 5. Lookup Analysis — `routes/analysis.py`
 
 Base path `/api/v1/lookup/{lookup_id}/analysis`. These are the "explain the verdict" endpoints: on-demand AI generations grounded in a *completed* lookup's persisted evidence ledger. Every endpoint in this section shares one loader, `_load_lookup` (`analysis.py:45-51`), which raises **404** `"Lookup not found"` if the lookup does not exist, and — for every endpoint except `/evidence` — also raises **409** `f"Lookup is not completed yet (status={lookup.status.value})"` if the lookup's status is not `COMPLETED`. That shared behavior is stated once here and referenced, not repeated, in each endpoint's Errors line below.
 
@@ -307,7 +324,7 @@ Base path `/api/v1/lookup/{lookup_id}/analysis`. These are the "explain the verd
 
 ---
 
-## 6. Threat Hunting — `routes/hunting.py`
+## 🎯 6. Threat Hunting — `routes/hunting.py`
 
 Base path `/api/v1/lookup/{lookup_id}`. Both endpoints share a local `_load_lookup` helper (`hunting.py:26-30`) that only checks existence — **404** `"Lookup not found"` — with **no completed-status gate**, unlike `analysis.py`'s helper. A hunting package or detection rule can therefore be requested even for a lookup that is still `RUNNING` or has `FAILED`.
 
@@ -333,7 +350,7 @@ Base path `/api/v1/lookup/{lookup_id}`. Both endpoints share a local `_load_look
 
 ---
 
-## 7. Pivoting — `routes/pivot.py`
+## 🧭 7. Pivoting — `routes/pivot.py`
 
 Base path `/api/v1/lookup/{lookup_id}/pivots`. A single deterministic (non-AI) endpoint.
 
@@ -349,7 +366,7 @@ Base path `/api/v1/lookup/{lookup_id}/pivots`. A single deterministic (non-AI) e
 
 ---
 
-## 8. IOC Basket — `routes/basket.py`
+## 🧺 8. IOC Basket — `routes/basket.py`
 
 Base path `/api/v1/basket`. A per-analyst scratch space of saved IOCs, scoped by the caller's own user ID — every endpoint here operates only on the requesting user's own basket items.
 
@@ -401,7 +418,7 @@ Base path `/api/v1/basket`. A per-analyst scratch space of saved IOCs, scoped by
 
 ---
 
-## 9. Case Management — `routes/cases.py`
+## 📁 9. Case Management — `routes/cases.py`
 
 Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation containers grouping IOCs, notes, and reports. Most endpoints share a loader, `_load_case` (`cases.py:68-77`), which raises **404** `"Case not found"` for a missing case; that is stated once here and referenced, not repeated, below.
 
@@ -467,7 +484,10 @@ Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation
 - **Auth:** `require_permission("case:write")`.
 - **Request body** (`CaseIOCAddRequest`, `app/schemas/case.py:23-26`): `ioc_value: str`, `ioc_type: str`, `lookup_id: Optional[str]`.
 - **Response** (HTTP **201**): the full updated case object.
-- **Errors:** **404** `"Case not found"` (from `_load_case`). Note: supplying an `lookup_id` that is not a syntactically valid UUID raises an unhandled `ValueError` from `uuid.UUID(...)` (`cases.py:174`) — this surfaces as an unhandled server error rather than a documented `HTTPException`/`422`, and is a real gap rather than an intentional error path.
+- **Errors:** **404** `"Case not found"` (from `_load_case`).
+
+> [!WARNING]
+> Supplying a `lookup_id` that is not a syntactically valid UUID raises an unhandled `ValueError` from `uuid.UUID(...)` (`cases.py:174`) — this surfaces as an unhandled server error rather than a documented `HTTPException`/`422`, and is a real gap rather than an intentional error path.
 
 ### `DELETE /api/v1/cases/{case_id}/iocs/{ioc_id}`
 `app/api/routes/cases.py:182`
@@ -490,7 +510,7 @@ Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation
 
 ---
 
-## 10. Runtime Configuration — `routes/runtime.py`
+## 🧰 10. Runtime Configuration — `routes/runtime.py`
 
 Base path `/api/v1/runtime`. This is the API surface behind the DB-backed "Manage Providers" feature: configuring and activating AI backends, configuring and enabling IOC providers, and reading the audit log — all without editing `.env` or restarting a container. Business logic lives in `app/core/runtime_config.py`; every write-oriented endpoint here delegates to it.
 
@@ -592,7 +612,7 @@ Base path `/api/v1/runtime`. This is the API surface behind the DB-backed "Manag
 
 ---
 
-## 11. Dashboard — `routes/dashboard.py`
+## 📊 11. Dashboard — `routes/dashboard.py`
 
 Base path `/api/v1/dashboard`. Both endpoints back the Executive Dashboard added in this update. Both are read-only aggregations over already-persisted data — neither makes a new provider call, a new AI call outside the one described below, or persists anything.
 
@@ -616,16 +636,18 @@ Base path `/api/v1/dashboard`. Both endpoints back the Executive Dashboard added
 
 ---
 
-## Out-of-Scope Endpoints
+## 🚧 Out-of-Scope Endpoints
 
-Two endpoints exist in `app/main.py` directly, outside `app/api/routes/`, with no `/api/v1` prefix and no permission check:
+Four endpoints exist in `app/main.py` directly, outside `app/api/routes/`, with no `/api/v1` prefix and no permission check:
 
-- `GET /health` (`main.py:63-65`) — liveness probe, no authentication.
-- `GET /metrics` (`main.py:36`) — Prometheus metrics, exposed by `prometheus-fastapi-instrumentator`, no authentication.
+- `GET /health` — a deliberately dependency-free liveness probe, no authentication. Kept fast and infra-independent so it still works against a bare CI runner with no Postgres/Redis running.
+- `GET /health/detailed` — the real dependency-aware health check: pings Postgres and Redis, returns `503` if Postgres is down, `200` with `status:"degraded"` if only Redis is down. This, not the plain `/health` above, is the endpoint a container healthcheck, load balancer, or the platform's own reliability watchdog should target.
+- `GET /network-info` — an unauthenticated, point-in-time snapshot of the Windows wizard's last-detected LAN IP and configured frontend/backend ports.
+- `GET /metrics` — Prometheus metrics, exposed by `prometheus-fastapi-instrumentator`, no authentication.
 
-Both are excluded from the router/permission inventory above because they are not defined in `app/api/routes/*.py` and carry no RBAC gate, but are noted here so this reference remains a complete map of every HTTP-reachable route in the backend process.
+All four are excluded from the router/permission inventory above because they are not defined in `app/api/routes/*.py` and carry no RBAC gate, but are noted here so this reference remains a complete map of every HTTP-reachable route in the backend process.
 
-## Summary: Endpoint and Permission Counts
+## 🧾 Summary: Endpoint and Permission Counts
 
 | Router file | Endpoints | Distinct permission strings used |
 |---|---|---|

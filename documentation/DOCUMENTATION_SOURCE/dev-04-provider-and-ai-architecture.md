@@ -2,7 +2,22 @@
 
 This chapter is the source-level companion to the *Provider Architecture* and *AI Architecture* chapters elsewhere in this documentation set. Those chapters describe what the provider and AI layers *do*; this one documents the actual interfaces, classes, and method signatures a developer extending or maintaining this codebase needs to implement or call. All facts below are drawn directly from `backend/app/providers/base.py`, `registry.py`, `orchestrator.py`, `backend/app/ai/service.py`, and the eleven AI client modules (`ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, `groq_client.py`, `openai_client.py`, `kimi_client.py`, `deepseek_client.py`, `xai_client.py`, `mistral_client.py`, `openrouter_client.py`).
 
-## 1. The `BaseProvider` Contract (`app/providers/base.py`)
+## 📋 Table of contents
+
+- [1. The `BaseProvider` Contract](#1--the-baseprovider-contract-appprovidersbasepy)
+- [2. The Provider Registry](#2--the-provider-registry-appprovidersregistrypy)
+  - [2.1 The 18 registered connectors](#21-the-18-registered-connectors)
+- [3. The Orchestrator: Concurrent Fan-Out](#3--the-orchestrator-concurrent-fan-out-appprovidersorchestratorpy)
+  - [3.1 `_run_with_policy()`](#31-_run_with_policy--per-provider-cache-timeout-retry)
+  - [3.2 `run_all_providers()`](#32-run_all_providers--the-streaming-fan-out-generator)
+- [4. The AI Client Interface: `call_claude_json`](#4--the-ai-client-interface-call_claude_json)
+- [5. `app/ai/service.py`: Backend Resolution and the Two-Step Flow](#5--appaiservicepy-backend-resolution-and-the-two-step-flow)
+- [6. `_ground_final_assessment()`](#6--_ground_final_assessment--trusting-nothing-at-face-value)
+- [7. Extending the System](#7--extending-the-system)
+
+---
+
+## 1. 🔌 The `BaseProvider` Contract (`app/providers/base.py`)
 
 Every connector subclasses the abstract class `BaseProvider` (`base.py:80-183`). The module docstring states the intent directly: "the orchestrator never knows about concrete providers — it only calls this interface" (`base.py:1-7`).
 
@@ -39,7 +54,7 @@ Every connector subclasses the abstract class `BaseProvider` (`base.py:80-183`).
 
 Because every branch above is centralized, a concrete `fetch()` only needs to handle its own vendor-specific success/404/no-data cases — anything else it lets propagate is normalized by `run()`.
 
-## 2. The Provider Registry (`app/providers/registry.py`)
+## 2. 📇 The Provider Registry (`app/providers/registry.py`)
 
 The registry is a flat list and two accessor functions, no logic: `_ALL_PROVIDERS: list[BaseProvider]` holds one module-level singleton instance per connector (imported from its own module, never constructed here); `get_all_providers()` returns it; `get_provider_health()` maps it to the dicts backing `GET /api/v1/providers/health` (`registry.py:8-64`). The docstring states the extensibility contract: "adding a new provider is a two-line change (import + append) and never touches the orchestrator, API routes, or correlation engine" (`registry.py:1-7`). Note `get_provider_health()` reports the class-level `configured` flag, not the per-investigation runtime-override value from §3 — worth knowing when comparing this endpoint against what an in-flight investigation actually saw.
 
@@ -68,7 +83,7 @@ The registry is a flat list and two accessor functions, no logic: `_ALL_PROVIDER
 
 All 18 dispatch through the identical `run()`/`fetch()` contract in §1; this table exists to show where each one's credential and endpoint live for anyone tracing a credential end to end. `urlscan` and `google_safe_browsing` are the two exceptions to the setup wizard's provider page (see the Provider Guide) — both require a key but are configured after install via the app's own Providers page instead. The `IOCType` enum (`app/ioc/types.py:5-38`) has 33 members including `UNKNOWN`; each provider's `supported_types` set is a subset.
 
-## 3. The Orchestrator: Concurrent Fan-Out (`app/providers/orchestrator.py`)
+## 3. 🔀 The Orchestrator: Concurrent Fan-Out (`app/providers/orchestrator.py`)
 
 ### 3.1 `_run_with_policy()` — per-provider cache, timeout, retry
 
@@ -95,7 +110,7 @@ Sequence for `async def _run_with_policy(provider, ioc_value, ioc_type, client) 
 [FIGURE: dev-04-provider-and-ai-architecture-diagram-1.png | Diagram: 3.2 `run_all_providers()` — the streaming fan-out generator]
 Diagram: Provider call sequence -- registry to orchestrator to `BaseProvider.run()` to `fetch()`. The cache check and the `ContextVar` credential check both happen before any outbound HTTP call, and results stream back in whatever order each provider actually finishes, not the order tasks were spawned.
 
-## 4. The AI Client Interface: `call_claude_json`
+## 4. 🤖 The AI Client Interface: `call_claude_json`
 
 `app/ai/service.py` defines the required shape as a `typing.Protocol`, not a base class — each of the eleven client modules independently implements a matching method:
 
@@ -124,7 +139,7 @@ class _AIClient(Protocol):
 
 Every constructor accepts `Optional` overrides for credentials/model/`max_tokens`, falling back to `get_settings()` when `None` — e.g. `AnthropicClient.__init__(self, api_key=None, model_id=None, max_tokens=None)` (`anthropic_client.py:26-35`) resolves against `settings.anthropic_api_key`/`anthropic_model_id`/`anthropic_max_tokens`. Each module also exposes a lazily-initialized singleton getter (e.g. `get_anthropic_client()`), used only as the no-runtime-config fallback (§5.2). Ollama, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, and OpenRouter all run their schema through `app/ai/schema_utils.py`'s `inline_refs()` first, since their schema compilers don't reliably resolve `$ref`/`$defs`; Anthropic and Bedrock's Converse API resolve refs natively and skip that step.
 
-## 5. `app/ai/service.py`: Backend Resolution and the Two-Step Flow
+## 5. 🧠 `app/ai/service.py`: Backend Resolution and the Two-Step Flow
 
 **`_model_id_for_backend(backend, settings)`** (`service.py:33-40`) is a dict lookup (`ollama`→`settings.ollama_model`, `anthropic`→`anthropic_model_id`, etc.) used only for attribution/logging, not client construction.
 
@@ -140,13 +155,13 @@ Every constructor accepts `Optional` overrides for credentials/model/`max_tokens
 
 When evidence exists, the function builds `summaries_block` (one section per `ProviderSummary`) and `correlation_block` (`provider_agreement`, `deduplicated_facts`, up to the first 50 correlation edges as `source --relationship--> target [provenance]`), calls `client.call_claude_json(..., json_schema=FinalAssessment.model_json_schema(), tool_name="emit_final_assessment", max_tokens=8192)`, validates it, and passes it through `_ground_final_assessment()` (§6). `assessment.ai_backend`/`ai_model` are then **overwritten** with the backend/model actually invoked (`service.py:426-427`) — necessary because nothing stops the model from filling those fields in itself, and because `settings.ai_backend` can disagree with the runtime-active backend or an explicit `backend_override`. On any exception, the function returns a degraded `FinalAssessment` (`final_verdict="unknown"`, exception `repr()` embedded in the summary fields) — this pipeline never raises out to its caller.
 
-## 6. `_ground_final_assessment()` — Trusting Nothing at Face Value
+## 6. 🔍 `_ground_final_assessment()` — Trusting Nothing at Face Value
 
 `_ground_final_assessment(assessment, correlation, known_provider_ids=None) -> FinalAssessment` (`service.py:211-264`) runs on every generated (non-guard-shortcut) result. It builds `real_provider_ids` as the union of: every `provider_id` in a correlation edge's `provenance`, every provider in `correlation.provider_agreement`, and `known_provider_ids` — `{s.provider_id for s in provider_summaries}`, passed in by the caller. The third source matters because a provider like `internet_intelligence` returns only `osint_findings`/`source_count` — fields the correlation engine's relationship-extraction table doesn't recognize — so without it, a correct citation of that provider as agreeing/disagreeing would be indistinguishable from a hallucinated one and get stripped.
 
 `agreeing_providers`/`disagreeing_providers` are each filtered down to IDs in `real_provider_ids`; anything else is **dropped, not reassigned** — the code comment notes that guessing which list a hallucinated name belongs in "could silently misclassify a provider's position — worse than leaving it missing." Separately, every `MitreMapping.grounded` is set `True` only if its `technique_id` matches the target of a real `uses_technique` correlation edge — an ungrounded technique is flagged, not removed, leaving the UI free to render it differently rather than presenting it as fact.
 
-## 7. Extending the System
+## 7. 🔧 Extending the System
 
 **New IOC provider**: subclass `BaseProvider`, set the six class attributes, implement `fetch()`, instantiate a module-level singleton, add two lines to `registry.py` (import + append). No other file changes — the orchestrator, correlation engine, and evidence builder consume providers exclusively through the `BaseProvider`/`ProviderResult` contract in §1.
 

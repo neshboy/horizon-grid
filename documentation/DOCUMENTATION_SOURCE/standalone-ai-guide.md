@@ -1,10 +1,27 @@
 # HORIZON GRID Standalone AI Backend Guide — Configuring, Testing, Switching, and Trusting the AI Layer
 
-## Why this document exists
+## 💡 Why this document exists
 
 `tech-03-ai-architecture.md` already covers the AI layer's architecture from a source-code-reading point of view — the two-call structure, the grounding/cross-check mechanisms, the `Verdict`/`RiskAssessment` data model. `user-07-ai-analysis.md` already covers what an analyst actually sees on an investigation page and how to check an AI-written claim against the real evidence behind it. This document sits alongside both: a single, hands-on guide for whoever is actually setting up and operating the AI layer — how to add credentials for each of the eleven supported backends, test a connection before trusting it, switch the active backend at runtime with zero downtime, run a side-by-side comparison between two backends on the same evidence, and understand precisely what the platform does and does not guarantee about the AI's output. Everything below is drawn directly from `backend/app/ai/service.py`, `backend/app/ai/schemas.py`, the eleven per-backend client modules (`ollama_client.py`, `anthropic_client.py`, `bedrock_client.py`, `gemini_client.py`, `groq_client.py`, `openai_client.py`, `kimi_client.py`, `deepseek_client.py`, `xai_client.py`, `mistral_client.py`, `openrouter_client.py`), `backend/app/ai/connection_test.py`, `backend/app/core/runtime_config.py`, `backend/app/core/config.py`, `backend/app/api/routes/ai_config.py`, `backend/app/api/routes/runtime.py`, and `backend/app/ai/dashboard_summary.py` — nothing here is inferred from the feature's general shape.
 
-## 1. The Eleven Supported Backends
+## 📚 Table of Contents
+
+- [🤖 1. The Eleven Supported Backends](#-1-the-eleven-supported-backends)
+- [⚙️ 2. Where You Configure This](#️-2-where-you-configure-this)
+- [🛠️ 3. Adding and Configuring Each Backend](#️-3-adding-and-configuring-each-backend)
+- [✅ 4. Testing a Connection Before You Trust It](#-4-testing-a-connection-before-you-trust-it)
+- [🔁 5. Switching the Active Backend at Runtime — Zero Downtime](#-5-switching-the-active-backend-at-runtime--zero-downtime)
+- [⚖️ 6. AI Backend Comparison — Reanalyzing the Same Evidence](#️-6-ai-backend-comparison--reanalyzing-the-same-evidence)
+- [📋 7. The Three AI Outcomes — And Why "Skipped" Is Not a Failure](#-7-the-three-ai-outcomes--and-why-skipped-is-not-a-failure)
+- [📝 8. Prompt Architecture, at a High Level](#-8-prompt-architecture-at-a-high-level)
+- [🔒 9. The Deterministic-Score Lock — Why the AI Can Narrate a Score but Never Set One](#-9-the-deterministic-score-lock--why-the-ai-can-narrate-a-score-but-never-set-one)
+- [📊 10. The Executive Summary's Honest AI/Template Disclosure](#-10-the-executive-summarys-honest-aitemplate-disclosure)
+- [⚠️ 11. Known Limitation: A Local Ollama Backend Serializes Concurrent Requests](#️-11-known-limitation-a-local-ollama-backend-serializes-concurrent-requests)
+- [📚 See Also](#-see-also)
+
+---
+
+## 🤖 1. The Eleven Supported Backends
 
 | Backend | Config value | Mode | Credential(s) | Default model |
 |---|---|---|---|---|
@@ -22,7 +39,7 @@
 
 All eleven client classes expose the identical `call_claude_json(system_prompt, user_prompt, json_schema, tool_name, max_tokens)` method, which is what lets `app/ai/service.py` treat every backend interchangeably without branching on which one happens to be active. Ollama is the default specifically because it needs neither a key nor a paid quota — Bedrock needs IAM provisioning, and Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, and OpenRouter all need a cloud account with billing/quota set up; Anthropic needs only a key but still a funded account.
 
-## 2. Where You Configure This
+## ⚙️ 2. Where You Configure This
 
 There are two places to touch AI configuration, and they serve different moments:
 
@@ -49,11 +66,16 @@ Every card also carries a model-ID field, a **Test Connection** button, a **Save
 
 [FIGURE: standalone-ai-manage-providers-tab.png | The Manage Providers page's AI Providers tab, showing all eleven backend cards with their credential fields, Test Connection/Save buttons, and the Active badge on whichever backend is currently selected.]
 
-## 3. Adding and Configuring Each Backend
+## 🛠️ 3. Adding and Configuring Each Backend
 
 ### Ollama (local)
 
-Field: `base_url` (model is a separate field, not a credential). The backend process runs inside Docker while Ollama itself normally runs directly on the host machine, so the base URL is **not** `http://localhost:11434` from the container's point of view — it defaults to `http://host.docker.internal:11434`, which Docker Desktop on Windows resolves to the host automatically. If Ollama runs somewhere else on your network, point this at that host instead. There is nothing to redact here: Ollama needs no API key at all.
+Field: `base_url` (model is a separate field, not a credential).
+
+> [!IMPORTANT]
+> The backend process runs inside Docker while Ollama itself normally runs directly on the host machine, so the base URL is **not** `http://localhost:11434` from the container's point of view — it defaults to `http://host.docker.internal:11434`, which Docker Desktop on Windows resolves to the host automatically. If Ollama runs somewhere else on your network, point this at that host instead.
+
+There is nothing to redact here: Ollama needs no API key at all.
 
 Before pointing the platform at a model, that model has to actually be pulled on the Ollama instance (`ollama pull llama3.2:3b` or whichever model you intend to use) — the connection test below will tell you plainly if it isn't.
 
@@ -68,7 +90,8 @@ Bedrock supports two independent auth schemes, and you only need one:
 - **Bedrock API key (bearer token)** — the `bedrock_api_key` field, populated from AWS IAM's own "Generate API key" button. This is the preferred path: the platform sets `AWS_BEARER_TOKEN_BEDROCK` from this value and botocore's own token-provider chain picks it up automatically.
 - **Classic IAM access key + secret** — `aws_access_key_id` + `aws_secret_access_key` (plus `aws_region`, defaulting to `us-east-1`), for an account that grants `bedrock:InvokeModel` through a normal IAM user or role instead of a bearer token.
 
-Whichever scheme you use, the account/role needs actual model access granted for the configured `model_id` in that AWS region — a correctly-formed credential with no model access will fail the connection test with a specific "model not found or not enabled in this account/region" message rather than a generic authentication error, so read the test result's exact wording before assuming the key itself is wrong.
+> [!TIP]
+> Whichever scheme you use, the account/role needs actual model access granted for the configured `model_id` in that AWS region — a correctly-formed credential with no model access will fail the connection test with a specific "model not found or not enabled in this account/region" message rather than a generic authentication error, so read the test result's exact wording before assuming the key itself is wrong.
 
 ### Google Gemini
 
@@ -92,7 +115,8 @@ Like Groq, OpenAI's model field is live-discovered rather than a fixed dropdown 
 
 Field: `api_key`, from `platform.moonshot.ai/console/api-keys`. Base URL `https://api.moonshot.ai/v1`, default model `kimi-k2.5`.
 
-The default model choice here is deliberate, not arbitrary: this platform's structured output relies on forcing a specific `tool_choice` on every call, and Moonshot's newer "thinking"-mode models — `kimi-k3` and `kimi-k2.7-code` — always have thinking mode on with no way to disable it, which makes a forced `tool_choice` call fail with an HTTP 400. `kimi-k2.5` and the `moonshot-v1-*` family have no thinking parameter at all and work with forced tool-calling with zero special handling, which is why `DEFAULT_MODEL` is pinned to `kimi-k2.5` rather than a newer model. `kimi_client.py`'s own comments note that `kimi-k2.6` can go either way depending on how it's deployed — if a forced-tool-call 400 shows up against `kimi-k2.6` or a future thinking-capable model, the code-level fix is adding a `"thinking": {"type": "disabled"}` field to the request body for that model, deliberately not done pre-emptively so this client stays as simple/uniform as the others. The connection test surfaces this distinctly: a `400` response whose body mentions "thinking" is reported as "Model '...' requires disabling 'thinking' mode to use a forced tool call — pick a non-reasoning model (e.g. kimi-k2.5) or a model where thinking can be disabled," rather than a generic failure.
+> [!WARNING]
+> The default model choice here is deliberate, not arbitrary: this platform's structured output relies on forcing a specific `tool_choice` on every call, and Moonshot's newer "thinking"-mode models — `kimi-k3` and `kimi-k2.7-code` — always have thinking mode on with no way to disable it, which makes a forced `tool_choice` call fail with an HTTP 400. `kimi-k2.5` and the `moonshot-v1-*` family have no thinking parameter at all and work with forced tool-calling with zero special handling, which is why `DEFAULT_MODEL` is pinned to `kimi-k2.5` rather than a newer model. `kimi_client.py`'s own comments note that `kimi-k2.6` can go either way depending on how it's deployed — if a forced-tool-call 400 shows up against `kimi-k2.6` or a future thinking-capable model, the code-level fix is adding a `"thinking": {"type": "disabled"}` field to the request body for that model, deliberately not done pre-emptively so this client stays as simple/uniform as the others. The connection test surfaces this distinctly: a `400` response whose body mentions "thinking" is reported as "Model '...' requires disabling 'thinking' mode to use a forced tool call — pick a non-reasoning model (e.g. kimi-k2.5) or a model where thinking can be disabled," rather than a generic failure.
 
 Kimi's model field is also live-discovered (`POST /api/v1/ai/kimi/models`, against Moonshot's own `GET /v1/models`); unlike OpenAI's, Moonshot's listing doesn't distinguish chat-capable models from any other kind, so there's nothing for `list_models()` to filter there.
 
@@ -100,7 +124,8 @@ Kimi's model field is also live-discovered (`POST /api/v1/ai/kimi/models`, again
 
 Field: `api_key`, from `platform.deepseek.com/api_keys`. Default model `deepseek-v4-flash`.
 
-The one real, verified quirk worth knowing before typing a base URL by hand: DeepSeek's base URL is `https://api.deepseek.com` — **no** `/v1` segment — unlike every other OpenAI-compatible backend in this module (Groq's `https://api.groq.com/openai/v1`, OpenAI's own `https://api.openai.com/v1`, and so on). `deepseek_client.py`'s docstring is explicit that this was "confirmed verbatim from live docs," not a typo left uncorrected.
+> [!NOTE]
+> The one real, verified quirk worth knowing before typing a base URL by hand: DeepSeek's base URL is `https://api.deepseek.com` — **no** `/v1` segment — unlike every other OpenAI-compatible backend in this module (Groq's `https://api.groq.com/openai/v1`, OpenAI's own `https://api.openai.com/v1`, and so on). `deepseek_client.py`'s docstring is explicit that this was "confirmed verbatim from live docs," not a typo left uncorrected.
 
 DeepSeek's model field is live-discovered the same way (`POST /api/v1/ai/deepseek/models`, against `GET https://api.deepseek.com/models`); every model DeepSeek's own listing returns is chat-capable, so there's no filtering to do. One other DeepSeek-specific behavior: its API returns a provider-specific HTTP `402` ("Insufficient Balance") in addition to the standard 401/404/429 codes, and the connection test reports that distinctly as "DeepSeek account balance is insufficient to make this request" rather than a generic failure.
 
@@ -130,7 +155,7 @@ OpenRouter is architecturally different from every other backend in this section
 
 [FIGURE: standalone-ai-openrouter-model-dropdown.png | The OpenRouter AI Providers card with its live-refreshing model dropdown after a valid API key has been entered, showing the tool_choice-filtered subset of OpenRouter's full model catalog.]
 
-## 4. Testing a Connection Before You Trust It
+## ✅ 4. Testing a Connection Before You Trust It
 
 Every one of the eleven backends has a real, live "does this actually work" check — `POST /api/v1/ai/test` (`app/api/routes/ai_config.py`'s `ai_test_connection()`, calling `app/ai/connection_test.py`'s `test_ai_connection()`), gated behind the same `provider:manage` permission as everything else on this page. Two properties hold for every backend, without exception:
 
@@ -143,7 +168,7 @@ Clicking **Save** after a successful test persists the credential into the runti
 
 [FIGURE: standalone-ai-test-connection-result.png | The Anthropic AI Provider card immediately after a successful Test Connection click, showing the real measured latency and the model that replied.]
 
-## 5. Switching the Active Backend at Runtime — Zero Downtime
+## 🔁 5. Switching the Active Backend at Runtime — Zero Downtime
 
 Every backend's credentials and model ID can be saved without making that backend active — configuring Groq doesn't stop Ollama (or whichever backend is currently active) from continuing to serve every AI call until you explicitly switch.
 
@@ -161,7 +186,7 @@ If the resolved backend's `is_configured` check fails (a backend selected active
 
 [FIGURE: standalone-ai-quickswitch-dropdown.png | The home page's "AI:" dropdown open, showing all eleven backends with their configured-status dot, immediately before switching the active backend.]
 
-## 6. AI Backend Comparison — Reanalyzing the Same Evidence
+## ⚖️ 6. AI Backend Comparison — Reanalyzing the Same Evidence
 
 Because the active backend can change between one lookup and the next, an analyst can also deliberately ask "what would a *different* backend have concluded from this exact same evidence?" without re-running the whole investigation. This is the **AI Comparison** panel on a completed investigation's page (`AiComparisonPanel.tsx`), and it maps directly to `POST /api/v1/lookup/{lookup_id}/reanalyze`.
 
@@ -175,7 +200,7 @@ In the UI, picking a backend from the dropdown and clicking **"Analyze with `<ba
 
 [FIGURE: standalone-ai-comparison-panel.png | The AI Comparison panel on a completed investigation, showing the original assessment and a "Comparison" result from a second backend, with identical risk-score numbers but different executive-summary prose.]
 
-## 7. The Three AI Outcomes — And Why "Skipped" Is Not a Failure
+## 📋 7. The Three AI Outcomes — And Why "Skipped" Is Not a Failure
 
 Every `FinalAssessment` this platform ever produces carries an explicit `ai_outcome` field, one of exactly three values (`app/ai/schemas.py`'s `_AIOutcome`), set at all three of `generate_final_assessment()`'s return points in `service.py`:
 
@@ -189,7 +214,7 @@ The distinction between `skipped_no_evidence` and `failed` exists specifically s
 
 The `skipped_no_evidence` path exists because of a real, reproduced failure, not a hypothetical one: looking up the EICAR antivirus test file's actual MD5 hash (`44d88612fea8a8f36de82e1278abb02f`, a standard, harmless, industry-wide AV test file) with every relevant provider left unconfigured — meaning zero real evidence of any kind reached the prompt — still caused a small local model (`llama3.2:3b`) to return `final_verdict="highly_malicious"` and `malicious_probability=92`, fabricating an "association with ransomware and trojans" wholesale from its own pretrained knowledge of a famous hash, directly violating its own system-prompt instruction never to fabricate. No prompt wording fixed this reliably — the model already had that instruction and ignored it — so the platform doesn't call the AI at all whenever `provider_summaries` and `correlation.edges` are both empty: an empty-evidence case has exactly one correct answer (`unknown`, all risk fields at their real deterministic value, an honest "no provider returned usable data" message) regardless of which backend happens to be configured, so deterministic code produces it instead of hoping a model declines to guess.
 
-## 8. Prompt Architecture, at a High Level
+## 📝 8. Prompt Architecture, at a High Level
 
 `tech-03-ai-architecture.md` §3 already covers the two structurally distinct call types in detail — `summarize_provider()` (one call per provider that returned real data, grounded only in that provider's own JSON) and `generate_final_assessment()` (one call per lookup, grounded in every provider summary plus the correlation engine's output, never in raw provider JSON again) — along with the grounding/cross-check mechanisms that filter the model's `agreeing_providers`/`disagreeing_providers` claims and flag ungrounded MITRE mappings. That material isn't repeated here; this section adds one mechanism that document doesn't cover: how a single provider's raw payload is actually shaped before it reaches `summarize_provider()`'s prompt at all.
 
@@ -204,7 +229,7 @@ This was tuned against two real, reproduced failures, not designed abstractly:
 
 The actual fix distinguishes **why** a field is long, not just how long: a `str` field (prose, like MITRE's `description`) gets a generous 2,000-character cap, since long prose is far more likely to be genuine single-field signal; a `list`/`dict` field (inherently structural or repetitive — CPE match entries, URL lists, raw report objects) gets a tighter 800-character cap regardless of provider, since every oversized list/dict field examined across both NVD and AbuseIPDB turned out to be low-signal bulk, never the primary carrier of a verdict. Short, scalar fields — the ones actually carrying a verdict — pass through untouched either way, and a truncated field is marked as truncated (with its real original length) rather than silently cut.
 
-## 9. The Deterministic-Score Lock — Why the AI Can Narrate a Score but Never Set One
+## 🔒 9. The Deterministic-Score Lock — Why the AI Can Narrate a Score but Never Set One
 
 This is the single most load-bearing design fact in this layer, and it exists because of directly observed failures, not as a theoretical safeguard.
 
@@ -219,7 +244,7 @@ So the platform does not rely on the model getting this right. After a response 
 
 The practical upshot: re-analyzing the same evidence with a different backend (§6) will always show the identical score, every time, no matter which of the eleven backends produced it or how that backend chose to phrase its reasoning — because the score was never the AI's to decide in the first place.
 
-## 10. The Executive Summary's Honest AI/Template Disclosure
+## 📊 10. The Executive Summary's Honest AI/Template Disclosure
 
 The Dashboard's AI-generated executive narrative (`GET /api/v1/dashboard/executive-summary`, `app/ai/dashboard_summary.py`) follows the identical discipline as §9, applied to KPI numbers instead of a risk score: `app/core/dashboard.py`'s `get_kpis()` is the **only** source of truth for every number the narrative states, and the AI is handed those seven KPI values as given facts it must not recalculate, round, or restate differently.
 
@@ -227,7 +252,7 @@ If the AI call fails outright, or its output fails validation on both the origin
 
 [FIGURE: standalone-ai-executive-summary-badge.png | The Dashboard's Executive Summary card, showing the narrative text alongside its "AI-generated" or "Template fallback" source badge.]
 
-## 11. Known Limitation: A Local Ollama Backend Serializes Concurrent Requests
+## ⚠️ 11. Known Limitation: A Local Ollama Backend Serializes Concurrent Requests
 
 This is a real, tested, and already-documented characteristic (also noted in `tech-09-performance.md` and the project's `FINAL_RELEASE_QA_REPORT.md`), not a newly discovered issue: when the platform is configured to use a local Ollama model, that single local model processes generation requests **one at a time**. Under light or moderate use this is unnoticeable, but under heavy *concurrent* load — for example, several analysts triggering investigations or Dashboard executive-summary generation at the same moment — requests queue up behind one another rather than running in parallel, and per-request latency grows accordingly.
 
@@ -236,9 +261,10 @@ Two things are true about this limitation and worth stating plainly:
 - **It never affects data correctness.** The underlying KPI numbers, deterministic risk scores, and provider evidence are always the same real values regardless of how long the AI narrative itself takes to generate — this is purely a latency characteristic of a single local model instance, not a correctness gap.
 - **It does not touch the Dashboard's core KPI tiles or the Provider Health page**, both of which are pure database reads, unaffected by AI backend choice or load, and both of which were separately load-tested to 25 concurrent requests with a genuine 100%-success outcome (see `tech-09-performance.md`).
 
-An administrator who expects many concurrent users should consider any of the ten cloud backends (Anthropic, Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, or OpenRouter) rather than Ollama specifically to get consistently fast AI generation under concurrent load — the runtime-switching mechanism in §5 makes this a config change, not a re-deployment.
+> [!TIP]
+> An administrator who expects many concurrent users should consider any of the ten cloud backends (Anthropic, Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, or OpenRouter) rather than Ollama specifically to get consistently fast AI generation under concurrent load — the runtime-switching mechanism in §5 makes this a config change, not a re-deployment.
 
-## See Also
+## 📚 See Also
 
 - `tech-03-ai-architecture.md` — the architectural deep dive: the two-call structure, the full grounding/cross-check mechanism, and the `Verdict`/`RiskAssessment` data model.
 - `user-07-ai-analysis.md` — the analyst-facing view: what the AI shows on an investigation page, how disagreement between providers is presented, and how to verify an AI claim against real evidence.

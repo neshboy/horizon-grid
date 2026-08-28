@@ -1,12 +1,29 @@
-# Deployment and Troubleshooting
+# 🚀 Deployment and Troubleshooting
 
 This chapter covers the two deployment paths that exist in this repository -- Docker Compose (development and production) and the Windows Inno Setup installer that wraps it -- how environment variables reach the running process, and a symptom-first troubleshooting reference keyed to real error strings and enum values. Performance/scaling claims are limited to what is actually configured in code or measured in the project's own QA pass; see the Performance chapter for the full measured-value table.
 
 All facts below are drawn from `docker-compose.yml`, `docker-compose.prod.yml`, `backend/Dockerfile`, `backend/app/core/config.py`, `backend/app/core/db.py`, `backend/app/workers/celery_app.py`, `backend/app/providers/base.py`, `backend/app/providers/orchestrator.py`, `backend/app/main.py`, `k8s/base/*.yaml`, `windows/installer.iss`, `windows/wizard/Setup-Wizard.ps1`, `windows/scripts/*.ps1`, cross-checked against `docs/DEPLOYMENT.md`/`docs/TROUBLESHOOTING.md`, and this documentation set's Runtime Configuration Architecture and System Overview chapters, which this chapter does not re-derive.
 
-## 1. Docker Compose
+## 📋 Table of contents
+
+- [1. Docker Compose](#1--docker-compose)
+  - [1.1 Dev vs. production](#11-dev-vs-production-what-docker-composeprodyml-changes)
+  - [1.2 Kubernetes](#12-kubernetes-k8sbase)
+- [2. The Windows Inno Setup Installer](#2--the-windows-inno-setup-installer)
+- [3. Environment Variable Configuration](#3--environment-variable-configuration)
+- [4. Troubleshooting](#4--troubleshooting)
+  - [4.1 Where to look first](#41-where-to-look-first)
+  - [4.2 Startup failures](#42-startup-failures)
+  - [4.3 Provider and AI failures](#43-provider-and-ai-failures)
+- [5. Performance and Scaling Notes](#5--performance-and-scaling-notes-evidenced-only)
+- [6. Summary](#6--summary)
+
+## 1. 🐳 Docker Compose
 
 Compose is the only deployment path fully wired end-to-end and exercised by this project's own test suite. `docker-compose.yml` defines eight services: four datastores (`postgres`, `redis`, `neo4j`, `opensearch`, all published to `127.0.0.1` only -- an explicit fix after confirming each was reachable unauthenticated from other LAN devices under the old `0.0.0.0` shorthand), `backend`, two Celery roles (`celery_worker`, `celery_beat`), and `frontend`. `backend` and `celery_worker` wait on Postgres/Redis health checks (`pg_isready`/`redis-cli ping`, 5s interval, 10 retries); `celery_beat` waits only on Redis. Only the two Celery services carry `restart: unless-stopped` -- `backend`, the datastores, and `frontend` have no restart policy, so a crashed container stays down until manually recreated.
+
+> [!NOTE]
+> Only the two Celery services carry `restart: unless-stopped`. `backend`, the datastores, and `frontend` have no restart policy, so a crashed container stays down until it's manually recreated.
 
 ### 1.1 Dev vs. production: what `docker-compose.prod.yml` changes
 
@@ -32,9 +49,12 @@ A plain-YAML, kustomize-compatible, hand-translated mirror of the Compose servic
 
 **Migrations in this topology.** `k8s/base/backend-deployment.yaml:31-34` sets the same `command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"` used by Compose (minus `--reload`, per the manifest's own header comment, lines 1-5) -- there is no separate Kubernetes Job or init container that runs the migration once; each of the Deployment's individual pods runs `alembic upgrade head` itself, every time that pod starts. With `replicas: 2`, a rollout can start both pods within the same window, and nothing in the manifest serializes their two `alembic upgrade head` invocations against each other -- Alembic has no built-in cross-process lock, so two pods racing to apply the same not-yet-applied revision concurrently is a real, unmitigated possibility in this manifest as written, not merely a Compose-vs-K8s documentation gap. `celery-worker`'s Deployment does not run `alembic upgrade head` at all (same division of responsibility as Compose), so it depends on one of the two `backend` pods having already brought the schema current.
 
-## 2. The Windows Inno Setup Installer
+## 2. 🪟 The Windows Inno Setup Installer
 
 Its scope is narrow: **the installer copies files and collects configuration; it does not itself start Docker.** `installer.iss` runs prerequisite checks (`Check-Prerequisites.ps1`: 64-bit Windows 10+, admin privileges, 8GB+ RAM soft check, disk space, Docker Desktop running, Compose v2, free ports -- failures prompt "Continue anyway?" rather than hard-aborting), copies `backend/`, `frontend/`, both compose files, `docs/`, `README.md`, and the wizard/scripts into `%ProgramFiles%\IOC Intelligence Platform\app\`, sets up Start Menu shortcuts, then launches the Setup Wizard (a WinForms app) -- the component that actually configures and starts anything.
+
+> [!NOTE]
+> The installer's job is narrow: it copies files and collects configuration. It does not itself start Docker -- that happens only once the Setup Wizard runs, specifically at the `docker compose ... up -d --build` step below.
 
 On "Start Installation" the wizard runs, in order: (1) writes `.env` via `Write-PlatformEnvFile`, using collected values plus CSPRNG-generated secrets (`ConvertTo-SafeEnvValue` strips CR/LF and rejects any value containing `#`, since `#` opens a `.env` comment and would silently truncate the rest); (2) runs `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build` -- **this is the moment Docker actually starts**, nothing before it brings up a single container; (3) polls `GET /health/detailed` for up to 3 minutes (updated in v0.2.3 -- the wizard needs to know Postgres is genuinely reachable before the very next step writes to it, not just that the process has started; see the System Health chapter for the plain-`/health`-vs-`/health/detailed` split); (4) registers the very first administrator account via `POST /api/v1/auth/register` and logs in -- self-registration is bootstrap-only: it succeeds only while the users table is empty, and every subsequent call (including a second install attempt against an already-configured database) is rejected with `403`, directing the caller to have an existing administrator create their account instead. Re-running the wizard via the **Configuration** shortcut on an existing install pre-populates fields from the existing `.env` and takes a `pg_dump` backup first (both platforms, as of v0.2.3 -- previously Windows-only).
 
@@ -43,7 +63,7 @@ Real secrets live at `%ProgramData%\IOC Intelligence Platform\config\.env`, lock
 [FIGURE: backend-08-deployment-and-troubleshooting-diagram-1.png | Diagram: 2. The Windows Inno Setup Installer]
 Diagram: Installer file-copy vs. Setup Wizard Docker/registration steps. Everything before step G is file staging and prerequisite checking only -- the installer itself never starts a container; that happens exclusively inside the wizard's second step.
 
-## 3. Environment Variable Configuration
+## 3. 🧾 Environment Variable Configuration
 
 `backend/app/core/config.py`'s `Settings` class (`pydantic-settings`, `env_file=".env"`) is the exhaustive list the legacy `.env` path supports; `.env.example` is the operator-facing template.
 
@@ -61,7 +81,7 @@ Two mechanisms govern whether a change actually takes effect, and they differ sh
 
 This frozen-`.env` behavior is exactly the legacy path superseded, for provider/AI credentials specifically, by the database-backed runtime configuration system (`provider_runtime_configs`, the Manage Providers UI) covered in full in the Runtime Configuration Architecture chapter -- credentials saved there take effect on the next investigation or AI call, no restart. `.env` remains authoritative for everything that system doesn't cover (JWT key, datastore URLs, Celery broker/result, rate limits, provider timeouts/retries/cache TTL).
 
-## 4. Troubleshooting
+## 4. 🔧 Troubleshooting
 
 ### 4.1 Where to look first
 
@@ -105,7 +125,7 @@ AI backend failures raise `RuntimeError` from the relevant client, caught by `ap
 
 **`429` on `POST /api/v1/lookup/stream`** is the platform's only rate limiter -- a Redis-backed fixed-window `RateLimiter` keyed `lookup_create:{user.id}`, per user across all workers, bounded by `lookup_rate_limit_max_calls`/`_window_seconds` (`10`/`60`). Exists because one lookup fans out to every provider plus the crawler plus multiple AI calls. No other endpoint (including login/register) has any rate limiting.
 
-## 5. Performance and Scaling Notes (evidenced only)
+## 5. 📈 Performance and Scaling Notes (evidenced only)
 
 Only what is actually configured in code or measured in the project's own QA pass -- see the Performance chapter for the full measured-value table and its single-machine, single-pass caveats.
 
@@ -116,6 +136,6 @@ Only what is actually configured in code or measured in the project's own QA pas
 - **Kubernetes-only figures**: `backend`/`celery-worker` request `250m`/`512Mi` (limit `1000m`/`1Gi`); `frontend` requests `100m`/`256Mi` (limit `500m`/`512Mi`); `backend`/`frontend` run 2 replicas, `celery-beat` is a pinned singleton. Static manifest values, not load-derived.
 - **No load-testing infrastructure exists in this repository** -- no benchmark harness, no CI/CD to run one. Any broader concurrent-load characterization would not be traceable to evidence here and is intentionally omitted.
 
-## 6. Summary
+## 6. 📋 Summary
 
 Two working deployment paths exist: Docker Compose (a small, surgical production override that drops dev bind-mounts and swaps in production start commands) and the Windows installer, which only copies files and launches the Setup Wizard -- the wizard, not the installer, writes `.env` and runs `docker compose up`. `Settings` is a process-lifetime singleton read once from `.env`, superseded for provider/AI credentials by the database-backed runtime configuration system covered elsewhere in this set. Troubleshoot in order: `docker compose ps`/`logs`, `/health`, `GET /api/v1/providers/health`, the runtime audit log -- and reason about provider failures via the eight `ProviderStatus` values, not raw HTTP codes. Performance/scaling statements here are limited to what is actually configured (pool defaults, a 20s/2-retry provider policy, a 1-hour result cache, per-core Celery concurrency, static Kubernetes resource requests) -- there is no load-testing harness in this repository to support any broader claim.

@@ -4,17 +4,17 @@ This section traces exactly what happens, in code, when a user submits one IOC (
 
 The entry point for a lookup is a single endpoint: `POST /api/v1/lookup/stream` (`backend/app/api/routes/lookup.py`). It is a Server-Sent Events (SSE) endpoint — the client opens one HTTP connection and receives a sequence of typed events as the lookup progresses, rather than blocking for a single response. The sequence below is verified directly against that endpoint's implementation.
 
-## The 9-Step Lookup Pipeline
+## 🔍 The 9-Step Lookup Pipeline
 
 1. **Rate limit check.** A Redis-backed fixed-window rate limiter (`RateLimiter`, `app/core/cache.py`) rejects the request if the calling user has exceeded the configured quota — 10 calls per 60 seconds per user by default (`app/core/config.py`), both values configurable.
 
-2. **IOC type detection.** `detect_ioc_type()` (`app/ioc/detector.py`) classifies the raw input string using ordered regex and heuristic checks into one of 32 `IOCType` enum values (`app/ioc/types.py`) — for example, distinguishing an IPv4 address from a domain from a SHA256 hash.
+2. **IOC type detection.** `detect_ioc_type()` (`app/ioc/detector.py`) classifies the raw input string using ordered regex and heuristic checks into one of 33 `IOCType` enum values (`app/ioc/types.py`) — for example, distinguishing an IPv4 address from a domain from a SHA256 hash.
 
 3. **Lookup record created.** An `IOCLookup` row is created in Postgres immediately, with `status = RUNNING`. This is the row that will later be updated with the final verdict and risk scores.
 
-4. **Provider fan-out.** `run_all_providers()` (`app/providers/orchestrator.py`) concurrently invokes every registered provider (of 16 total) whose `supports(ioc_type)` returns true for this IOC's type, using `asyncio.create_task` and `asyncio.as_completed` — providers run in parallel, not sequentially. A "provider" here is an external threat-intelligence, vulnerability, or OSINT source the platform queries (for example VirusTotal, AbuseIPDB, NVD). Each provider call passes through a Redis cache check first, then `BaseProvider.run()` (timeout and retry handled by `tenacity`, with configurable `provider_timeout_seconds` and `provider_max_retries`), producing a normalized `ProviderResult`.
+4. **Provider fan-out.** `run_all_providers()` (`app/providers/orchestrator.py`) concurrently invokes every registered provider (of 18 total) whose `supports(ioc_type)` returns true for this IOC's type, using `asyncio.create_task` and `asyncio.as_completed` — providers run in parallel, not sequentially. A "provider" here is an external threat-intelligence, vulnerability, or OSINT source the platform queries (for example VirusTotal, AbuseIPDB, NVD). Each provider call passes through a Redis cache check first, then `BaseProvider.run()` (timeout and retry handled by `tenacity`, with configurable `provider_timeout_seconds` and `provider_max_retries`), producing a normalized `ProviderResult`.
 
-5. **Per-provider persistence and summary.** As each provider result arrives (not waiting for all of them), it is persisted to Postgres as a `ProviderResultRecord`. If that provider's status is `ok`, `summarize_provider()` (`app/ai/service.py`) makes one AI call for that provider alone, grounded only in that provider's own JSON response, and the result is persisted as an `AISummaryRecord` tagged with that `provider_id`. Both the raw result and the summary are streamed to the client as SSE events (`provider_result`, `provider_summary`) and committed to Postgres after every single provider completes — a deliberate design so that a client disconnecting mid-lookup does not lose already-completed provider data (`lookup.py`, lines 122-136).
+5. **Per-provider persistence and summary.** As each provider result arrives (not waiting for all of them), it is persisted to Postgres as a `ProviderResultRecord`. If that provider's status is `ok`, `summarize_provider()` (`app/ai/service.py`) makes one AI call for that provider alone, grounded only in that provider's own JSON response, and the result is persisted as an `AISummaryRecord` tagged with that `provider_id`. Both the raw result and the summary are streamed to the client as SSE events (`provider_result`, `provider_summary`) and committed to Postgres after every single provider completes — a deliberate design so that a client disconnecting mid-lookup does not lose already-completed provider data (`lookup.py`, lines 118-157).
 
 6. **Correlation.** Once every provider has finished, `correlate()` (`app/correlation/engine.py`) runs. This is a pure, I/O-free function: it extracts typed relationship edges from normalized provider fields (`resolved_ips`, `related_hashes`, `malware_families`, `mitre_techniques`, `cves`, and others), deduplicates and corroborates them — each additional provider that independently reports the same fact boosts its confidence score by a fixed increment (`_CORROBORATION_BONUS_PER_PROVIDER = 0.15`) — and returns a `CorrelationResult` (nodes, edges, deduplicated facts, provider agreement). The resulting edges are persisted as `CorrelationEdgeRecord` rows in Postgres and streamed as a `correlation` SSE event.
 
@@ -26,9 +26,12 @@ The entry point for a lookup is a single endpoint: `POST /api/v1/lookup/stream` 
 
 [FIGURE: tech-02-dataflow-diagram-1.png | Diagram: The 9-Step Lookup Pipeline]
 
-## Where Data Actually Lives
+## 🗄️ Where Data Actually Lives
 
-The Docker Compose stack provisions four datastores — Postgres, Redis, Neo4j, and OpenSearch. Reading the pipeline above, it would be easy to assume all four are in play. They are not. This distinction matters enough that it is called out separately: **only Postgres and Redis have any application code that actually reads from or writes to them.** Neo4j and OpenSearch are running containers with nothing in the backend that talks to them.
+The Docker Compose stack provisions four datastores — Postgres, Redis, Neo4j, and OpenSearch. Reading the pipeline above, it would be easy to assume all four are in play. They are not.
+
+> [!IMPORTANT]
+> This distinction matters enough that it is called out separately: **only Postgres and Redis have any application code that actually reads from or writes to them.** Neo4j and OpenSearch are running containers with nothing in the backend that talks to them.
 
 | Datastore | Provisioned in `docker-compose.yml`? | Application code that uses it? | What it actually holds today |
 |---|---|---|---|
@@ -47,4 +50,5 @@ The same is true of OpenSearch, with even less ambiguity: there are no docstring
 
 ### Practical takeaway
 
-For a judge or engineer evaluating this build: treat Neo4j and OpenSearch as **provisioned infrastructure for a future phase**, not as working features. If asked "does this platform have a graph database backing its correlation view?" or "does it support full-text search?", the accurate answer is no — both containers exist and are healthy, but the entire correlation and evidence pipeline described in the nine steps above runs, end to end, on Postgres and Redis alone.
+> [!TIP]
+> For a judge or engineer evaluating this build: treat Neo4j and OpenSearch as **provisioned infrastructure for a future phase**, not as working features. If asked "does this platform have a graph database backing its correlation view?" or "does it support full-text search?", the accurate answer is no — both containers exist and are healthy, but the entire correlation and evidence pipeline described in the nine steps above runs, end to end, on Postgres and Redis alone.

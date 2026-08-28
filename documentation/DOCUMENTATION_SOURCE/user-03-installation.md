@@ -1,4 +1,4 @@
-# Installation Guide
+# 🪟 Installation Guide
 
 ## What the Installer Actually Does
 
@@ -8,7 +8,7 @@ When you run the installer, you are not just copying a single program onto your 
 
 You do not need to understand how those internal pieces fit together to install and use the product. This guide only covers what you, the administrator, will see and click. A full technical breakdown of the underlying architecture is provided separately for readers who want it.
 
-## Before You Begin: Prerequisites
+## ✅ Before You Begin: Prerequisites
 
 Two things matter before you start the installer:
 
@@ -37,7 +37,7 @@ After you click through, the installer copies the platform's program files to yo
 
 Once you close the installer, the **Setup Wizard launches automatically**. This is a separate, second stage — a dedicated desktop application (not a web page) that collects your administrator account details, your AI configuration, and your threat-intelligence provider API keys, and then does the actual work of building and starting the Docker containers described above. That process is covered in the next section, "Setup Wizard."
 
-## Accessing From Another Computer
+## 🌐 Accessing From Another Computer
 
 Once setup finishes, the platform is usable both from this computer and from any other device on the same local network — a second laptop, a colleague's desktop, even a phone or tablet's browser, as long as it's connected to the same Wi-Fi or Ethernet network. Nothing needs to be edited or reconfigured to make this work; it's set up automatically during installation.
 
@@ -45,9 +45,13 @@ Once setup finishes, the platform is usable both from this computer and from any
 
 If you don't have that page open anymore, the same address is always available afterward from inside the app itself: sign in, open **Providers** in the top navigation, and select the **Network Access** tab. It shows the address for this computer and the address for other devices side by side, with a button to copy the second one so you can send it to whoever needs it.
 
-**What makes this work.** The installer creates a Windows Firewall rule that allows the platform's two ports through, but only on networks Windows classifies as **Private** (the setting you're asked about the first time you connect to a new Wi-Fi network or Ethernet connection) — never on Public networks, and never open to the wider internet. This is deliberate: the feature is meant for a trusted home or office network, the same network your other devices are already on, not for remote access from elsewhere.
+**What makes this work.** The installer creates a Windows Firewall rule that allows the platform's two ports through, but only on networks Windows classifies as **Private** (the setting you're asked about the first time you connect to a new Wi-Fi network or Ethernet connection).
 
-**If a second device can't connect:**
-- Make sure both devices are actually on the same network, and that the network is set to **Private** in Windows (check under Settings → Network & Internet on the computer running the platform) — the firewall rule intentionally will not open the ports on a network marked Public.
-- If the address shown doesn't work, your router may have assigned this computer a new network address since setup last ran (this can happen after a restart). Re-run **Configuration** from the Start Menu (Start Menu → IOC Intelligence Platform → Configuration) to re-detect it — no need to reinstall.
-- The Network Access tab will say "Not detected" if the wizard couldn't determine a network address automatically (uncommon, but possible on unusual network setups). The platform still works fine from this computer either way; re-running Configuration is worth trying to pick it up.
+> [!IMPORTANT]
+> The firewall rule never opens on Public networks, and never opens the platform to the wider internet. This is deliberate: the feature is meant for a trusted home or office network, the same network your other devices are already on, not for remote access from elsewhere.
+
+> [!TIP]
+> **If a second device can't connect:**
+> - Make sure both devices are actually on the same network, and that the network is set to **Private** in Windows (check under Settings → Network & Internet on the computer running the platform) — the firewall rule intentionally will not open the ports on a network marked Public.
+> - If the address shown doesn't work, your router may have assigned this computer a new network address since setup last ran (this can happen after a restart). Re-run **Configuration** from the Start Menu (Start Menu → IOC Intelligence Platform → Configuration) to re-detect it — no need to reinstall.
+> - The Network Access tab will say "Not detected" if the wizard couldn't determine a network address automatically (uncommon, but possible on unusual network setups). The platform still works fine from this computer either way; re-running Configuration is worth trying to pick it up.
