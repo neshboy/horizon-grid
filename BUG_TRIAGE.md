@@ -499,6 +499,19 @@ BUG-055 through BUG-060 come from a final, unscripted adversarial red-team round
   account/password. The specific password values quoted above have also
   been redacted from this file, since a real (if never-since-recreated)
   account was created against the live app with them.
+- **Update (full git-history audit, 2026-08-30):** A complete secret scan
+  across all 57 commits, all branches, and all tags found no other real
+  secrets anywhere in this repository's history. This bug's own two
+  plaintext passwords are still readable in git history, though — they were
+  introduced in the initial commit (`9bee96c`) and only redacted from this
+  file's own prose at the commit above (`f305430`); the plaintext strings
+  remain reachable in every commit in between via `git log -p` or `git show
+  9bee96c:BUG_TRIAGE.md`. Rewriting history to scrub them was considered and
+  explicitly declined: no live account currently matches either value (see
+  Root Cause above), so the practical exploitability is nil, and a history
+  rewrite is a one-way, disruptive operation on a real, already-shared
+  repository. Do not reuse either of these two exact strings as a real
+  password for any account, live or future.
 
 ### BUG-033: Frontend pins next==14.2.15, which has 30 confirmed advisories including a critical middleware auth-bypass
 
