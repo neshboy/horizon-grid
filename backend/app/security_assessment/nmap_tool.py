@@ -116,10 +116,6 @@ class NmapTool(SecurityAssessmentTool):
         return shutil.which("nmap") is not None
 
     async def run(self, target: str, ioc_type: IOCType, profile_id: str) -> ToolRunResult:
-        if not await self.is_available():
-            return self._error(target, ioc_type, ProviderStatus.ERROR, "nmap is not installed on this host.")
-        if profile_id not in _PROFILE_ARGS:
-            return self._error(target, ioc_type, ProviderStatus.ERROR, f"Unknown scan profile: {profile_id!r}")
         if target.startswith("-"):
             # Confirmed live during overnight QA (CWE-88): nmap's own argv
             # parser -- not a shell -- treats a leading '-' as the start of
@@ -133,11 +129,24 @@ class NmapTool(SecurityAssessmentTool):
             # _validate_scope, app/pentest/orchestrator.py's _is_in_scope)
             # now also rejects this shape before it ever reaches here; this
             # is deliberate defense-in-depth at the actual argv boundary.
+            #
+            # Deliberately checked BEFORE is_available() below (moved here
+            # after a real CI failure): rejecting a malformed/malicious
+            # target is a pure input-validation concern and must not depend
+            # on whether the nmap binary happens to be installed in this
+            # particular environment (e.g. CI runners never have it) --
+            # otherwise the "not installed" error masks this check entirely
+            # and the safety guarantee becomes untestable, and technically
+            # unenforced, wherever nmap isn't present.
             return self._error(
                 target, ioc_type, ProviderStatus.ERROR,
                 f"Refusing to scan {target!r}: a target may never start with '-' "
                 "(nmap's argument parser would treat it as a flag, not a hostname).",
             )
+        if not await self.is_available():
+            return self._error(target, ioc_type, ProviderStatus.ERROR, "nmap is not installed on this host.")
+        if profile_id not in _PROFILE_ARGS:
+            return self._error(target, ioc_type, ProviderStatus.ERROR, f"Unknown scan profile: {profile_id!r}")
 
         # nmap requires an explicit "-6" flag for any IPv6 literal target --
         # without it, nmap treats the argument as malformed, prints a
