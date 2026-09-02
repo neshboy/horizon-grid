@@ -2,6 +2,37 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.9] — 2026-09-02 — Autonomous overnight QA: 20+ real bugs found and fixed, including two full auth/SSRF bypasses and an 18GB local-AI memory bomb
+
+Four rounds of local, evidence-driven QA (full function/security discovery, a real authorized pentest against an owner-approved local router, a 12-agent parallel test sweep, and a full RBAC/security/resource audit) against the live running stack. Every finding below was live-reproduced with a concrete request/response and root-caused before being fixed; full detail (exact repro steps, exact evidence, exact file:line, plus real screenshots) is in `BUG_AND_REPAIR_HISTORY.md` and `FINAL_LOCAL_QA_REPORT.md`.
+
+### Fixed — Security (highest severity first)
+- **Full authentication bypass**: `JWT_SECRET_KEY` was still the literal `.env.example` placeholder, so a token forged offline (no login, no credentials) was accepted for any known account, including admin. Startup now hard-fails in production if the key is still a known placeholder (previously only logged a warning).
+- **SSRF** in the Security Assessment Toolkit: a crafted target (e.g. an internal Docker service name) reached internal infrastructure with zero destination check. Targets are now resolved and rejected unless they're a real, globally-routable address (loopback stays exempt — that's an existing, intentional "scan yourself" pattern).
+- **Pentest Suite scope-recheck gap**: narrowing an assessment's scope after a target was added didn't stop a later intrusive-validation call from re-probing that now-unauthorized target for real. Scope is now re-checked immediately before every probe, not only when the target was first added.
+- **nmap argument injection (CWE-88)**: a target string starting with `-` (e.g. `--script=vuln.example.com`) reached nmap's real argv and could load arbitrary installed NSE script categories. Rejected before it ever reaches nmap or the scope-membership check.
+- **Credential-wipe bug**: submitting an explicit blank value for an already-configured credential field (a completely ordinary UI interaction — retype, then reconsider and clear) silently and irreversibly wiped a working credential with no confirmation. Blank fields are now treated as "unchanged," matching this app's own documented intent.
+- **Logout didn't revoke anything server-side**: a captured access or refresh token kept working for its full natural lifetime after "logging out." `POST /auth/logout` now bumps `token_version`, the same mechanism an admin-initiated password reset already used.
+
+### Fixed — Stability
+- **Ollama never bounded its context window**: every local AI call allocated a KV-cache sized to the model's full trained context (131072 tokens) instead of the actual prompt, turning a 2GB model into an ~18GB resident allocation on every call. Live-confirmed dropping to ~3.4GB after capping `num_ctx` to a prompt-appropriate size — likely the single biggest host-stability fix in this release.
+- **Credential-encryption key was derived from `JWT_SECRET_KEY`** with no separate key: rotating the JWT secret (the auth-bypass fix above) silently orphaned every previously-saved provider credential. A dedicated `ENCRYPTION_MASTER_KEY` now decouples the two.
+- A blank runtime-config DB row (e.g. from a "Test Connection" click) could permanently override a provider's perfectly valid `.env` credential; a provider's outcome now falls back to the working credential instead of trusting an empty override.
+- The lookup pipeline could lose an already-successful provider result if the AI summarization step for that same provider was slow and the client disconnected mid-call. The provider result is now committed immediately, before the AI call starts.
+- A realistic long-URL IOC (a normal real-world shape, not adversarial) reliably broke structured-JSON generation on the local model because the raw IOC value was echoed back into the model's own prompt unbounded, unlike every other prompt field. Now capped the same way.
+
+### Fixed — Correctness
+- Provider Health showed "Configured: No" for providers that were simultaneously succeeding on real live calls, directly contradicting the Manage Providers page — root cause was a stale, process-startup-only flag; now reads the same live, DB-backed state every real investigation already uses.
+- PDF export: the hardcoded "MITRE ATT&CK Mappings" section heading rendered as "MITRE ATT&CK; Mappings" (an unescaped `&`); now escaped like every other value in the export.
+- The Home page's AI quick-switch control fired an admin-only API call for every role, producing two console errors on every non-admin login; now gated to admin only.
+- `celery_beat`'s persistent schedule file could be corrupted-and-wiped by a lock-contention race on container restart, discarding periodic-task bookkeeping; startup now waits briefly for the previous process's lock to release.
+
+### Verified, not changed
+A full RBAC matrix (72 direct API calls across every permission-gated endpoint) came back completely clean — zero privilege-escalation findings. Dashboard KPIs matched the real database exactly on every check performed.
+
+### Testing
+495 tests passed (up from 441), 54 new regression tests added, 0 failures. All fixes above were live-reverified against the running stack, not only unit-tested.
+
 ## [0.3.8] — 2026-08-27 — DeepSeek backend rejected every request with "Thinking mode does not support this tool_choice"
 
 ### Fixed
