@@ -291,7 +291,19 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    command: celery -A app.workers.celery_app beat --loglevel=info
+    # Real bug found live during overnight QA: PersistentScheduler's
+    # underlying gdbm/shelve file (/app/celerybeat-schedule, on the bind-
+    # mounted ./backend volume) can still be held by the just-stopped old
+    # process for a moment when the new one starts (a restart -- exactly
+    # the "docker restart celery_beat" case, not celery's own crash-restart
+    # policy) -- confirmed live: this raced and lost, and celery's own
+    # error handling treats that transient lock contention as file
+    # corruption, silently deleting and recreating the schedule store
+    # (discarding all per-task last-run bookkeeping) instead of retrying.
+    # A brief startup delay gives the previous holder's lock time to
+    # release before the new process ever tries to open it -- cheap
+    # insurance against a real, if non-deterministic, restart-time bug.
+    command: sh -c "sleep 3 && celery -A app.workers.celery_app beat --loglevel=info"
     restart: unless-stopped
 
   frontend:

@@ -34,6 +34,27 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 120
 
+# Real P1 bug found live during overnight QA: with no num_ctx set at all,
+# Ollama 0.33.0 defaults the KV-cache to the MODEL's own trained maximum
+# context length (131072 for Llama 3.2), not the prompt -- confirmed live
+# via `ollama ps` that one ordinary investigation call turned a 2GB model
+# into an 18GB resident allocation, and independently corroborated by host
+# free RAM dropping into the 600MB-1.8GB range on this 16GB host during
+# testing (a real host-stability risk, not a performance nit, on exactly
+# the RAM-constrained self-hosted deployments this local/no-cost backend
+# targets). These bounds are a rough, conservative estimate (~3 chars/token
+# is deliberately pessimistic for English text to leave headroom for
+# structured-JSON/schema density) rather than an exact tokenizer count --
+# the goal is capping the KV-cache to something sane for a summarization-
+# sized prompt, not exact sizing.
+_MIN_NUM_CTX = 2048
+_MAX_NUM_CTX = 8192
+
+
+def _estimate_num_ctx(system_prompt: str, user_prompt: str, response_budget: int) -> int:
+    estimated_prompt_tokens = (len(system_prompt) + len(user_prompt)) // 3
+    return max(_MIN_NUM_CTX, min(_MAX_NUM_CTX, estimated_prompt_tokens + response_budget + 512))
+
 
 class OllamaClient:
     def __init__(
@@ -96,6 +117,7 @@ class OllamaClient:
             "options": {
                 "temperature": 0.1,
                 "num_predict": max_tokens or self._max_tokens,
+                "num_ctx": _estimate_num_ctx(system_prompt, user_prompt, max_tokens or self._max_tokens),
             },
         }
 

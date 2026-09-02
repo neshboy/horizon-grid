@@ -19,6 +19,7 @@ a defense-in-depth tradeoff, not HSM-grade key separation: documented
 honestly rather than overclaimed.
 """
 import base64
+import logging
 from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -26,6 +27,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 _HKDF_INFO = b"ioc-intel-platform:provider-credential-encryption:v1"
 
@@ -58,12 +61,26 @@ def decrypt_secret(ciphertext: str) -> str:
     """Returns "" on any decryption failure (corrupted row, master-key
     rotation) rather than raising -- callers already treat an empty
     credential as "not configured," which is the correct, safe behavior
-    here rather than a 500."""
+    here rather than a 500.
+
+    Real bug found live during overnight QA: this used to fail completely
+    silently -- zero log line -- so a master-key rotation (e.g. JWT_SECRET_KEY
+    changing, when ENCRYPTION_MASTER_KEY isn't set) orphaned every existing
+    credential with no trace anywhere an operator would look, while the
+    admin UI kept displaying a stale prior "Connected. Key is valid." test
+    result for a credential that had just silently stopped working. Still
+    never raises (the safe "not configured" behavior is unchanged) -- just
+    stops being silent about it."""
     if not ciphertext:
         return ""
     try:
         return _fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
     except InvalidToken:
+        logger.warning(
+            "Failed to decrypt a stored credential -- treating it as unconfigured. This usually "
+            "means the encryption key changed since it was saved (e.g. JWT_SECRET_KEY rotated with "
+            "no separate ENCRYPTION_MASTER_KEY set). The credential must be re-entered."
+        )
         return ""
 
 

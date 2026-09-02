@@ -102,7 +102,16 @@ export default function HomePage() {
         </Button>
       </form>
 
-      {loggedIn && (
+      {/* Real bug found live during overnight QA: this rendered for every
+          logged-in user regardless of role, but AiQuickSwitch's own
+          listAIProviders()/getActiveAIBackend() calls hit GET
+          /api/v1/runtime/ai-providers, which requires "provider:manage" --
+          a permission only Admin holds. Every analyst/viewer login produced
+          two 403 console errors and a permanently non-functional control
+          (it just renders null once its own fetch fails). Gating on isAdmin
+          here matches the Administration button's own existing pattern two
+          lines below. */}
+      {loggedIn && isAdmin && (
         <div className="flex w-full max-w-2xl justify-center">
           <AiQuickSwitch />
         </div>

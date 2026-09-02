@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, case, func, select
 
 from app.core.db import new_session
+from app.core.runtime_config import get_ioc_provider_snapshot
 from app.models.case import Case, CaseSeverity, CaseStatus
 from app.models.lookup import FinalAssessmentRecord, IOCLookup, LookupStatus, ProviderResultRecord, Verdict
 from app.providers.base import ProviderStatus
@@ -457,6 +458,23 @@ async def get_provider_health_history() -> list[dict]:
     providers = get_all_providers()
     provider_ids = [provider.provider_id for provider in providers]
 
+    # Real bug found live during overnight QA: `provider.configured` (used
+    # just below, unchanged from the old stub this function replaces) is a
+    # module-level singleton attribute computed ONCE from the static .env
+    # setting at process startup (e.g. app/providers/otx.py's
+    # `self.configured = bool(get_settings().otx_api_key)`). It never
+    # reflects a credential set afterward via this app's own in-app
+    # "Manage Providers" UI -- confirmed live that OTX/VirusTotal/AbuseIPDB
+    # all showed real, live-succeeding investigations (correct Status
+    # column here) while this same "Configured" column simultaneously said
+    # "No", directly contradicting both the Status column in the same row
+    # and the (correct) Manage Providers page. get_ioc_provider_snapshot()
+    # is the same DB-backed, per-request-fresh source every real
+    # investigation's provider calls already use (via
+    # app/core/runtime_context.py's overrides) -- reusing it here instead
+    # of the stale static flag makes this page agree with reality.
+    runtime_snapshot = await get_ioc_provider_snapshot()
+
     result: list[dict] = []
     async with new_session() as db:
         # ONE query for every provider's attempts/ok/avg_latency/rate_limited
@@ -491,7 +509,7 @@ async def get_provider_health_history() -> list[dict]:
                 # shape changed. Keeping these three fields makes the new,
                 # richer response a strict superset of the old one instead of
                 # a breaking change for that existing caller.
-                "configured": provider.configured,
+                "configured": runtime_snapshot.get(provider.provider_id, {}).get("configured", provider.configured),
                 "requires_key": provider.requires_key,
                 "supported_types": sorted(t.value for t in provider.supported_types),
             }

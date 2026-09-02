@@ -167,6 +167,11 @@ async def get_stats() -> dict:
 async def create_user(
     email: str, password: str, full_name: str, role: Role, actor_user_id: Optional[uuid.UUID], actor_email: str
 ) -> dict:
+    # Same case-normalization fix as app/api/routes/auth.py's register()/
+    # login() -- an admin-created account with a mixed-case email would
+    # otherwise hit the identical "correct password, wrong case" login
+    # rejection found live during overnight QA.
+    email = email.lower()
     async with new_session() as db:
         existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
         if existing is not None:

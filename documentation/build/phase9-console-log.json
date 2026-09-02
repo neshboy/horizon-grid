@@ -1,0 +1,9 @@
+[
+  "info: %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+  "verbose: [DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+  "info: %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+  "verbose: [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o",
+  "verbose: [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o",
+  "info: %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+  "verbose: [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o"
+]

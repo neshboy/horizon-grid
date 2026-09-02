@@ -132,7 +132,32 @@ export function isLoggedIn(): boolean {
   return typeof window !== "undefined" && !!localStorage.getItem("access_token");
 }
 
+/**
+ * Real bug found live during overnight QA: this used to only clear
+ * localStorage, with zero network call -- so a still-unexpired access
+ * token (up to ~30 min) and its refresh token (up to 7 days) both kept
+ * working indefinitely after "logging out" (e.g. if that token had
+ * already leaked via XSS, a shared machine, or a synced browser profile).
+ * The backend's new POST /auth/logout bumps token_version, immediately
+ * invalidating every outstanding token for this user -- the same
+ * mechanism already used for an admin-initiated password reset. Kept
+ * synchronous-callable (existing callers don't need to change to `await
+ * logout()`): the revocation call is fired but not awaited before
+ * clearing local state, since the local sign-out should feel instant
+ * either way and a failed revocation call (e.g. already offline) shouldn't
+ * block the user from leaving the page.
+ */
 export function logout(): void {
+  const token = getAccessToken();
+  if (token) {
+    fetch(`${getApiUrl()}/api/v1/auth/logout`, {
+      method: "POST",
+      headers: authHeaders(),
+    }).catch(() => {
+      // Best-effort -- the user is signing out regardless of whether the
+      // revocation call itself succeeds (e.g. already offline).
+    });
+  }
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
 }
@@ -217,7 +242,22 @@ export async function streamLookup(
   }
 
   if (!res.ok || !res.body) {
-    handlers.onError?.({ message: `Request failed with status ${res.status}` });
+    // Real bug found live during overnight QA: this always discarded the
+    // backend's own `detail` message (e.g. "Could not determine IOC type;
+    // pass ioc_type_hint.") for EVERY non-ok status -- 422 validation
+    // errors, 429 rate limits, 5xx errors, all of it -- showing only a
+    // bare status code with no actionable information. `res.body` is
+    // still readable here even when `!res.ok` (fetch only rejects on
+    // network failure, never on a non-2xx status), so the real detail is
+    // available, just never read.
+    let detail: string | undefined;
+    try {
+      const body = await res.clone().json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      // Non-JSON error body (e.g. a plain-text 500) -- fall through to the generic message below.
+    }
+    handlers.onError?.({ message: detail ?? `Request failed with status ${res.status}` });
     return;
   }
 

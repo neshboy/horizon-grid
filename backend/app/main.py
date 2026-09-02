@@ -4,6 +4,7 @@ import contextvars
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 
 import structlog
 from fastapi import FastAPI, Request, Response
@@ -11,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from app.api.routes import (
     admin,
@@ -58,7 +60,14 @@ structlog.configure(processors=[structlog.processors.JSONRenderer()])
 
 settings = get_settings()
 
-_APP_VERSION = "0.3.0"
+_APP_VERSION = "0.3.9"
+# Real gap found live during the 0.3.8 QA pass: this constant was never
+# bumped alongside windows/installer.iss and linux/debian/control for six
+# releases (0.3.1-0.3.8 all shipped still reporting "0.3.0" via /health and
+# the OpenAPI schema) -- there is no single canonical version source shared
+# across Python/Inno/Debian today, so this needs a manual bump alongside
+# those two files until one exists. See test_app_version_matches_release
+# for the regression guard that at least catches the next drift.
 # Process start time, for /health's uptime field -- confirmed live that no
 # version or uptime indicator was visible anywhere an operator would look
 # (the FastAPI version= below only ever surfaces via /docs' OpenAPI schema).
@@ -165,7 +174,58 @@ async def request_body_size_limit_middleware(request: Request, call_next):
                 )
         except ValueError:
             pass
+
+    # Real gap found live during overnight QA: the Content-Length check
+    # above is completely bypassed by chunked Transfer-Encoding, which
+    # omits Content-Length entirely -- not a caller "lying" about the
+    # header (the only case this code previously acknowledged), just
+    # ordinary standard HTTP/1.1 behavior. Confirmed live that a ~11MB
+    # chunked-encoded body was fully read, buffered, and Pydantic-validated
+    # with this limit never enforced at all. Actually counting bytes as
+    # the body streams closes this regardless of how the client shapes the
+    # request; `request._body` is populated afterward (Starlette's own
+    # caching attribute) so downstream body-parsing dependencies still see
+    # the exact same bytes without re-reading the now-exhausted ASGI
+    # receive channel.
+    total = 0
+    chunks = []
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > _MAX_REQUEST_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body too large (max {_MAX_REQUEST_BODY_BYTES} bytes)."},
+            )
+        chunks.append(chunk)
+    request._body = b"".join(chunks)
+
     return await call_next(request)
+
+
+@app.exception_handler(DBAPIError)
+async def _database_data_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+    """Real, systemic gap found live during overnight QA: a literal NUL
+    byte (\\x00) in ANY free-text field (case title, admin full_name, a
+    lookup value, etc.) reaches Postgres, which rejects it with
+    asyncpg.exceptions.CharacterNotInRepertoireError -- and since nothing
+    caught that anywhere, it fell through as a bare, unhandled 500 on
+    whichever endpoint happened to receive it. Pydantic's `str` type has no
+    built-in rejection of U+0000, so this was reachable through
+    essentially any POST/PATCH endpoint with a text field, not one single
+    bug to patch at the call site.
+
+    Scoped narrowly to asyncpg's DataError family (Postgres SQLSTATE class
+    22, "data exception") specifically so this stays a translation of
+    genuinely bad CLIENT input into a clean 422 -- it does not swallow
+    other DBAPIError causes (connection failures, etc.), which still
+    surface as a real 500 rather than being silently reclassified.
+    """
+    from asyncpg.exceptions import DataError as AsyncpgDataError
+
+    if isinstance(exc.orig, AsyncpgDataError):
+        logging.getLogger(__name__).warning("Rejected request with invalid data for Postgres: %s", exc.orig)
+        return JSONResponse(status_code=422, content={"detail": "Invalid character or value in request body."})
+    raise exc
 
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
@@ -198,14 +258,26 @@ async def _warn_if_jwt_secret_is_a_placeholder() -> None:
     README's quick-start does not explicitly warn against). Every JWT this
     process issues is only as strong as this value, so a fresh install that
     never got past copy-pasting the example file should say so loudly rather
-    than silently issue forgeable tokens."""
+    than silently issue forgeable tokens.
+
+    Real gap found live during the overnight QA pass: a warning alone is not
+    enough -- confirmed live that a token forged entirely offline with the
+    exact placeholder string was accepted by GET /auth/me and by the
+    admin-only POST /admin/users for a real account, with no login and no
+    real credentials at all. In production this is a full authentication
+    bypass, so it now hard-fails startup there instead of only logging.
+    Development keeps the warning-only behavior so a first-run dev install
+    still boots without extra setup friction."""
     if settings.jwt_secret_key in _KNOWN_PLACEHOLDER_JWT_SECRETS:
-        logging.getLogger(__name__).warning(
+        message = (
             "JWT_SECRET_KEY is still set to the placeholder value from .env.example. "
             "Every access/refresh token this server issues can be forged by anyone who "
             "knows this default. Generate a real random secret and set it in .env before "
             "exposing this instance to anything but localhost."
         )
+        if settings.environment == "production":
+            raise RuntimeError(message)
+        logging.getLogger(__name__).warning(message)
 
 
 @app.on_event("startup")
@@ -283,7 +355,21 @@ async def _recover_orphaned_running_lookups() -> None:
             result = await db.execute(
                 update(SecurityAssessmentRun)
                 .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
-                .values(status=SecurityAssessmentRunStatus.FAILED, error_message="Orphaned by an unclean shutdown; recovered at startup.")
+                .values(
+                    status=SecurityAssessmentRunStatus.FAILED,
+                    error_message="Orphaned by an unclean shutdown; recovered at startup.",
+                    # Real bug found live during overnight QA: every OTHER
+                    # code path that finalizes a run's status (the success
+                    # path and both exception paths in core/
+                    # security_assessment.py, plus cancel_run's direct
+                    # write) pairs the terminal status write with
+                    # completed_at in the same .values(...) -- this sweep
+                    # was the one that didn't, leaving a permanently
+                    # self-contradictory row (status=FAILED,
+                    # completed_at=None) that no other write ever
+                    # back-fills.
+                    completed_at=datetime.now(timezone.utc),
+                )
             )
             await db.commit()
         if result.rowcount:

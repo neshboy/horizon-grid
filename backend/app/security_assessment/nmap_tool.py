@@ -120,6 +120,24 @@ class NmapTool(SecurityAssessmentTool):
             return self._error(target, ioc_type, ProviderStatus.ERROR, "nmap is not installed on this host.")
         if profile_id not in _PROFILE_ARGS:
             return self._error(target, ioc_type, ProviderStatus.ERROR, f"Unknown scan profile: {profile_id!r}")
+        if target.startswith("-"):
+            # Confirmed live during overnight QA (CWE-88): nmap's own argv
+            # parser -- not a shell -- treats a leading '-' as the start of
+            # a flag, not part of a hostname/IP. A target of e.g.
+            # "--script=vuln.example.com" (paired with ioc_type_hint=domain
+            # to bypass app/ioc/detector.py's classification upstream) was
+            # accepted here and successfully loaded nmap's real NSE "vuln"
+            # script category -- exactly the "no code path to --script"
+            # invariant this module's own docstring documents as guaranteed.
+            # Upstream validation (app/core/security_assessment.py's
+            # _validate_scope, app/pentest/orchestrator.py's _is_in_scope)
+            # now also rejects this shape before it ever reaches here; this
+            # is deliberate defense-in-depth at the actual argv boundary.
+            return self._error(
+                target, ioc_type, ProviderStatus.ERROR,
+                f"Refusing to scan {target!r}: a target may never start with '-' "
+                "(nmap's argument parser would treat it as a flag, not a hostname).",
+            )
 
         # nmap requires an explicit "-6" flag for any IPv6 literal target --
         # without it, nmap treats the argument as malformed, prints a

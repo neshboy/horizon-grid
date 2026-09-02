@@ -68,6 +68,58 @@ async def test_requires_key_false_does_not_short_circuit(client):
     assert result.status == ProviderStatus.OK
 
 
+# --- Real P1 bug found live during overnight QA: `effective_configured`
+# used to be `override.get("configured", self.configured) if override else
+# self.configured` -- since run_all_providers() always supplies an override
+# with a "configured" key once ANY runtime_config DB row exists for a
+# provider (even a blank one, e.g. created by a Test-Connection click that
+# never persists the tested value), that default was never actually
+# reached: a provider with a perfectly valid .env credential
+# (self.configured=True) got permanently short-circuited to NOT_CONFIGURED
+# by an unrelated blank DB row. Confirmed live against the real app with
+# otx/virustotal/abuseipdb. Fixed to OR the two together instead of letting
+# the DB value always win. ---
+
+
+@pytest.mark.asyncio
+async def test_blank_db_override_falls_back_to_a_working_env_credential(client):
+    from app.core.runtime_context import set_provider_overrides
+
+    provider = _StubProvider(requires_key=True, configured=True)  # a real .env credential exists
+    set_provider_overrides({"stub": {"enabled": True, "configured": False, "credentials": {}}})
+    try:
+        result = await provider.run("1.2.3.4", IOCType.IPV4, client)
+    finally:
+        set_provider_overrides({})
+    assert result.status == ProviderStatus.OK  # not short-circuited to NOT_CONFIGURED
+
+
+@pytest.mark.asyncio
+async def test_db_override_configured_true_still_works_with_no_env_credential(client):
+    from app.core.runtime_context import set_provider_overrides
+
+    provider = _StubProvider(requires_key=True, configured=False)  # no .env credential
+    set_provider_overrides({"stub": {"enabled": True, "configured": True, "credentials": {"api_key": "x"}}})
+    try:
+        result = await provider.run("1.2.3.4", IOCType.IPV4, client)
+    finally:
+        set_provider_overrides({})
+    assert result.status == ProviderStatus.OK
+
+
+@pytest.mark.asyncio
+async def test_both_db_and_env_unconfigured_still_short_circuits(client):
+    from app.core.runtime_context import set_provider_overrides
+
+    provider = _StubProvider(requires_key=True, configured=False)
+    set_provider_overrides({"stub": {"enabled": True, "configured": False, "credentials": {}}})
+    try:
+        result = await provider.run("1.2.3.4", IOCType.IPV4, client)
+    finally:
+        set_provider_overrides({})
+    assert result.status == ProviderStatus.NOT_CONFIGURED
+
+
 @pytest.mark.asyncio
 async def test_http_429_maps_to_rate_limited(client):
     async def fetch_impl(ioc_value, ioc_type, http_client):

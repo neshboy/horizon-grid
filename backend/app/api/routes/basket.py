@@ -131,7 +131,20 @@ async def compare_basket_iocs(
 
     rows = []
     for raw_id in lookup_ids:
-        lookup = (await db.execute(select(IOCLookup).where(IOCLookup.id == uuid.UUID(raw_id)))).scalar_one_or_none()
+        try:
+            parsed_id = uuid.UUID(raw_id)
+        except (ValueError, AttributeError, TypeError):
+            # Real bug found live during overnight QA: this raw uuid.UUID()
+            # call had no try/except, so any non-UUID string in
+            # lookup_ids crashed the whole request with an unhandled 500
+            # (this endpoint takes a raw `payload: dict`, bypassing
+            # FastAPI/Pydantic's normal automatic UUID coercion+422 that
+            # every path-param UUID already gets). Skipping an unparseable
+            # id rather than 500ing matches this loop's own existing
+            # "if not lookup: continue" behavior for a well-formed but
+            # nonexistent id.
+            continue
+        lookup = (await db.execute(select(IOCLookup).where(IOCLookup.id == parsed_id))).scalar_one_or_none()
         if not lookup:
             continue
         edges = (

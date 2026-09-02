@@ -1,0 +1,34 @@
+{
+  "results": {
+    "ip": {
+      "url": "http://localhost:3000/lookup/new?value=8.8.8.8",
+      "lookupId": "new",
+      "status": "complete"
+    },
+    "domain": {
+      "url": "http://localhost:3000/lookup/new?value=google.com",
+      "lookupId": "new",
+      "status": "complete"
+    },
+    "hash": {
+      "url": "http://localhost:3000/lookup/new?value=275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0",
+      "lookupId": "new",
+      "status": null
+    },
+    "cve": {
+      "url": "http://localhost:3000/lookup/new?value=CVE-2024-3400",
+      "lookupId": "new",
+      "status": "complete"
+    }
+  },
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)"
+  ],
+  "downloadDirListingAfterCsv": [],
+  "downloadDirListingBeforeCsv": [],
+  "downloadDirListingAfterPdf": [],
+  "downloadDirListingBeforePdf": [],
+  "csvClicked": false,
+  "pdfClicked": false,
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmdWNrQGZ1Y2suY29tIiwicm9sZSI6ImFkbWluIiwidG9rZW5fdmVyc2lvbiI6MCwidHlwZSI6ImFjY2VzcyIsImlhdCI6MTc4ODI5NzcyMiwiZXhwIjoxNzg4Mjk5NTIyfQ.vO6HpW96XCDzXlM3xFdxUoFC_cN87aB_t5aL6lYU7Sc"
+}

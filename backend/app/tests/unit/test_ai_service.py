@@ -502,6 +502,32 @@ def test_prune_for_prompt_does_not_truncate_realistic_single_field_signal():
     assert pruned["description"] == realistic_description, "a realistic single-field signal must not be truncated"
 
 
+# --- Real P2 bug found live during overnight QA: unlike every field that
+# reaches a prompt through _prune_for_prompt above, `ioc_value` itself was
+# interpolated verbatim and unbounded -- a realistic ~2000-char URL IOC
+# (well under the 2048-char field max) reliably broke structured-JSON
+# generation on a small local model, since it must echo ioc_value back
+# into its own JSON output and truncated mid-string. ---
+
+
+def test_prune_ioc_value_leaves_realistic_short_iocs_untouched():
+    from app.ai.service import _prune_ioc_value_for_prompt
+
+    for value in ["8.8.8.8", "example.com", "CVE-2021-44228", "a" * 64]:  # ip/domain/cve/hash-length
+        assert _prune_ioc_value_for_prompt(value) == value
+
+
+def test_prune_ioc_value_truncates_a_realistic_long_url():
+    from app.ai.service import _prune_ioc_value_for_prompt
+
+    long_url = "http://example.com/" + "a" * 2000
+    pruned = _prune_ioc_value_for_prompt(long_url)
+    assert len(pruned) < len(long_url)
+    assert pruned.startswith("http://example.com/")
+    assert "truncated" in pruned
+    assert "2019 chars total" in pruned  # len("http://example.com/") == 19, plus 2000 'a's
+
+
 def test_prune_for_prompt_keeps_large_list_fields_tightly_capped():
     """Regression test for a bug introduced by the SECOND fix for this same
     function: raising the (then-uniform) cap to fix MITRE's description

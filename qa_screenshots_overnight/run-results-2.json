@@ -1,0 +1,14 @@
+{
+  "hashUrl": "http://localhost:3000/lookup/new?value=275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+  "hashStatus": "ERROR:MalwareBazaar is not configured (missing API key/credentials).",
+  "csvClicked": true,
+  "pdfClicked": true,
+  "before": [],
+  "afterCsv": [
+    "ioc-assessment-ad8ea627-281d-42d3-81e0-be7282ab48b4.csv"
+  ],
+  "afterPdf": [
+    "ioc-assessment-ad8ea627-281d-42d3-81e0-be7282ab48b4.csv",
+    "ioc-assessment-ad8ea627-281d-42d3-81e0-be7282ab48b4.pdf"
+  ]
+}

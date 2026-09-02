@@ -129,14 +129,6 @@ async def stream_lookup(
                         )
                     )
 
-                    if result.status.value == "ok":
-                        summary = await summarize_provider(
-                            ioc_value, ioc_type.value, result, backend_override=payload.ai_backend
-                        )
-                        stream_db.add(
-                            AISummaryRecord(lookup_id=lookup_id, provider_id=result.provider_id, summary=summary.model_dump())
-                        )
-
                     # Commit after every provider (not once at the end of the
                     # loop) -- confirmed live that a client disconnecting
                     # mid-investigation (page refresh/tab close, or the
@@ -151,9 +143,36 @@ async def stream_lookup(
                     # rate-limited to a handful per lookup, so a commit per
                     # result is cheap relative to the network calls it
                     # follows.
+                    #
+                    # Real gap in that same fix found live during overnight
+                    # QA: this commit used to happen AFTER the summarize_
+                    # provider() AI call below, not right here -- so the
+                    # exact disconnect-mid-investigation scenario the comment
+                    # above describes could still lose an already-successful
+                    # provider result, just from a slightly later disconnect
+                    # (during the AI call instead of during the network
+                    # fetch). Confirmed live: a real NVD call returned 200 in
+                    # ~1s, but the AI summarization queued behind other
+                    # concurrent Ollama load and didn't return before the
+                    # client gave up -- the lookup ended FAILED with
+                    # provider_results: [], discarding the real, already-
+                    # fetched NVD/CVSS data. Committing the provider result
+                    # immediately, before the AI call even starts, closes
+                    # that window: the AI summary can still be lost to a
+                    # disconnect (it's best-effort narrative, not primary
+                    # evidence), but the real provider result underneath it
+                    # no longer can be.
                     await stream_db.commit()
                     yield _sse("provider_result", result.to_dict())
+
                     if result.status.value == "ok":
+                        summary = await summarize_provider(
+                            ioc_value, ioc_type.value, result, backend_override=payload.ai_backend
+                        )
+                        stream_db.add(
+                            AISummaryRecord(lookup_id=lookup_id, provider_id=result.provider_id, summary=summary.model_dump())
+                        )
+                        await stream_db.commit()
                         yield _sse("provider_summary", summary.model_dump())
 
                 correlation = correlate(ioc_value, ioc_type, provider_results)
@@ -694,14 +713,23 @@ def _render_pdf(lookup: IOCLookup) -> bytes:
 
     def _section(title: str, body: str) -> None:
         story.append(Spacer(1, 10))
-        story.append(Paragraph(title, styles["Heading2"]))
+        # Real bug found live during overnight QA: `title` was never
+        # escaped here (unlike every dynamic value in this file, which all
+        # go through _pdf_esc) -- the one hardcoded caller with a literal
+        # '&' in its title ("MITRE ATT&CK Mappings", in _bullet_section
+        # below) rendered as "MITRE ATT&CK; Mappings" because ReportLab's
+        # Paragraph() parses its input as mini-XML and a bare '&' isn't a
+        # valid entity start. Escaping here too, even though today's only
+        # callers pass a plain string literal, so this can never regress
+        # if a future title is ever built from anything dynamic.
+        story.append(Paragraph(_pdf_esc(title), styles["Heading2"]))
         story.append(Paragraph(_pdf_esc(body), styles["BodyText"]))
 
     def _bullet_section(title: str, items: list, *, already_escaped: bool = False) -> None:
         if not items:
             return
         story.append(Spacer(1, 10))
-        story.append(Paragraph(title, styles["Heading2"]))
+        story.append(Paragraph(_pdf_esc(title), styles["Heading2"]))
         for item in items:
             text = item if already_escaped else _pdf_esc(item)
             story.append(Paragraph(f"&bull; {text}", styles["BodyText"]))

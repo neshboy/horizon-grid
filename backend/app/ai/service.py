@@ -384,6 +384,32 @@ def _prune_for_prompt(data: dict) -> dict:
     return pruned
 
 
+_MAX_IOC_VALUE_IN_PROMPT_LEN = 300
+
+
+def _prune_ioc_value_for_prompt(ioc_value: str) -> str:
+    """Real P2 bug found live during overnight QA: unlike every OTHER field
+    that reaches a prompt (see _prune_for_prompt above), `ioc_value` itself
+    was interpolated verbatim and unbounded into both summarize_provider()'s
+    and generate_final_assessment()'s user_prompt. Most IOC types are short
+    (an IP/hash/CVE/domain is well under this cap), but a long, real-world,
+    entirely non-adversarial URL IOC (long phishing/malware-delivery URLs
+    are an ordinary shape, not an edge case) reliably pushed the small local
+    model past its ability to emit valid JSON -- reproduced live with a
+    ~2000-char URL (still under the 2048-char field max): the model must
+    echo `ioc_value` back into its OWN structured-JSON output, and it
+    truncated mid-string on both the provider-summary and final-assessment
+    calls in the same run, losing ALL AI analysis for that lookup (cleanly
+    degraded to ai_outcome="failed", not a crash/hallucination, but a real
+    coverage gap for a normal IOC shape). The AI only ever needs enough of
+    the value to reason about/reference it, not the full string -- the
+    caller already has the real, complete value from the DB regardless of
+    what's echoed back in the AI's own JSON."""
+    if len(ioc_value) <= _MAX_IOC_VALUE_IN_PROMPT_LEN:
+        return ioc_value
+    return ioc_value[:_MAX_IOC_VALUE_IN_PROMPT_LEN] + f"... [truncated, {len(ioc_value)} chars total]"
+
+
 def _provider_result_to_prompt(result: ProviderResult) -> str:
     return (
         f"Provider: {result.provider_name} (id={result.provider_id}, category={result.category.value})\n"
@@ -408,7 +434,7 @@ async def summarize_provider(
         )
 
     user_prompt = (
-        f"IOC: {ioc_value} (type: {ioc_type})\n\n"
+        f"IOC: {_prune_ioc_value_for_prompt(ioc_value)} (type: {ioc_type})\n\n"
         f"{_provider_result_to_prompt(result)}\n"
         "Summarize this provider's findings for this IOC."
     )
@@ -560,7 +586,7 @@ async def generate_final_assessment(
     )
 
     user_prompt = (
-        f"IOC: {ioc_value} (type: {ioc_type})\n\n"
+        f"IOC: {_prune_ioc_value_for_prompt(ioc_value)} (type: {ioc_type})\n\n"
         f"## Per-provider summaries\n{summaries_block}\n\n"
         f"## Correlation engine output\n{correlation_block}"
         f"{unavailable_block}"

@@ -16,7 +16,13 @@ _MAX_PASSWORD_LENGTH = 72
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=_MAX_PASSWORD_LENGTH)
-    full_name: str = ""
+    # Same class of gap as the password field above, found live during
+    # overnight QA via the sibling admin-create-user endpoint (schemas/
+    # admin.py's CreateUserRequest): full_name has no bound here either,
+    # and app/models/user.py's column is String(255) -- an oversized value
+    # would crash this, the very first bootstrap-admin registration, with
+    # an unhandled 500 instead of a clean 422.
+    full_name: str = Field(default="", max_length=255)
 
 
 class LoginRequest(BaseModel):

@@ -12,6 +12,7 @@ from app.core.security_assessment import (
     CIDRTooLargeError,
     InvalidTargetError,
     TargetMismatchError,
+    UnsafeTargetError,
     UnscannableIOCTypeError,
     _validate_scope,
 )
@@ -73,3 +74,57 @@ def test_malformed_cidr_value_raises_a_clean_error_not_a_raw_valueerror():
     lookup = _lookup("not-a-real-network; touch /tmp/pwned", "cidr")
     with pytest.raises(InvalidTargetError):
         _validate_scope(lookup, "not-a-real-network; touch /tmp/pwned", True)
+
+
+# --- Real bugs found live during overnight QA: SSRF (a "url"-typed target
+# of "http://opensearch:9200/_cluster/health" reached another Docker
+# container's real internal service with zero destination check) and
+# nmap argument injection (a "domain"-typed target of
+# "--script=vuln.example.com" reached nmap's real argv). Both root-caused
+# to this function only ever format/destination-validating the CIDR IOC
+# type -- IPV4/IPV6/DOMAIN/HOSTNAME/URL got none at all. ---
+
+
+def test_accepts_loopback_ipv4_target():
+    """Loopback is deliberately exempt from the SSRF blocklist -- this
+    codebase's own existing integration test suite already uses 127.0.0.1
+    as the established "scan yourself" pattern for this toolkit (e.g.
+    test_security_assessment_api.py's real nmap runs). The real exploit
+    reached OTHER containers' private addresses via service-name
+    resolution, not this container's own loopback."""
+    lookup = _lookup("127.0.0.1", "ipv4")
+    assert _validate_scope(lookup, "127.0.0.1", True) == IOCType.IPV4
+
+
+def test_rejects_private_rfc1918_ipv4_target():
+    lookup = _lookup("172.19.0.5", "ipv4")
+    with pytest.raises(UnsafeTargetError):
+        _validate_scope(lookup, "172.19.0.5", True)
+
+
+def test_accepts_a_real_globally_routable_ipv4_target():
+    lookup = _lookup("8.8.8.8", "ipv4")
+    assert _validate_scope(lookup, "8.8.8.8", True) == IOCType.IPV4
+
+
+def test_rejects_flag_shaped_domain_value_before_any_dns_lookup():
+    """This is the exact live-reproduced nmap argument-injection payload --
+    must be rejected on syntax alone, before assert_globally_routable_target
+    would even attempt to resolve it."""
+    lookup = _lookup("--script=vuln.example.com", "domain")
+    with pytest.raises(InvalidTargetError):
+        _validate_scope(lookup, "--script=vuln.example.com", True)
+
+
+def test_rejects_url_target_resolving_to_internal_docker_service(monkeypatch):
+    """This is the exact live-reproduced SSRF: a url-typed target naming an
+    internal Docker Compose service, which resolves inside the backend
+    container to another container's real internal address."""
+    import socket
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda host, port: [(None, None, None, None, ("172.19.0.5", 0))]
+    )
+    lookup = _lookup("http://opensearch:9200/_cluster/health", "url")
+    with pytest.raises(UnsafeTargetError):
+        _validate_scope(lookup, "http://opensearch:9200/_cluster/health", True)

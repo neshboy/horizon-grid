@@ -411,6 +411,50 @@ async def test_response_still_includes_the_old_static_config_fields(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_configured_field_reflects_a_runtime_db_credential_even_when_the_static_flag_is_stale(monkeypatch):
+    """Real bug found live during overnight QA: OTX/VirusTotal/AbuseIPDB all
+    made real, successfully-authenticating provider calls (confirmed via
+    real investigations), yet this endpoint's "configured" field said False
+    for all three -- directly contradicting both this endpoint's own Status
+    column (computed from the very same successful calls) and the separate,
+    correct Manage Providers page. Root cause: `provider.configured` is a
+    module-singleton flag set once from the static .env value at process
+    startup; it never learns about a credential added afterward through
+    this app's own in-app runtime-config UI. This test proves the fix:
+    a provider whose STATIC flag is False, but which HAS a real, valid
+    credential saved via the runtime-config path (the exact mechanism the
+    in-app UI uses), must report configured=True here."""
+    import app.core.dashboard as dashboard
+    from app.core.db import new_session
+    from app.core.runtime_config import upsert_ioc_provider
+    from app.models.runtime_config import ProviderKind, ProviderRuntimeConfig
+
+    provider_id = _fresh_fake_provider_id()
+    fake = _FakeProvider(provider_id)
+    fake.configured = False  # the stale static flag this bug incorrectly trusted
+    monkeypatch.setattr(dashboard, "get_all_providers", lambda: [fake])
+
+    await upsert_ioc_provider(provider_id, fake.provider_name, {"api_key": "qa-test-key-value"})
+    try:
+        result = await dashboard.get_provider_health_history()
+        entry = next(e for e in result if e["provider_id"] == provider_id)
+        assert entry["configured"] is True
+    finally:
+        async with new_session() as db:
+            row = (
+                await db.execute(
+                    select(ProviderRuntimeConfig).where(
+                        ProviderRuntimeConfig.provider_id == provider_id,
+                        ProviderRuntimeConfig.kind == ProviderKind.IOC,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is not None:
+                await db.delete(row)
+                await db.commit()
+
+
+@pytest.mark.asyncio
 async def test_zero_rows_reports_unknown_never_healthy_in_every_window(monkeypatch):
     """THE critical rule, exercised end-to-end: a provider with literally
     zero ProviderResultRecord rows anywhere must report status="unknown" in

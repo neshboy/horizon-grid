@@ -213,6 +213,10 @@ class InvalidTargetError(SecurityAssessmentError):
     pass
 
 
+class UnsafeTargetError(SecurityAssessmentError):
+    pass
+
+
 class LookupNotFoundError(SecurityAssessmentError):
     pass
 
@@ -269,6 +273,34 @@ def _validate_scope(lookup: IOCLookup, target_confirmation: str, authorization_c
                 f"Active scanning is limited to {_MAX_CIDR_ADDRESSES} addresses (/28) or smaller "
                 f"-- this range has {network.num_addresses}."
             )
+    elif ioc_type in (IOCType.IPV4, IOCType.IPV6, IOCType.DOMAIN, IOCType.HOSTNAME, IOCType.URL):
+        # Real gaps found live during the overnight QA pass, both via this
+        # exact code path: (1) a value like "--script=vuln.example.com",
+        # paired with ioc_type_hint=domain, reached nmap's argv as the sole
+        # "target" slot and was parsed as an nmap FLAG rather than a
+        # hostname (CWE-88) -- assert_valid_hostname_syntax below rejects
+        # that shape outright, independent of the security_assessment/
+        # nmap_tool.py-level defense added separately. (2) a value like
+        # "http://opensearch:9200/_cluster/health" was accepted with zero
+        # destination check and the backend genuinely connected to another
+        # container's internal service, returning its real response as if
+        # it were an external finding (SSRF) -- assert_globally_routable_
+        # target closes that by resolving and rejecting anything that isn't
+        # a real, globally-routable Internet address. See url_safety.py's
+        # own docstrings for why this check does NOT apply to CIDR here nor
+        # to the separate Pentest Suite (app/pentest/orchestrator.py), which
+        # legitimately needs RFC1918 targets under its own declared scope.
+        from app.core.url_safety import assert_globally_routable_target, assert_valid_hostname_syntax
+
+        if ioc_type in (IOCType.DOMAIN, IOCType.HOSTNAME):
+            try:
+                assert_valid_hostname_syntax(lookup.ioc_value)
+            except ValueError as exc:
+                raise InvalidTargetError(str(exc)) from exc
+        try:
+            assert_globally_routable_target(ioc_type.value, lookup.ioc_value)
+        except ValueError as exc:
+            raise UnsafeTargetError(str(exc)) from exc
     return ioc_type
 
 

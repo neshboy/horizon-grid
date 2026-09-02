@@ -141,8 +141,26 @@ class BaseProvider(abc.ABC):
         start = time.monotonic()
         override = get_provider_override(self.provider_id)
         effective_enabled = override.get("enabled", True) if override else True
+        # Real P1 bug found live during overnight QA: this used to be
+        # `override.get("configured", self.configured)` -- since
+        # run_all_providers() always calls set_provider_overrides() with a
+        # snapshot that includes a "configured" key for every provider
+        # that has ANY runtime_config row at all (even a blank one, e.g.
+        # created by a Test-Connection click that never persists the
+        # tested value, per record_ioc_test_result's own docstring), that
+        # default was never actually reached once any such row existed --
+        # a provider with a perfectly valid .env credential (self.configured
+        # =True) got permanently short-circuited to NOT_CONFIGURED by an
+        # unrelated blank DB row, with fetch()/get_credential() never even
+        # reached to try the working env fallback. get_credential() in
+        # runtime_context.py already does this correctly (`... or
+        # fallback`) -- mirroring that same "DB value OR env fallback"
+        # semantics here, instead of "DB value always wins", restores the
+        # legacy-.env-fallback behavior this whole override mechanism's own
+        # docstring says should exist "for as long as no runtime config has
+        # been seeded/configured."
         effective_configured = (
-            override.get("configured", self.configured) if override else self.configured
+            (override.get("configured") or self.configured) if override else self.configured
         )
         if not effective_enabled:
             result = ProviderResult(

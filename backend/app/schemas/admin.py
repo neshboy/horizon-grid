@@ -28,12 +28,19 @@ class UserListResponse(BaseModel):
 class CreateUserRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=_MAX_PASSWORD_LENGTH)
-    full_name: str = ""
+    # Real bug found live during overnight QA: with no max_length here, a
+    # full_name over 255 chars crashed with an unhandled 500
+    # (asyncpg.exceptions.StringDataRightTruncationError) instead of a
+    # clean 422, since app/models/user.py's full_name column is
+    # String(255). Matching that column length here, the same pattern
+    # already used everywhere else a text field maps to a bounded column
+    # (e.g. CaseCreateRequest.title's max_length=255 in schemas/case.py).
+    full_name: str = Field(default="", max_length=255)
     role: Role = Role.ANALYST
 
 
 class UpdateUserRequest(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(default=None, max_length=255)
     role: Optional[Role] = None
 
 

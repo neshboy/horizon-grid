@@ -112,12 +112,27 @@ function DataField({ label, value }: { label: string; value: unknown }) {
       );
     }
 
+    // Real bug found live during overnight QA: this branch used to join
+    // the ENTIRE array into one unbounded string (a real-world case hit
+    // 3,352 entries / 37,029 characters), which rendered as a single
+    // ~17,000px-tall block of text and stretched the whole shared grid
+    // row -- and with it the entire investigation page -- to over 20,000px.
+    // Capping to the same bounded Pill-chip layout the <=6 branch already
+    // uses (wrapping instead of one long string) keeps this from ever
+    // dominating the page layout again, regardless of how large a
+    // provider's own data gets.
+    const _MAX_VISIBLE_ITEMS = 20;
+    const visible = value.slice(0, _MAX_VISIBLE_ITEMS);
+    const remaining = value.length - visible.length;
     return (
-      <div className="flex items-baseline justify-between gap-3 py-1 text-xs">
-        <span className="shrink-0 text-muted-foreground">{label}</span>
-        <span className="break-all text-right text-foreground">
-          {value.map((v) => (v === null ? "—" : formatPrimitive(v))).join(", ")}
-        </span>
+      <div className="flex flex-col gap-1 py-1 text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <div className="flex flex-wrap gap-1">
+          {visible.map((v, i) => (
+            <Pill key={i}>{v === null ? "—" : formatPrimitive(v)}</Pill>
+          ))}
+          {remaining > 0 && <Pill>+{remaining} more</Pill>}
+        </div>
       </div>
     );
   }

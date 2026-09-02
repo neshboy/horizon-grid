@@ -22,9 +22,32 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> UserResponse:
-    existing = await db.execute(select(User).where(User.email == payload.email))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    # Real bugs found live during overnight QA, both fixed here together:
+    # (1) Email-enumeration oracle -- this used to check "email already
+    # registered" BEFORE "registration closed", so an anonymous, unrated
+    # caller got two distinguishable responses (400 vs 403) that directly
+    # revealed whether an arbitrary email had a real account, at unlimited
+    # speed. Checking "closed" first means every anonymous call gets the
+    # exact same 403 once any user exists -- the only case that still
+    # reaches the duplicate-email check is the empty-table bootstrap,
+    # where no duplicate can exist yet anyway, so the oracle has nothing
+    # left to reveal. (2) No throttling at all on a public, unauthenticated
+    # endpoint -- keyed on the ATTEMPTED email (like login's own limiter,
+    # not a single global bucket shared by every caller) so this bounds
+    # repeated attempts against one candidate address without one heavy
+    # caller exhausting a shared budget for everyone else.
+    settings = get_settings()
+    register_limiter = RateLimiter(
+        f"register:{payload.email.lower()}",
+        max_calls=settings.login_rate_limit_max_attempts,
+        window_seconds=settings.login_rate_limit_window_seconds,
+    )
+    if not await register_limiter.allow():
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many registration attempts for this address. Try again in under "
+            f"{settings.login_rate_limit_window_seconds} seconds.",
+        )
 
     # Self-registration only bootstraps the very first admin. Every subsequent
     # account must be created by an existing admin from the Administration page,
@@ -36,8 +59,21 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             detail="Self-registration is closed. Ask an administrator to create your account from the Administration page.",
         )
 
+    # Email lookups/storage were
+    # never case-normalized anywhere in the auth stack (only the rate-
+    # limiter key above was ever lowercased) -- a correct password with a
+    # different-case email was rejected as "invalid" even though the
+    # account genuinely matched. Storing lowercased here, and looking up
+    # lowercased at login below, makes email matching consistently
+    # case-insensitive going forward (existing rows created before this
+    # fix are not retroactively migrated).
+    normalized_email = payload.email.lower()
+    existing = await db.execute(select(User).where(User.email == normalized_email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
     user = User(
-        email=payload.email,
+        email=normalized_email,
         hashed_password=hash_password(payload.password),
         full_name=payload.full_name,
         role=Role.ADMIN,
@@ -74,7 +110,12 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
             f"{settings.login_rate_limit_window_seconds} seconds.",
         )
 
-    result = await db.execute(select(User).where(User.email == payload.email))
+    # See register()'s comment above -- this lookup was never actually
+    # case-normalized despite this function's own pre-existing comment
+    # claiming it was; confirmed live that a correct password with a
+    # different-case email was rejected. Only the rate-limiter key a few
+    # lines up was ever lowercased.
+    result = await db.execute(select(User).where(User.email == payload.email.lower()))
     user = result.scalar_one_or_none()
     if not user or not verify_password(payload.password, user.hashed_password):
         await user_svc.record_login_failure(payload.email)
@@ -112,3 +153,21 @@ async def refresh(payload_body: RefreshRequest, db: AsyncSession = Depends(get_d
 @router.get("/me", response_model=UserResponse)
 async def me(current: CurrentUser = Depends(get_current_user)) -> UserResponse:
     return UserResponse(id=str(current.id), email=current.email, full_name=current.full_name, role=current.role)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> None:
+    """Real bug found live during overnight QA: there was no logout route
+    at all -- the frontend's "Log out" only ever cleared localStorage
+    client-side, so a still-unexpired access token (up to ~30 min) and its
+    refresh token (up to 7 days) both kept working indefinitely after
+    logout, e.g. if that token had already leaked (XSS, a shared/public
+    machine, a synced browser profile). Bumping token_version is the exact
+    mechanism app/core/users.py's reset_password() already uses to revoke
+    a user's outstanding tokens immediately -- live-confirmed there that it
+    works; this just wires the same mechanism to a self-service action
+    instead of only an admin-initiated one."""
+    user = await db.get(User, current.id)
+    if user is not None:
+        user.token_version += 1
+        await db.commit()

@@ -299,3 +299,36 @@ def test_render_pdf_renders_wellformed_markup_as_literal_text_not_formatting():
     )
     pdf_bytes = _render_pdf(lookup)
     assert pdf_bytes.startswith(b"%PDF")
+
+
+# --- Real bug found live during overnight QA: hardcoded section titles
+# (e.g. "MITRE ATT&CK Mappings") were never passed through _pdf_esc() the
+# way every dynamic value in this file already is -- the literal '&'
+# rendered corrupted as "MITRE ATT&CK; Mappings" in every PDF export that
+# included MITRE mappings, since ReportLab's Paragraph() parses its input
+# as mini-XML and a bare '&' isn't a valid entity start. Reproduced live
+# against the real reportlab install, and directly against the real
+# generated PDF text (byte-identical whether downloaded via the API or the
+# real browser's ExportMenu). ---
+
+
+def test_render_pdf_escapes_the_mitre_section_title_correctly(monkeypatch):
+    from reportlab.platypus import Paragraph as _real_paragraph
+
+    seen_titles = []
+
+    def _recording_paragraph(text, *args, **kwargs):
+        seen_titles.append(text)
+        return _real_paragraph(text, *args, **kwargs)
+
+    monkeypatch.setattr("reportlab.platypus.Paragraph", _recording_paragraph)
+
+    lookup = _fake_lookup()  # default fixture already has one real mitre_mappings entry
+    pdf_bytes = _render_pdf(lookup)
+
+    assert pdf_bytes.startswith(b"%PDF")
+    assert "MITRE ATT&amp;CK Mappings" in seen_titles, (
+        "the section title must be escaped ('&' -> '&amp;') before reaching Paragraph(), "
+        "the same way every dynamic value in this file already is"
+    )
+    assert "MITRE ATT&CK Mappings" not in seen_titles, "the raw, unescaped title must never reach Paragraph()"

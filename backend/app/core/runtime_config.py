@@ -112,7 +112,23 @@ def _merge_credentials(row: ProviderRuntimeConfig, incoming: dict) -> dict:
     if not incoming:
         return _decrypt_credentials(row)
     merged = _decrypt_credentials(row)
-    merged.update(incoming)
+    # Real bug found live during overnight QA, a second variant of the
+    # class this function's own docstring above already fixed once: a
+    # field PRESENT in `incoming` with an explicit empty string ("") --
+    # reachable via completely ordinary UI use (click into a masked field
+    # to retype it, select-all+delete to reconsider, then Save without
+    # retyping) -- still silently wiped a previously-working credential,
+    # because merged.update(incoming) can't tell "present with a real new
+    # value" apart from "present but blank." Since there is no dedicated
+    # "clear this credential" affordance anywhere in this app today (a
+    # separate, lower-priority gap), an explicit blank can only ever mean
+    # "the operator didn't mean to change this field" -- so it's dropped
+    # here exactly like a genuinely absent key already was, never treated
+    # as a real update. This does not remove any capability that was
+    # actually reachable before (there was never a way to deliberately
+    # clear a field this way -- only to accidentally do so).
+    non_blank_incoming = {k: v for k, v in incoming.items() if v}
+    merged.update(non_blank_incoming)
     return merged
 
 
@@ -163,6 +179,18 @@ def _row_to_public_dict(row: ProviderRuntimeConfig) -> dict:
     creds = _decrypt_credentials(row)
     plaintext_fields = _PLAINTEXT_CREDENTIAL_FIELDS.get(row.provider_id, set())
     masked = {k: (v if k in plaintext_fields else mask_secret(v)) for k, v in creds.items()}
+    # Real bug found live during overnight QA (independently, by multiple
+    # test passes): a credential that decrypts to nothing because the
+    # encryption key changed since it was saved (see crypto.py's
+    # decrypt_secret) is indistinguishable here from "never configured" --
+    # `creds` is `{}` either way. That's fine for `configured` (false is
+    # correct either way), but it meant last_test_ok/last_test_message kept
+    # showing a stale "Connected. Key is valid." from before the key
+    # changed, directly contradicting the now-correct `configured: false`
+    # on the very same row and actively misleading whoever's looking at
+    # this in the admin UI. Detecting "had real ciphertext, decrypted to
+    # nothing" lets this null out the stale test result instead of lying.
+    credentials_unreadable = bool(row.encrypted_credentials) and not creds
     return {
         "provider_id": row.provider_id,
         "provider_name": row.provider_name,
@@ -173,9 +201,13 @@ def _row_to_public_dict(row: ProviderRuntimeConfig) -> dict:
         "model_id": row.model_id,
         "extra_config": row.extra_config or {},
         "masked_credentials": masked,
-        "last_test_at": row.last_test_at.isoformat() if row.last_test_at else None,
-        "last_test_ok": row.last_test_ok,
-        "last_test_message": row.last_test_message,
+        "credentials_unreadable": credentials_unreadable,
+        "last_test_at": None if credentials_unreadable else (row.last_test_at.isoformat() if row.last_test_at else None),
+        "last_test_ok": None if credentials_unreadable else row.last_test_ok,
+        "last_test_message": (
+            "Previously-saved credential can no longer be decrypted (the encryption key changed) "
+            "-- please re-enter it."
+        ) if credentials_unreadable else row.last_test_message,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
