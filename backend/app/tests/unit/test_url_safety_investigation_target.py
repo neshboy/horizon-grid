@@ -75,3 +75,19 @@ def test_globally_routable_accepts_domain_resolving_to_loopback(monkeypatch):
 def test_globally_routable_rejects_flag_shaped_domain_value():
     with pytest.raises(ValueError):
         assert_globally_routable_target("domain", "--script=vuln.example.com")
+
+
+def test_globally_routable_accepts_a_url_target_whose_host_is_a_globally_routable_ipv6_literal():
+    """Real bug found live during overnight QA: a URL-typed target whose
+    host is an IPv6 literal (e.g. "http://[2606:4700:4700::1111]/") was
+    rejected outright -- urlparse's own .hostname unwraps the brackets to a
+    bare address like "2606:4700:4700::1111", which the hostname-syntax
+    regex (charset [A-Za-z0-9.-], no colons) can never match, so
+    assert_valid_hostname_syntax raised for EVERY globally-routable
+    IPv6-literal URL target, not just malicious flag-shaped strings."""
+    assert_globally_routable_target("url", "http://[2606:4700:4700::1111]/path")
+
+
+def test_globally_routable_rejects_a_url_target_whose_host_is_a_private_ipv6_literal():
+    with pytest.raises(ValueError, match="not a globally-routable"):
+        assert_globally_routable_target("url", "http://[fd00::1]/path")

@@ -7,7 +7,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)
-![Version](https://img.shields.io/badge/version-0.3.9-brightgreen)
+![Version](https://img.shields.io/badge/version-0.3.10-brightgreen)
 ![Python](https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white)
 ![Next.js](https://img.shields.io/badge/frontend-Next.js-000000?logo=next.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)
@@ -275,7 +275,7 @@ afterward (full detail in the Mission-Critical Operations Manual):
 | Code/package signing | Not code-signed — SmartScreen will warn; click "Run anyway" | Not signed (standard for `.deb` packages) |
 | Uninstall (keep data) | "Remove Application" — stops containers, no volume deletion | `apt remove horizon-grid` — stops containers, no volume deletion |
 | Uninstall (delete everything) | "Remove Everything" — requires typing `DELETE`; deletes volumes and all config/data | `apt purge horizon-grid` — force-removes containers/volumes and deletes all config/data |
-| Current version | `0.3.9` | `0.3.9` |
+| Current version | `0.3.10` | `0.3.10` |
 
 ## 🏗️ Architecture
 
@@ -349,8 +349,8 @@ administrator privileges; 64-bit Windows only.
 ### 🐧 Linux package
 
 Built via `linux/build-deb.sh` (requires a Debian/Ubuntu host; produces
-`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.3.9_amd64.deb`).
-Install with `sudo dpkg -i horizon-grid_0.3.9_amd64.deb`, then run the
+`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.3.10_amd64.deb`).
+Install with `sudo dpkg -i horizon-grid_0.3.10_amd64.deb`, then run the
 terminal setup wizard as root to configure the admin account, AI backend,
 providers, and ports; the platform is then managed via the `horizon-grid`
 systemd-backed CLI (`start` / `stop` / `restart`).

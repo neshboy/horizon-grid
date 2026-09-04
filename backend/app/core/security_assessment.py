@@ -273,6 +273,23 @@ def _validate_scope(lookup: IOCLookup, target_confirmation: str, authorization_c
                 f"Active scanning is limited to {_MAX_CIDR_ADDRESSES} addresses (/28) or smaller "
                 f"-- this range has {network.num_addresses}."
             )
+        # Real gap found live during overnight QA: every OTHER scannable
+        # type (IPv4/IPv6/domain/hostname/URL, see the elif branch below)
+        # goes through assert_globally_routable_target -- CIDR never did,
+        # so a CIDR-typed lookup could target this platform's own
+        # docker-compose network (e.g. "172.19.0.0/28") and nmap would
+        # genuinely scan other containers on it, the exact class of SSRF
+        # the sibling check exists to prevent. is_global/is_loopback apply
+        # to the whole network directly (CIDR targets are always IP
+        # literals, never hostnames, so there's no DNS resolution step to
+        # route through url_safety.py's single-host-oriented helper here).
+        if not network.is_loopback and not network.is_global:
+            raise UnsafeTargetError(
+                f"'{lookup.ioc_value}' is not a globally-routable network (private/link-local/reserved) "
+                "-- refusing to scan it. The Security Assessment Toolkit only investigates real external "
+                "targets or this host's own loopback; reaching other private/internal infrastructure is "
+                "not a supported use of this feature."
+            )
     elif ioc_type in (IOCType.IPV4, IOCType.IPV6, IOCType.DOMAIN, IOCType.HOSTNAME, IOCType.URL):
         # Real gaps found live during the overnight QA pass, both via this
         # exact code path: (1) a value like "--script=vuln.example.com",
@@ -386,20 +403,112 @@ async def _execute_run(
     actor_user_id: Optional[uuid.UUID],
     actor_email: str,
 ) -> None:
-    async with new_session() as db:
-        await db.execute(
-            update(SecurityAssessmentRun)
-            .where(SecurityAssessmentRun.id == run_id)
-            .values(status=SecurityAssessmentRunStatus.RUNNING, started_at=datetime.now(timezone.utc))
-        )
-        await db.commit()
-
+    tool_results = []
     try:
-        tool_results = []
+        # Real gap found live during overnight QA: this "mark RUNNING" write
+        # used to happen BEFORE the try block below even started, so a
+        # cancellation landing in this exact window propagated straight out
+        # of _execute_run uncaught -- skipping the CancelledError handler
+        # entirely and leaving the run's row stuck (typically still PENDING)
+        # with no way to ever resolve it short of the startup orphan-
+        # recovery sweep, which only runs on a restart.
+        async with new_session() as db:
+            await db.execute(
+                update(SecurityAssessmentRun)
+                .where(SecurityAssessmentRun.id == run_id)
+                .values(status=SecurityAssessmentRunStatus.RUNNING, started_at=datetime.now(timezone.utc))
+            )
+            await db.commit()
+
         async with _scan_semaphore:
             for tool_id in tool_ids:
                 tool = get_tool(tool_id)
-                tool_results.append(await tool.run(target, ioc_type, profile_id))
+                result = await tool.run(target, ioc_type, profile_id)
+                tool_results.append(result)
+                # Real gap found live during overnight QA: findings and
+                # ProviderResultRecords used to be persisted only once,
+                # after EVERY tool in tool_ids had finished -- a later
+                # tool's own exception (or the run being cancelled between
+                # tools) discarded every EARLIER tool's already-real,
+                # already-collected findings, since the old code only ever
+                # wrote them from the success path at the very end. Now
+                # each tool's result is durable the moment it's available.
+                async with new_session() as db:
+                    for finding in result.findings:
+                        db.add(
+                            SecurityAssessmentFinding(
+                                run_id=run_id,
+                                tool_id=finding.tool_id,
+                                finding_type=finding.finding_type,
+                                severity=finding.severity,
+                                title=finding.title,
+                                description=finding.description,
+                                target_detail=finding.target_detail,
+                                cve_ids=finding.cve_ids,
+                                evidence=finding.evidence,
+                            )
+                        )
+                    db.add(
+                        ProviderResultRecord(
+                            lookup_id=lookup_id,
+                            provider_id=result.provider_result.provider_id,
+                            provider_name=result.provider_result.provider_name,
+                            category=result.provider_result.category.value,
+                            status=result.provider_result.status.value,
+                            data=result.provider_result.data,
+                            source_url=result.provider_result.source_url,
+                            error_message=result.provider_result.error_message,
+                            latency_ms=result.provider_result.latency_ms,
+                        )
+                    )
+                    await db.commit()
+
+        # Real gap found live during overnight QA: this finalization step
+        # (flip the run to COMPLETED) used to live entirely OUTSIDE this
+        # try/except, so an exception or cancellation happening during this
+        # exact write propagated straight out of _execute_run uncaught --
+        # the findings above were already durable by then, but the run's
+        # own status was left stuck at RUNNING forever with no audit trail
+        # explaining why, since nothing here was ever caught to write one.
+        async with new_session() as db:
+            # The status/completed_at write is guarded (unlike the finding/
+            # provider-result inserts above, which are always real scan
+            # data and stay valid regardless): without this, completion
+            # could clobber a status another writer already finalized (e.g.
+            # cancel_run()'s direct-DB-write path, or the startup orphan-
+            # recovery sweep) -- confirmed live via a genuine race, where a
+            # run marked FAILED out-of-band was overwritten back to
+            # COMPLETED with the stale FAILED error_message left behind.
+            update_result = await db.execute(
+                update(SecurityAssessmentRun)
+                .where(SecurityAssessmentRun.id == run_id)
+                .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
+                .values(status=SecurityAssessmentRunStatus.COMPLETED, completed_at=datetime.now(timezone.utc))
+            )
+            await db.commit()
+        if not update_result.rowcount:
+            logger.warning(
+                "Security assessment run %s finished but its row was already in a terminal state -- "
+                "findings were still persisted, but this run's own status was left untouched.",
+                run_id,
+            )
+
+        finding_count = sum(len(r.findings) for r in tool_results)
+        # Previously the ONLY trace of a successful run (including a real
+        # nmap scan) was this audit row in Postgres -- `docker logs` showed
+        # the initial POST /run request and then nothing, with no way to
+        # tell from the log stream alone whether the run ever finished,
+        # succeeded, or what it found.
+        logger.info(
+            "Security assessment run %s completed: %d finding(s) across %d tool(s) against %r",
+            run_id, finding_count, len(tool_ids), target,
+        )
+        await record_audit(
+            "security_assessment.run_completed",
+            f"Security assessment run against '{target}' completed: {finding_count} finding(s) across {len(tool_ids)} tool(s).",
+            actor_user_id,
+            actor_email,
+        )
     except asyncio.CancelledError:
         # asyncio.CancelledError has inherited from BaseException (not
         # Exception) since Python 3.8, specifically so a generic `except
@@ -450,77 +559,6 @@ async def _execute_run(
                 actor_email,
             )
         return
-
-    async with new_session() as db:
-        for result in tool_results:
-            for finding in result.findings:
-                db.add(
-                    SecurityAssessmentFinding(
-                        run_id=run_id,
-                        tool_id=finding.tool_id,
-                        finding_type=finding.finding_type,
-                        severity=finding.severity,
-                        title=finding.title,
-                        description=finding.description,
-                        target_detail=finding.target_detail,
-                        cve_ids=finding.cve_ids,
-                        evidence=finding.evidence,
-                    )
-                )
-            db.add(
-                ProviderResultRecord(
-                    lookup_id=lookup_id,
-                    provider_id=result.provider_result.provider_id,
-                    provider_name=result.provider_result.provider_name,
-                    category=result.provider_result.category.value,
-                    status=result.provider_result.status.value,
-                    data=result.provider_result.data,
-                    source_url=result.provider_result.source_url,
-                    error_message=result.provider_result.error_message,
-                    latency_ms=result.provider_result.latency_ms,
-                )
-            )
-        # Findings/ProviderResultRecords above are always persisted regardless
-        # of this guard -- they're real scan data and stay valid even if the
-        # run's own status was already finalized by something else. The
-        # status/completed_at write itself IS guarded: without this,
-        # completion can silently clobber a status another writer already
-        # set (e.g. cancel_run()'s direct-DB-write path, or the startup
-        # orphan-recovery sweep) -- confirmed live via a genuine race, where
-        # a run that had been marked FAILED out-of-band was overwritten back
-        # to COMPLETED with the stale FAILED error_message left behind,
-        # producing a self-contradictory row. Same pattern cancel_run()'s
-        # own direct-write branch already uses.
-        update_result = await db.execute(
-            update(SecurityAssessmentRun)
-            .where(SecurityAssessmentRun.id == run_id)
-            .where(SecurityAssessmentRun.status.in_([SecurityAssessmentRunStatus.PENDING, SecurityAssessmentRunStatus.RUNNING]))
-            .values(status=SecurityAssessmentRunStatus.COMPLETED, completed_at=datetime.now(timezone.utc))
-        )
-        await db.commit()
-    if not update_result.rowcount:
-        logger.warning(
-            "Security assessment run %s finished but its row was already in a terminal state -- "
-            "findings were still persisted, but this run's own status was left untouched.",
-            run_id,
-        )
-
-    finding_count = sum(len(r.findings) for r in tool_results)
-    # Previously the ONLY trace of a successful run (including a real nmap
-    # scan) was this audit row in Postgres -- `docker logs` showed the
-    # initial POST /run request and then nothing, with no way to tell from
-    # the log stream alone whether the run ever finished, succeeded, or what
-    # it found.
-    logger.info(
-        "Security assessment run %s completed: %d finding(s) across %d tool(s) against %r",
-        run_id, finding_count, len(tool_ids), target,
-    )
-    await record_audit(
-        "security_assessment.run_completed",
-        f"Security assessment run against '{target}' completed: {finding_count} finding(s) across {len(tool_ids)} tool(s).",
-        actor_user_id,
-        actor_email,
-    )
 
     try:
         await _refresh_lookup_assessment(lookup_id, target, [r.provider_result for r in tool_results], actor_user_id)

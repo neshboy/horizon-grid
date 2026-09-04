@@ -177,3 +177,47 @@ async def test_http_headers_reports_verbose_server_header():
     verbose = [f for f in result.findings if f.finding_type == "verbose_server_header"]
     assert len(verbose) == 1
     assert verbose[0].severity == "info"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_headers_refuses_to_follow_a_redirect_to_a_private_address():
+    """Real SSRF-via-redirect gap found live during overnight QA: this
+    tool's httpx client used follow_redirects=True and re-validated
+    nothing, so a target that redirected to an internal/private address
+    (or a cloud metadata endpoint) would be fetched for real. Only the
+    FIRST hop is mocked here on purpose: if a regression makes the tool
+    actually follow the malicious redirect, respx has no route registered
+    for it and this test fails loudly instead of silently succeeding."""
+    respx.get("https://example.test/").mock(
+        return_value=httpx.Response(302, headers={"location": "http://169.254.169.254/latest/meta-data/"})
+    )
+    result = await http_headers_tool.run("example.test", IOCType.DOMAIN, "standard")
+    assert result.provider_result.status == ProviderStatus.ERROR
+    assert "refusing to follow" in (result.provider_result.error_message or "").lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_headers_follows_a_redirect_to_a_globally_routable_address(monkeypatch):
+    """The fix must not break the ordinary, legitimate case -- a redirect to
+    a real, globally-routable host is still followed and inspected. The
+    redirect-validation step does a real DNS lookup (see
+    _get_with_validated_redirects), which respx's transport-level mocking
+    doesn't intercept -- ".test" is an RFC 2606 reserved TLD that never
+    actually resolves, so the lookup itself is faked here the same way
+    test_url_safety_investigation_target.py's own DNS-dependent tests do."""
+    import socket
+
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda host, port: [(None, None, None, None, ("93.184.216.34", 0))]
+    )
+    respx.get("https://example.test/").mock(
+        return_value=httpx.Response(302, headers={"location": "https://example.test/final"})
+    )
+    respx.get("https://example.test/final").mock(
+        return_value=httpx.Response(200, headers={"Strict-Transport-Security": "max-age=63072000"})
+    )
+    result = await http_headers_tool.run("example.test", IOCType.DOMAIN, "standard")
+    assert result.provider_result.status == ProviderStatus.OK
+    assert result.provider_result.data["checked_url"] == "https://example.test/final"

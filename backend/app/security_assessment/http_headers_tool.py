@@ -15,13 +15,18 @@ Severity rules (deterministic):
 - A verbose `Server`/`X-Powered-By` header revealing a specific version ->
   `info` (a minor information-disclosure note, not a vulnerability by itself)
 """
+import asyncio
+
 import httpx
 
+from app.core.url_safety import assert_globally_routable_target
 from app.ioc.types import IOCType
 from app.security_assessment.base import Finding, ScanProfile, SecurityAssessmentTool, ToolRunResult
 from app.providers.base import ProviderStatus
 
 _TIMEOUT_SECONDS = 15
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUS_CODES = (301, 302, 303, 307, 308)
 
 PROFILES: dict[str, ScanProfile] = {
     "standard": ScanProfile(
@@ -45,20 +50,29 @@ class HTTPHeadersTool(SecurityAssessmentTool):
         url = target if target.startswith(("http://", "https://")) else f"https://{target}"
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=_TIMEOUT_SECONDS) as client:
-                response = await client.get(url)
+            response, url = await self._get_with_validated_redirects(url)
         except httpx.ConnectError:
             if url.startswith("https://"):
                 try:
-                    async with httpx.AsyncClient(follow_redirects=True, timeout=_TIMEOUT_SECONDS) as client:
-                        response = await client.get(f"http://{target}")
-                        url = f"http://{target}"
+                    response, url = await self._get_with_validated_redirects(f"http://{target}")
                 except httpx.HTTPError as exc:
                     return self._error(target, ioc_type, ProviderStatus.ERROR, f"Could not reach {target} over HTTP or HTTPS: {exc}")
+                except ValueError as exc:
+                    return self._error(target, ioc_type, ProviderStatus.ERROR, f"Refusing to follow a redirect for {target}: {exc}")
             else:
                 return self._error(target, ioc_type, ProviderStatus.ERROR, f"Could not reach {target}.")
         except httpx.TimeoutException:
             return self._error(target, ioc_type, ProviderStatus.TIMEOUT, f"Request to {url} timed out.")
+        except ValueError as exc:
+            # Real SSRF-via-redirect gap found live during overnight QA:
+            # follow_redirects=True used to follow a redirect chain with
+            # zero re-validation of each hop against the globally-routable-
+            # target check the caller already ran against the ORIGINAL
+            # target -- a target that redirected to e.g. a cloud metadata
+            # address or another docker-compose service's real internal IP
+            # would be fetched for real. Every hop is now checked the same
+            # way the original target was (see _get_with_validated_redirects).
+            return self._error(target, ioc_type, ProviderStatus.ERROR, f"Refusing to follow a redirect for {target}: {exc}")
         except httpx.HTTPError as exc:
             return self._error(target, ioc_type, ProviderStatus.ERROR, f"Request to {url} failed: {exc}")
 
@@ -97,6 +111,31 @@ class HTTPHeadersTool(SecurityAssessmentTool):
             data={"http_status": response.status_code, "checked_url": url, "headers_present": sorted(headers.keys())},
         )
         return ToolRunResult(provider_result=provider_result, findings=findings)
+
+    async def _get_with_validated_redirects(self, url: str) -> tuple[httpx.Response, str]:
+        """Manually follows redirects -- httpx's own follow_redirects=True
+        does this with zero re-validation of each hop. Real SSRF-via-
+        redirect gap found live during overnight QA: a target that
+        redirected to a cloud metadata address or another docker-compose
+        service's real internal IP would be fetched for real, completely
+        bypassing the globally-routable-target check the caller already ran
+        against the ORIGINAL target before this tool was ever invoked. Every
+        hop gets that exact same check now, not just the first one."""
+        async with httpx.AsyncClient(follow_redirects=False, timeout=_TIMEOUT_SECONDS) as client:
+            current_url = url
+            for _ in range(_MAX_REDIRECTS + 1):
+                response = await client.get(current_url)
+                if response.status_code not in _REDIRECT_STATUS_CODES or "location" not in response.headers:
+                    return response, current_url
+                next_url = str(httpx.URL(current_url).join(response.headers["location"]))
+                # assert_globally_routable_target does a real (blocking) DNS
+                # lookup -- off-loaded to a thread so this new redirect-
+                # validation call doesn't introduce the same event-loop-
+                # blocking class of bug just fixed in
+                # app/pentest/orchestrator.py's _is_in_scope.
+                await asyncio.to_thread(assert_globally_routable_target, IOCType.URL.value, next_url)
+                current_url = next_url
+        raise httpx.TooManyRedirects(f"Exceeded {_MAX_REDIRECTS} redirects while fetching {url}")
 
     def _finding(self, finding_type: str, severity: str, title: str, description: str, evidence_extra: dict | None = None) -> Finding:
         return Finding(

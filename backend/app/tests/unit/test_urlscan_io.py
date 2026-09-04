@@ -11,6 +11,9 @@ other connector (PhishTank's documented over-limit behavior). This
 connector checks status codes explicitly, before any `raise_for_status()`
 call, so that generic mapping never applies here.
 """
+import asyncio
+import time
+
 import httpx
 import pytest
 import respx
@@ -255,3 +258,84 @@ async def test_absent_malicious_signal_maps_to_unknown_not_fabricated_clean(prov
 
     assert result.status == ProviderStatus.OK
     assert result.data["verdict"] == "unknown"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_retryable_connect_error_on_submit_propagates_instead_of_being_swallowed(provider, client):
+    """Real gap found live during overnight QA: httpx.ConnectError/
+    ReadTimeout/PoolTimeout (app/providers/base.py's RETRYABLE_EXCEPTIONS)
+    all inherit from httpx.HTTPError, which this connector's own broad
+    `except httpx.HTTPError` used to catch and normalize into an ordinary
+    ProviderResult -- so the orchestrator's tenacity retry loop (which only
+    fires on an exception it actually sees propagate out of
+    BaseProvider.run()) never got a chance to retry a transient blip for
+    this provider, unlike every other connector."""
+    request = httpx.Request("POST", "https://urlscan.io/api/v1/scan/")
+    respx.post("https://urlscan.io/api/v1/scan/").mock(side_effect=httpx.ConnectError("connection refused", request=request))
+
+    with pytest.raises(httpx.ConnectError):
+        await provider.fetch("http://evil.test/", IOCType.URL, client)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_retryable_read_timeout_on_poll_propagates_instead_of_being_swallowed(provider, client):
+    respx.post("https://urlscan.io/api/v1/scan/").mock(
+        return_value=httpx.Response(200, json={"uuid": "22222222-2222-2222-2222-222222222222"})
+    )
+    request = httpx.Request("GET", "https://urlscan.io/api/v1/result/22222222-2222-2222-2222-222222222222/")
+    respx.get("https://urlscan.io/api/v1/result/22222222-2222-2222-2222-222222222222/").mock(
+        side_effect=httpx.ReadTimeout("read timed out", request=request)
+    )
+
+    with pytest.raises(httpx.ReadTimeout):
+        await provider.fetch("http://evil.test/", IOCType.URL, client)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_poll_deadline_is_computed_before_submission_not_fresh_inside_poll(provider, client, monkeypatch):
+    """Real gap found live during overnight QA: _TIMEOUT_SECONDS is
+    documented as a combined "submit + poll-until-ready" wall-clock budget,
+    but the deadline used to be computed fresh INSIDE _poll_for_result --
+    called only after submission had already completed -- so the real
+    behavior was "however long submission takes, PLUS a full fresh
+    _TIMEOUT_SECONDS for polling," not the documented combined cap.
+    Asserts _poll_for_result now receives a deadline anchored to BEFORE
+    submission started, not one freshly computed at poll time. (Does not
+    touch time.monotonic() itself -- asyncio's own event-loop scheduling
+    depends on real wall-clock time, so freezing it would hang the test.)"""
+    respx.post("https://urlscan.io/api/v1/scan/").mock(
+        return_value=httpx.Response(200, json={"uuid": "44444444-4444-4444-4444-444444444444"})
+    )
+
+    submit_delay = 0.3  # a real, measurable delay -- big enough to distinguish "before" from "after" submission
+    real_post = client.post
+
+    async def delayed_post(*args, **kwargs):
+        await asyncio.sleep(submit_delay)
+        return await real_post(*args, **kwargs)
+
+    monkeypatch.setattr(client, "post", delayed_post)
+
+    received_deadline = {}
+
+    async def capturing_poll(self, ioc_value, ioc_type, uuid, headers, client, deadline):
+        received_deadline["value"] = deadline
+        return self._error(ioc_value, ioc_type, ProviderStatus.TIMEOUT, "stubbed for this test")
+
+    monkeypatch.setattr(UrlscanProvider, "_poll_for_result", capturing_poll)
+
+    before_submit = time.monotonic()
+    result = await provider.fetch("http://evil.test/", IOCType.URL, client)
+
+    assert result.status == ProviderStatus.TIMEOUT
+    # The bug this guards against: the OLD code computed the deadline
+    # fresh INSIDE _poll_for_result, i.e. AFTER the (here, artificially
+    # delayed) submission completed -- that would put the deadline at
+    # roughly before_submit + submit_delay + _TIMEOUT_SECONDS. The FIXED
+    # code anchors it at fetch()'s own start, before submission, so it
+    # must land close to before_submit + _TIMEOUT_SECONDS instead --
+    # clearly earlier than the buggy value by close to submit_delay.
+    assert received_deadline["value"] < before_submit + urlscan_io._TIMEOUT_SECONDS + (submit_delay / 2)

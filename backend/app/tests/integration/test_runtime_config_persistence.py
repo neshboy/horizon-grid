@@ -27,15 +27,23 @@ real in-network `postgres` host with no override needed.
 import asyncio
 import uuid
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.auth.security import create_access_token
+from app.core.config import get_settings
 from app.core.db import new_session
 from app.core import runtime_config as runtime_config_module
-from app.core.runtime_config import get_ai_config, upsert_ai_provider, upsert_ioc_provider
+from app.core.runtime_config import AI_BACKENDS, get_ai_config, upsert_ai_provider, upsert_ioc_provider
+from app.core.users import create_user
+from app.main import app
 from app.models.runtime_config import ProviderKind, ProviderRuntimeConfig
+from app.models.user import Role
+
+API = get_settings().api_v1_prefix
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -269,3 +277,69 @@ async def test_upsert_ai_provider_rejects_a_link_local_ollama_base_url():
             await upsert_ai_provider("ollama", before["credentials"], before["model_id"])
         else:
             await _cleanup("ollama", ProviderKind.AI)
+
+
+@pytest.mark.asyncio
+async def test_list_ai_providers_route_includes_every_known_backend_even_with_no_db_rows():
+    """Real gap found live during overnight QA: GET /runtime/ai-providers
+    used to be a bare passthrough to the DB query -- unlike GET
+    /runtime/ioc-providers, which merges the DB against the live provider
+    registry so a provider added to the code after this install's one-time
+    seed ran is still visible. A new AI backend added to AI_BACKENDS after
+    an existing install's first boot was permanently unreachable from this
+    route (and therefore from the Admin UI panel that renders from it).
+    Deletes every AI row first so this reproduces the worst case: an
+    upgraded install where the DB has learned about NONE of the current
+    AI_BACKENDS yet."""
+    async with new_session() as db:
+        rows = (await db.execute(select(ProviderRuntimeConfig).where(ProviderRuntimeConfig.kind == ProviderKind.AI))).scalars().all()
+        snapshot = [(r.provider_id, r) for r in rows]
+        for _, r in snapshot:
+            await db.delete(r)
+        await db.commit()
+
+    email = f"ai-provider-list-test-{uuid.uuid4().hex[:10]}@qa.test"
+    try:
+        created = await create_user(email, "pw-1", "AI Provider List Test", Role.ADMIN, None, "actor@qa.test")
+        token = create_access_token(email, Role.ADMIN.value)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.get(
+                f"{API}/runtime/ai-providers",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert resp.status_code == 200
+        returned_ids = {row["provider_id"] for row in resp.json()}
+        assert returned_ids == set(AI_BACKENDS), (
+            f"missing from the merged list: {set(AI_BACKENDS) - returned_ids}"
+        )
+        # Every synthesized placeholder must be a sane, non-crashing default.
+        for row in resp.json():
+            assert row["configured"] is False
+            assert row["enabled"] is True
+
+        from app.core.db import new_session as _new_session
+        from app.models.user import User
+
+        async with _new_session() as db:
+            u = await db.get(User, created["id"])
+            if u is not None:
+                await db.delete(u)
+                await db.commit()
+    finally:
+        # Restore whatever AI provider rows existed before this test ran.
+        async with new_session() as db:
+            for provider_id, row in snapshot:
+                db.add(
+                    ProviderRuntimeConfig(
+                        kind=ProviderKind.AI,
+                        provider_id=row.provider_id,
+                        provider_name=row.provider_name,
+                        enabled=row.enabled,
+                        is_active=row.is_active,
+                        encrypted_credentials=row.encrypted_credentials,
+                        model_id=row.model_id,
+                    )
+                )
+            await db.commit()

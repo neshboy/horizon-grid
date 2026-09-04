@@ -17,7 +17,12 @@ pyasn1==0.6.4
 passlib==1.7.4
 bcrypt==4.0.1
 python-multipart==0.0.31
-boto3==1.35.24
+# Bumped from 1.35.24 (real gap found live during overnight QA): that
+# version predates AWS Bedrock API key / bearer-token auth support
+# (AWS_BEARER_TOKEN_BEDROCK), so app/ai/bedrock_client.py's whole
+# "Bedrock API key" auth mode was silently non-functional -- setting the
+# env var had no effect on that version's credential resolution chain.
+boto3==1.43.88
 opensearch-py==2.7.1
 feedparser==6.0.11
 beautifulsoup4==4.12.3

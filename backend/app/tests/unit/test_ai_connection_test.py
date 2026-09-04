@@ -544,3 +544,54 @@ async def test_bedrock_no_credentials_fails_before_any_request():
     result = await check_ai_connection("bedrock", {}, model="anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert result.ok is False
     assert "Bedrock API key" in result.message or "AWS access key" in result.message
+
+
+@pytest.mark.asyncio
+async def test_bedrock_connection_test_closes_the_client_it_builds():
+    """Real gap found live during overnight QA: the boto3 client (and its
+    underlying connection pool) built for a live connection test was never
+    closed -- every test run leaked one for the life of the process."""
+    import os
+    from unittest.mock import MagicMock, patch
+
+    fake_client = MagicMock()
+    fake_client.converse.return_value = {
+        "output": {"message": {"content": [{"text": "pong"}]}}
+    }
+    os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+    with patch("boto3.client", return_value=fake_client):
+        result = await check_ai_connection(
+            "bedrock", {"bedrock_api_key": "candidate-token", "aws_region": "us-east-1"},
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        )
+    assert result.ok is True
+    fake_client.close.assert_called_once()
+    assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_bedrock_connection_test_does_not_clobber_a_concurrently_configured_real_token():
+    """Real gap found live during overnight QA: this and the real
+    BedrockClaudeClient both mutate the same process-global env var with no
+    coordination -- a connection test's restore-to-None could stomp on a
+    real, concurrently-active token. Simulates "a real token is already
+    live" by pre-setting the env var to something else and confirming the
+    connection test restores exactly that value afterward, not None."""
+    import os
+    from unittest.mock import MagicMock, patch
+
+    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "the-real-live-token"
+    fake_client = MagicMock()
+    fake_client.converse.return_value = {
+        "output": {"message": {"content": [{"text": "pong"}]}}
+    }
+    try:
+        with patch("boto3.client", return_value=fake_client):
+            result = await check_ai_connection(
+                "bedrock", {"bedrock_api_key": "candidate-token", "aws_region": "us-east-1"},
+                model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            )
+        assert result.ok is True
+        assert os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == "the-real-live-token"
+    finally:
+        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)

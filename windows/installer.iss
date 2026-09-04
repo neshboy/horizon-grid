@@ -16,7 +16,7 @@
 ; winget install.)
 
 #define MyAppName "HORIZON GRID"
-#define MyAppVersion "0.3.9"
+#define MyAppVersion "0.3.10"
 #define MyAppPublisher "HORIZON GRID"
 #define MyAppURL "http://localhost:3000"
 #define RepoRoot "..\"
@@ -48,6 +48,17 @@ VersionInfoVersion={#MyAppVersion}
 DefaultDirName={autopf}\{#MyAppFolderName}
 DefaultGroupName={#MyAppFolderName}
 DisableProgramGroupPage=yes
+; Real gap found live during overnight QA: with no DisableDirPage, Inno
+; Setup shows its standard "Select Destination Location" page and lets the
+; user pick ANY install path -- but every downstream PowerShell script
+; (Common.ps1's $script:InstallDir/$script:AppRepoDir, and everything that
+; reads them) is hardcoded to this exact default {#MyAppFolderName} path
+; under Program Files, independent of whatever DefaultDirName resolves to
+; at actual install time (see this file's own comment above on
+; MyAppFolderName for why). A custom destination silently broke the whole
+; install: files land wherever the user picked, every script afterward
+; looks for them at the one hardcoded default location instead.
+DisableDirPage=yes
 ; The wizard itself (Setup-Wizard.ps1) does the real configuration UI --
 ; Inno Setup's own pages just copy files and verify prerequisites, so this
 ; stays as a plain, minimal installer rather than duplicating pages.

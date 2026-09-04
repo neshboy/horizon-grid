@@ -37,6 +37,7 @@ Assert-Elevated
 
 if (-not (Test-Path $script:EnvFilePath)) {
     Write-Host "No configuration found -- nothing to restore into. Run setup first." -ForegroundColor Yellow
+    if (-not $Force) { Pause }
     exit 1
 }
 
@@ -46,6 +47,7 @@ if (-not $BackupFile) {
     if (-not $latest) {
         Write-Host "No backup file specified and none found in $script:BackupsDir." -ForegroundColor Red
         Write-Host "Usage: Restore-Database.ps1 -BackupFile <path\to\postgres-YYYYMMDD-HHMMSS.sql> [-Force]"
+        if (-not $Force) { Pause }
         exit 1
     }
     $BackupFile = $latest.FullName
@@ -53,6 +55,7 @@ if (-not $BackupFile) {
 }
 if (-not (Test-Path $BackupFile)) {
     Write-Host "Backup file not found: $BackupFile" -ForegroundColor Red
+    if (-not $Force) { Pause }
     exit 1
 }
 
@@ -63,6 +66,7 @@ if (-not $running) {
     $exitCode = Invoke-DockerCompose "up" "-d" "postgres"
     if ($exitCode -ne 0) {
         Write-Host "Could not start the Postgres container -- aborting restore." -ForegroundColor Red
+        if (-not $Force) { Pause }
         exit 1
     }
     for ($i = 0; $i -lt 20; $i++) {
@@ -72,6 +76,7 @@ if (-not $running) {
     }
     if (-not $running) {
         Write-Host "Postgres container did not come up -- aborting restore." -ForegroundColor Red
+        if (-not $Force) { Pause }
         exit 1
     }
 }
@@ -91,6 +96,7 @@ if (-not $Force) {
     $confirm = Read-Host "Type RESTORE (in capitals) to continue, or anything else to cancel"
     if ($confirm -ne "RESTORE") {
         Write-Host "Cancelled -- no changes made." -ForegroundColor Cyan
+        Pause
         exit 0
     }
 }
@@ -105,11 +111,35 @@ Write-Host "Terminating any other connections to '$pgDb'..." -ForegroundColor Cy
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$pgDb' AND pid <> pg_backend_pid();" 2>$null | Out-Null
 
 Write-Host "Dropping and recreating '$pgDb'..." -ForegroundColor Cyan
-& docker.exe exec $containerName psql -U $pgUser -d postgres -c "DROP DATABASE IF EXISTS $pgDb;" 2>$null | Out-Null
-& docker.exe exec $containerName psql -U $pgUser -d postgres -c "CREATE DATABASE $pgDb OWNER $pgUser;" 2>$null | Out-Null
+$dropOutput = & docker.exe exec $containerName psql -U $pgUser -d postgres -c "DROP DATABASE IF EXISTS $pgDb;" 2>&1
+$dropExitCode = $LASTEXITCODE
+$createOutput = & docker.exe exec $containerName psql -U $pgUser -d postgres -c "CREATE DATABASE $pgDb OWNER $pgUser;" 2>&1
+$createExitCode = $LASTEXITCODE
+# Real gap found live during overnight QA: neither of these two commands'
+# exit codes was ever checked -- a DROP that fails (e.g. "database is being
+# accessed by other users", a real, common race if the connection-
+# termination step above didn't win in time) or a CREATE that fails left
+# the script barrelling ahead into the dump-replay step regardless, against
+# whatever half-broken DB state resulted.
+if ($dropExitCode -ne 0 -or $createExitCode -ne 0) {
+    Write-SetupLog "Database restore FAILED: could not drop/recreate '$pgDb' -- drop output: $dropOutput | create output: $createOutput" "ERROR"
+    Write-Host "Failed to drop/recreate '$pgDb':" -ForegroundColor Red
+    $dropOutput, $createOutput | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    Write-Host "Restarting backend/celery anyway so the platform isn't left fully down..." -ForegroundColor Yellow
+    Invoke-DockerCompose "start" "backend" "celery_worker" "celery_beat" | Out-Null
+    if (-not $Force) { Pause }
+    exit 1
+}
 
 Write-Host "Restoring $BackupFile ..." -ForegroundColor Cyan
-$restoreOutput = Get-Content $BackupFile -Raw | & docker.exe exec -i $containerName psql -U $pgUser -d $pgDb 2>&1
+# Real gap found live during overnight QA: without -v ON_ERROR_STOP=1,
+# psql's default behavior is to log an individual statement error to
+# stderr and KEEP GOING, then still exit 0 as long as no connection-level
+# FATAL error occurred -- so a dump replay with some failing statements
+# (a missing extension, one table's permission error, a naming collision)
+# could silently leave the restored database missing data/schema while
+# this script's own exit-code check saw nothing wrong and reported success.
+$restoreOutput = Get-Content $BackupFile -Raw | & docker.exe exec -i $containerName psql -v ON_ERROR_STOP=1 -U $pgUser -d $pgDb 2>&1
 $restoreExitCode = $LASTEXITCODE
 
 if ($restoreExitCode -ne 0) {
@@ -119,6 +149,7 @@ if ($restoreExitCode -ne 0) {
     Write-Host "The database may be in a partial state -- see $script:SetupLogPath and consider restoring again." -ForegroundColor Red
     Write-Host "Restarting backend/celery anyway so the platform isn't left fully down..." -ForegroundColor Yellow
     Invoke-DockerCompose "start" "backend" "celery_worker" "celery_beat" | Out-Null
+    if (-not $Force) { Pause }
     exit 1
 }
 
@@ -138,4 +169,4 @@ if ($healthy) {
 } else {
     Write-Host "Restore complete, but the backend did not report healthy within 90s -- check 'horizon-grid status' / Start Menu -> Diagnostics." -ForegroundColor Yellow
 }
-Pause
+if (-not $Force) { Pause }

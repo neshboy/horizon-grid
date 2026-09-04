@@ -218,3 +218,52 @@ def test_int_value_in_relationship_field_is_treated_as_single_item() -> None:
     assert "asn:15169" in target_ids
     asn_edges = [e for e in result.edges if e.relationship == "belongs_to_asn"]
     assert len(asn_edges) == 1
+
+
+def test_crtsh_dict_shaped_certificates_are_identified_by_serial_number_not_stringified() -> None:
+    """Real bug found live during overnight QA: app/providers/crtsh.py's
+    "certificates" field is a list of dicts ({"issuer_name", "common_name",
+    "serial_number", ...}), but correlate() used to assume every
+    relationship-extractor list element was already a scalar and did
+    str(raw_value) unconditionally -- producing a garbage TLS_CERTIFICATE
+    node whose value was Python's dict repr string."""
+    result_obj = make_result(
+        "crtsh",
+        ProviderCategory.THREAT_INTEL,
+        {
+            "certificates": [
+                {"issuer_name": "Let's Encrypt", "common_name": "example.com", "serial_number": "03A1B2C3", "id": 12345},
+            ]
+        },
+    )
+    result = correlate(SEED_VALUE, SEED_TYPE, [result_obj])
+    target_ids = {n.node_id for n in result.nodes}
+    assert "tls_certificate:03a1b2c3" in target_ids
+    assert not any("{" in node_id for node_id in target_ids), "no node value should ever be a stringified dict"
+    cert_edges = [e for e in result.edges if e.relationship == "serves_certificate"]
+    assert len(cert_edges) == 1
+
+
+def test_crtsh_certificate_dict_with_no_serial_number_falls_back_to_common_name() -> None:
+    result_obj = make_result(
+        "crtsh",
+        ProviderCategory.THREAT_INTEL,
+        {"certificates": [{"issuer_name": "Let's Encrypt", "common_name": "example.com", "serial_number": None}]},
+    )
+    result = correlate(SEED_VALUE, SEED_TYPE, [result_obj])
+    target_ids = {n.node_id for n in result.nodes}
+    assert "tls_certificate:example.com" in target_ids
+
+
+def test_dict_shaped_relationship_value_with_no_identifying_key_is_skipped_not_fabricated() -> None:
+    """Generic defensive case: an unrecognized dict shape in ANY
+    relationship-extractor field must be skipped, never turned into a
+    garbage node by stringifying the whole dict."""
+    result_obj = make_result(
+        "some-future-provider",
+        ProviderCategory.THREAT_INTEL,
+        {"related_urls": [{"unexpected": "shape", "no_recognizable_key": True}]},
+    )
+    result = correlate(SEED_VALUE, SEED_TYPE, [result_obj])
+    assert not any(e.relationship == "hosts" for e in result.edges)
+    assert not any("{" in n.node_id for n in result.nodes)

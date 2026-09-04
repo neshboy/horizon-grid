@@ -26,6 +26,7 @@ thing that was silently broken.
 import asyncio
 import os
 import socket
+import uuid
 
 import httpx
 import pytest
@@ -153,8 +154,19 @@ async def test_user(db_session):
     from app.auth.security import hash_password
     from app.models.user import Role, User
 
+    # Real gap found live during overnight QA: this used one hardcoded
+    # email shared by every test in this file. If any single test's
+    # fixture teardown below (db_session.delete(user)) ever failed --
+    # e.g. an un-cascaded FK from some OTHER row a failing test created
+    # that still references this user -- the row was never actually
+    # deleted, and EVERY subsequent test in this file hit a unique-
+    # constraint violation trying to INSERT its own "test_user" with the
+    # same email, turning one real failure into many unrelated-looking
+    # ones. A unique email per test invocation (the same pattern already
+    # established in test_pentest_api.py's _unique_email) means one test's
+    # cleanup failure can never block any other test's own fixture.
     user = User(
-        email="stream-persistence-test@example.test",
+        email=f"stream-persistence-test-{uuid.uuid4().hex[:10]}@example.test",
         hashed_password=hash_password("irrelevant"),
         full_name="Stream Persistence Test",
         role=Role.ANALYST,
@@ -163,6 +175,40 @@ async def test_user(db_session):
     await db_session.commit()
     await db_session.refresh(user)
     yield user
+    # Real gap found live during overnight QA, reproduced live: every test
+    # in this file that uses this fixture creates a real IOCLookup with
+    # requested_by=user.id, and ioc_lookups_requested_by_fkey has no ON
+    # DELETE CASCADE (correctly so for real production data -- a user's
+    # past investigations should survive their account being deleted, not
+    # vanish with it) -- so deleting the user here raised a genuine
+    # ForeignKeyViolationError, turning this fixture's own teardown into a
+    # test ERROR. Test-only cleanup: delete this test's own lookups first.
+    from app.models.lookup import FinalAssessmentRecord, IOCLookup
+    from sqlalchemy import delete as sa_delete
+
+    # A bulk DELETE statement (sqlalchemy.delete(...)) executes at the raw
+    # SQL level and does NOT trigger IOCLookup's own ORM-level
+    # cascade="all, delete-orphan" relationships (ai_summaries,
+    # provider_results, correlation_edges, evidence_items,
+    # security_assessment_runs) -- deleting the loaded ORM objects one by
+    # one via session.delete() lets those cascades actually run, exactly
+    # like every real deletion of a lookup elsewhere in this app already
+    # relies on. FinalAssessmentRecord is a genuine exception: IOCLookup has
+    # no relationship (cascading or otherwise) to it at all -- only the
+    # reverse FinalAssessmentRecord.lookup exists -- so it's never reachable
+    # via cascade regardless and must be deleted explicitly.
+    lookup_ids = (
+        await db_session.execute(select(IOCLookup.id).where(IOCLookup.requested_by == user.id))
+    ).scalars().all()
+    if lookup_ids:
+        await db_session.execute(sa_delete(FinalAssessmentRecord).where(FinalAssessmentRecord.lookup_id.in_(lookup_ids)))
+        await db_session.commit()
+    lookups = (
+        await db_session.execute(select(IOCLookup).where(IOCLookup.requested_by == user.id))
+    ).scalars().all()
+    for lookup in lookups:
+        await db_session.delete(lookup)
+    await db_session.commit()
     await db_session.delete(user)
     await db_session.commit()
 
@@ -237,10 +283,54 @@ async def fake_provider_and_ai(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_completed_lookup_persists_completed_status_and_verdict(
-    fake_provider_and_ai, auth_headers, db_session
+    fake_provider_and_ai, auth_headers, db_session, monkeypatch
 ):
     from app.main import app
     from app.models.lookup import IOCLookup
+
+    # Real gap found live during overnight QA, reproduced live: fake_provider_
+    # and_ai's stub AI hardcodes final_verdict="malicious" with malicious_
+    # probability=90, but generate_final_assessment() swaps in the REAL
+    # deterministic score before persisting -- and a SINGLE, uncorroborated
+    # provider vote (which is all that shared fixture yields) deterministically
+    # caps at 26.0 (app/scoring/engine.py's _corroboration_factor(n=1)=0.40),
+    # below the 30.0 floor FinalAssessment._verdict_must_agree_with_risk
+    # requires for a "malicious" verdict -- so this test's own scenario could
+    # never legitimately produce what it asserted, and silently fell through
+    # to the ai_outcome="failed" fallback (final_verdict="unknown") instead.
+    # This exact mismatch (and the precise 26.0 figure) was already
+    # independently diagnosed by test_completed_lookup_persists_ai_outcome_
+    # success_on_final_assessment_record's own comment below, which sidesteps
+    # it by not reusing this fixture at all -- this test instead adds a
+    # second, independently-corroborating provider (corroboration_factor(2)
+    # =0.55 -> 35.75, comfortably clearing the 30.0 floor) so the ORIGINAL
+    # scenario this test is meant to verify -- a genuinely, deterministically
+    # malicious investigation persists its real verdict -- is actually
+    # realizable, rather than weakening what's asserted.
+    from app.ioc.types import IOCType
+    from app.providers.base import ProviderCategory, ProviderResult, ProviderStatus
+
+    async def fake_run_all_providers_corroborated(ioc_value, ioc_type, candidate_providers=None):
+        yield ProviderResult(
+            provider_id="fake_stream_test",
+            provider_name="Fake Stream Test Provider",
+            category=ProviderCategory.THREAT_INTEL,
+            status=ProviderStatus.OK,
+            ioc_value=ioc_value,
+            ioc_type=ioc_type,
+            data={"verdict": "malicious", "detection_ratio": "10/70"},
+        )
+        yield ProviderResult(
+            provider_id="fake_stream_test_2",
+            provider_name="Fake Stream Test Provider 2",
+            category=ProviderCategory.THREAT_INTEL,
+            status=ProviderStatus.OK,
+            ioc_value=ioc_value,
+            ioc_type=ioc_type,
+            data={"verdict": "malicious"},
+        )
+
+    monkeypatch.setattr("app.api.routes.lookup.run_all_providers", fake_run_all_providers_corroborated)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -269,7 +359,11 @@ async def test_completed_lookup_persists_completed_status_and_verdict(
     assert lookup.status.value == "completed"
     assert lookup.final_verdict is not None
     assert lookup.final_verdict.value == "malicious"
-    assert lookup.risk_score == 85
+    # Confirmed directly (matching the sibling comment above): the real,
+    # deterministic score for 2 corroborating "malicious" votes with no
+    # correlation edges -- NOT the stub AI's own invented 85 -- is 35.8
+    # (65 * _corroboration_factor(2)=0.55 * vote=1.0, rounded).
+    assert lookup.risk_score == 35.8
 
     await _delete_lookup_and_dependents(db_session, lookup)
 

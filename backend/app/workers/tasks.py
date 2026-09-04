@@ -21,6 +21,7 @@ import logging
 import httpx
 from sqlalchemy import select
 
+import app.core.db as db_module
 from app.core.cache import set_cached_result
 from app.core.config import get_settings
 from app.core.db import new_session
@@ -85,7 +86,10 @@ async def _recent_crawlable_iocs() -> list[tuple[str, str]]:
     return deduped
 
 
-async def _crawl_one(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClient) -> None:
+async def _crawl_one(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClient) -> bool:
+    """Returns whether this IOC's cache entry was actually refreshed -- the
+    caller uses this to report a real success count, not just an attempt
+    count (see _run_osint_crawl_async's own comment)."""
     settings = get_settings()
     ioc_type = IOCType(ioc_type_str)
     result = await internet_intelligence_provider.run(ioc_value, ioc_type, client)
@@ -97,23 +101,49 @@ async def _crawl_one(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClien
             result.to_dict(),
             settings.provider_cache_ttl_seconds,
         )
+        return True
+    return False
 
 
 async def _run_osint_crawl_async() -> int:
-    targets = await _recent_crawlable_iocs()
-    if not targets:
-        logger.info("Scheduled OSINT crawl: no recently-investigated crawlable IOCs, nothing to do")
-        return 0
+    # Real gap found live during overnight QA: run_osint_crawl() (below)
+    # calls asyncio.run() fresh every hourly Celery Beat tick -- each tick
+    # gets a BRAND NEW event loop, but app/core/db.py's engine/connection
+    # pool is a module-level singleton that persists for the worker
+    # process's whole lifetime, bound to whichever loop first actually used
+    # it. Every tick after the first would try to reuse a pool whose
+    # connections belong to an already-closed loop. Disposing it in this
+    # finally, while its OWN loop is still open (on every exit path -- an
+    # early return, a normal return, or an exception), closes every pooled
+    # connection cleanly -- the next tick's fresh event loop then creates
+    # brand new connections on first use, exactly as if Postgres was never
+    # touched by a previous, now-dead loop at all.
+    try:
+        targets = await _recent_crawlable_iocs()
+        if not targets:
+            logger.info("Scheduled OSINT crawl: no recently-investigated crawlable IOCs, nothing to do")
+            return 0
 
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        for ioc_value, ioc_type_str in targets:
-            try:
-                await _crawl_one(ioc_value, ioc_type_str, client)
-            except Exception:  # noqa: BLE001 -- one bad target must not abort the whole run
-                logger.warning("Scheduled OSINT crawl failed for %r (%s)", ioc_value, ioc_type_str, exc_info=True)
+        # Real gap found live during overnight QA: this used to report
+        # len(targets) -- the number of IOCs ATTEMPTED, not the number
+        # actually cached. A provider outage or a run of individually-
+        # failing targets would still log/return "refreshed cache for N
+        # IOC(s)", silently overstating how much real work happened.
+        refreshed = 0
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            for ioc_value, ioc_type_str in targets:
+                try:
+                    if await _crawl_one(ioc_value, ioc_type_str, client):
+                        refreshed += 1
+                except Exception:  # noqa: BLE001 -- one bad target must not abort the whole run
+                    logger.warning("Scheduled OSINT crawl failed for %r (%s)", ioc_value, ioc_type_str, exc_info=True)
 
-    logger.info("Scheduled OSINT crawl: refreshed cache for %d IOC(s)", len(targets))
-    return len(targets)
+        logger.info(
+            "Scheduled OSINT crawl: refreshed cache for %d of %d attempted IOC(s)", refreshed, len(targets)
+        )
+        return refreshed
+    finally:
+        await db_module._engine.dispose()
 
 
 @celery_app.task(name="app.workers.tasks.run_osint_crawl")

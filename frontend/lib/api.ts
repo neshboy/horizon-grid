@@ -210,6 +210,17 @@ export interface StreamLookupOptions {
   /** Run THIS investigation with a specific AI backend instead of whichever
    * one is currently active platform-wide. Omit to use the active one. */
   aiBackend?: string;
+  /** Real gap found live during overnight QA: the backend's own
+   * POST /lookup/stream (see backend/app/schemas/lookup.py's
+   * ioc_type_hint field) has always accepted an explicit type hint for
+   * values app/ioc/detector.py's auto-detection can't classify on its own
+   * (a malware family name, a threat actor, a mutex, a bare process/service
+   * name -- anything with no dots/hex pattern/URL scheme to key off of) --
+   * but nothing on the frontend ever sent it, so any such value permanently
+   * 422'd ("Could not determine IOC type; pass ioc_type_hint") with no way
+   * to recover short of calling the API directly. Omit for the default
+   * (auto-detect).*/
+  iocTypeHint?: string;
 }
 
 export async function streamLookup(
@@ -226,6 +237,7 @@ export async function streamLookup(
         value,
         provider_ids: options?.providerIds,
         ai_backend: options?.aiBackend,
+        ioc_type_hint: options?.iocTypeHint,
       }),
       signal,
     });

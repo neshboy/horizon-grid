@@ -45,6 +45,25 @@ interface EventLogEntry {
   label: string;
 }
 
+// Mirrors backend/app/ioc/types.py's IOCType enum. Real gap found live
+// during overnight QA: any value app/ioc/detector.py's auto-detection can't
+// classify on its own (a malware family, a threat actor, a mutex, a bare
+// process/service name -- nothing with a dot/hex pattern/URL scheme to key
+// off of) permanently 422'd with no client-side way to supply the
+// ioc_type_hint the backend has always accepted. This offers every type as
+// an explicit fallback once auto-detection has demonstrably failed.
+const IOC_TYPE_HINT_OPTIONS = [
+  "ipv4", "ipv6", "domain", "url", "hostname", "email",
+  "md5", "sha1", "sha256", "sha512",
+  "tls_certificate", "ja3", "ja4", "asn", "cidr",
+  "malware_family", "threat_actor", "campaign",
+  "cve", "cwe", "capec", "mitre_technique",
+  "file_name", "registry_key", "process_name", "mutex", "windows_service",
+  "file_path", "user_agent", "crypto_wallet", "yara_rule", "sigma_rule",
+];
+
+const IOC_TYPE_UNDETECTED_ERROR_MARKER = "pass ioc_type_hint";
+
 function LookupNewPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -70,6 +89,9 @@ function LookupNewPageInner() {
   const [eventLog, setEventLog] = useState<EventLogEntry[]>([]);
   const [providerHealth, setProviderHealth] = useState<Array<{ supported_types: string[] }> | null>(null);
   const [highlightedEvidenceIds, setHighlightedEvidenceIds] = useState<string[] | undefined>(undefined);
+  const [typeHint, setTypeHint] = useState<string | null>(null);
+  const [selectedRetryType, setSelectedRetryType] = useState(IOC_TYPE_HINT_OPTIONS[0]);
+  const [retryNonce, setRetryNonce] = useState(0);
   const eventCounter = useRef(0);
 
   useEffect(() => {
@@ -99,6 +121,12 @@ function LookupNewPageInner() {
     }
 
     const controller = new AbortController();
+    // Cleared on every (re)start, including a retry-with-type-hint --
+    // otherwise a stale error/event-log from a previous failed attempt at
+    // the same rawValue (no rawValue change, so LookupNewPageKeyed's key
+    // doesn't remount this component) would linger on screen.
+    setStreamError(null);
+    setEventLog([]);
 
     streamLookup(
       rawValue.trim(),
@@ -137,16 +165,25 @@ function LookupNewPageInner() {
           router.replace(`/login?next=${encodeURIComponent(`/lookup/new?value=${rawValue}`)}`);
         },
       },
-      controller.signal
+      controller.signal,
+      { iocTypeHint: typeHint ?? undefined }
     ).catch((err: unknown) => {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setStreamError(err instanceof Error ? err.message : "Unknown streaming error");
     });
 
     return () => controller.abort();
-    // rawValue is derived once from the query param at mount; re-running this
-    // effect is only desired if the user navigates to a brand new ?value=.
-  }, [rawValue]);
+    // rawValue is derived once from the query param at mount (re-running is
+    // desired if the user navigates to a brand new ?value=); typeHint/
+    // retryNonce also re-run this effect specifically for the "auto-
+    // detection failed, retry with an explicit type" recovery flow below.
+  }, [rawValue, typeHint, retryNonce]);
+
+  const needsTypeHint = !!streamError?.toLowerCase().includes(IOC_TYPE_UNDETECTED_ERROR_MARKER);
+  const handleRetryWithTypeHint = () => {
+    setTypeHint(selectedRetryType);
+    setRetryNonce((n) => n + 1);
+  };
 
   const verdict = finalAssessment?.final_verdict ?? null;
 
@@ -183,7 +220,33 @@ function LookupNewPageInner() {
 
         {streamError && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-            {streamError}
+            <p>{streamError}</p>
+            {needsTypeHint && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-foreground">
+                <span className="text-xs text-muted-foreground">
+                  This value has no dot/hex pattern to auto-detect from (e.g. a malware family, threat actor,
+                  campaign, or bare process/service name) -- pick its real type and retry:
+                </span>
+                <select
+                  className="rounded-tight border border-border bg-background px-2 py-1 text-xs outline-none focus-visible:border-primary"
+                  value={selectedRetryType}
+                  onChange={(e) => setSelectedRetryType(e.target.value)}
+                >
+                  {IOC_TYPE_HINT_OPTIONS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleRetryWithTypeHint}
+                  className="rounded-tight border border-border bg-card px-3 py-1 text-xs font-medium hover:bg-muted"
+                >
+                  Retry as {selectedRetryType}
+                </button>
+              </div>
+            )}
           </div>
         )}
 

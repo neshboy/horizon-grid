@@ -64,7 +64,7 @@ Add-Check -Name "Running as Administrator" -Passed $isAdmin `
 # not a hard platform requirement, but below it the stack becomes unusable) ---
 $totalRamGb = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
 Add-Check -Name "At least 8 GB RAM" -Passed ($totalRamGb -ge 7.5) -Hard $false `
-    -Detail "$totalRamGb GB detected -- the full Docker Compose stack (7 containers) is heavy on less."
+    -Detail "$totalRamGb GB detected -- the full Docker Compose stack (8 containers: postgres, redis, neo4j, opensearch, backend, frontend, celery_worker, celery_beat) is heavy on less."
 
 # --- Disk space on the drive the installer will target (checked again with
 # the real chosen path once the installer knows it; this is a pre-flight
@@ -131,7 +131,21 @@ foreach ($port in $RequiredPorts) {
 # --- Existing installation detection (for upgrade vs. fresh-install framing;
 # not a pass/fail check, just informational) ---
 $dataDir = Join-Path $env:ProgramData "IOC Intelligence Platform"
-$existingInstall = Test-Path (Join-Path $dataDir "config\.env")
+# Real gap found live during overnight QA: $ErrorActionPreference = "Stop"
+# is set globally at the top of this script -- Test-Path against a folder
+# whose ACL denies this process even STAT access (a leftover, permissions-
+# hardened folder from a previous install attempt, or a locked-down
+# enterprise environment) can throw rather than just returning $false, and
+# with Stop in effect that terminates the ENTIRE script before it ever
+# reaches the final ConvertTo-Json line -- breaking this script's own
+# documented contract of "emits one JSON object to stdout, always" that the
+# calling Inno Setup step / wizard depends on to parse results at all.
+$existingInstall = $false
+try {
+    $existingInstall = Test-Path (Join-Path $dataDir "config\.env")
+} catch {
+    Write-Warning "Could not check for an existing installation at $dataDir (access denied?): $_"
+}
 Add-Check -Name "Existing installation detected" -Passed $true -Hard $false `
     -Detail $(if ($existingInstall) { "Found existing configuration at $dataDir -- this will be an upgrade." } else { "No existing installation found -- this will be a fresh install." })
 

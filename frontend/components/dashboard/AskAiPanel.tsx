@@ -44,24 +44,55 @@ export function AskAiPanel({
   correlation,
 }: AskAiPanelProps) {
   const [message, setMessage] = React.useState<string | null>(null);
+  const [fallbackPrompt, setFallbackPrompt] = React.useState<string | null>(null);
   const popupRef = React.useRef<Window | null>(null);
 
   const hasData = providerResults.some((r) => r.status === "ok");
 
-  const handleAskGemini = React.useCallback(async () => {
+  const handleAskGemini = React.useCallback(() => {
     const prompt = buildAiAnalysisPrompt(iocValue, iocType, providerResults, providerSummaries, correlation);
-    try {
-      await navigator.clipboard.writeText(prompt);
-      setMessage("Prompt copied — paste it (Ctrl+V) into the Gemini box that just opened.");
-    } catch {
-      setMessage("Couldn't copy automatically — select and copy the prompt below, then paste it into Gemini.");
-    }
+    setFallbackPrompt(null);
 
+    // Real bug found live during overnight QA: window.open() used to run
+    // AFTER an awaited clipboard write, outside the synchronous portion of
+    // this click handler -- some browsers only honor the "genuine user
+    // gesture" that unlocks a popup within that synchronous stack, so a
+    // window.open() call reached after an await could get silently treated
+    // as a blocked popup purely due to timing, independent of any actual
+    // popup-blocker setting. Opening the popup first (still synchronously,
+    // still inside the click handler) and copying to the clipboard
+    // afterward, asynchronously, avoids that.
+    let popup: Window | null = null;
     if (popupRef.current && !popupRef.current.closed) {
       popupRef.current.focus();
-      return;
+      popup = popupRef.current;
+    } else {
+      popup = openGeminiPopup();
+      popupRef.current = popup;
     }
-    popupRef.current = openGeminiPopup();
+
+    void (async () => {
+      try {
+        await navigator.clipboard.writeText(prompt);
+        // Real bug found live during overnight QA: window.open()'s null
+        // return (the popup was genuinely blocked) was never checked --
+        // the user was told "paste it into the Gemini box that just
+        // opened" even when no box had opened at all.
+        setMessage(
+          popup
+            ? "Prompt copied — paste it (Ctrl+V) into the Gemini box that just opened."
+            : "Prompt copied, but the Gemini popup was blocked by your browser — allow popups for this " +
+                "site, or open https://gemini.google.com/app yourself and paste it in."
+        );
+      } catch {
+        // Real bug found live during overnight QA: this told the user to
+        // "select and copy the prompt below," but the prompt text was
+        // never actually rendered anywhere in this component -- there was
+        // no "below" to select.
+        setFallbackPrompt(prompt);
+        setMessage("Couldn't copy automatically — select and copy the prompt below, then paste it into Gemini.");
+      }
+    })();
   }, [iocValue, iocType, providerResults, providerSummaries, correlation]);
 
   return (
@@ -82,6 +113,14 @@ export function AskAiPanel({
           <p className="text-xs text-muted-foreground">Waiting for provider data before a prompt can be built.</p>
         )}
         {message && <p className="text-xs text-muted-foreground">{message}</p>}
+        {fallbackPrompt && (
+          <textarea
+            readOnly
+            value={fallbackPrompt}
+            onFocus={(e) => e.currentTarget.select()}
+            className="h-40 w-full rounded-tight border border-border bg-background p-2 font-mono text-xs outline-none focus-visible:border-primary"
+          />
+        )}
       </CardContent>
     </Card>
   );

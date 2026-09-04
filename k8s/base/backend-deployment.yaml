@@ -1,12 +1,69 @@
 # Translation of docker-compose `backend` service. In docker-compose the
 # container runs `alembic upgrade head && uvicorn ... --reload`; in k8s the
 # --reload flag (dev-only, relies on the bind-mounted ./backend volume) is
-# dropped since there's no source bind-mount here, but the alembic migration
-# step is kept so the Deployment is self-sufficient on rollout.
+# dropped since there's no source bind-mount here.
+#
+# Real gaps found live during a full-codebase audit, all fixed here:
+#   1. alembic upgrade head used to run inline in every replica's own
+#      startup command -- with replicas: 2, both pods could run it
+#      CONCURRENTLY against the same database on a simultaneous rollout/
+#      scale-up. Alembic has no built-in distributed lock, so this is a
+#      real race, not just a redundant no-op. Moved to a separate, single-
+#      run Job (backend-migrate below) that should be applied and awaited
+#      BEFORE this Deployment; the Deployment's own containers now only
+#      run uvicorn (and msfrpcd, see gap 3).
+#   2. imagePullPolicy: IfNotPresent combined with the floating :latest tag
+#      meant a node that already had ANY image cached under that tag would
+#      never re-pull after a new :latest was pushed -- silently pinning
+#      stale code per-node indefinitely. Changed to Always.
+#   3. msfrpcd (the real Metasploit RPC daemon docker-compose.yml starts
+#      alongside the backend, needed for Exploit Validation) was never
+#      started here at all -- added to the container command.
+#   4. DB_POOL_SIZE/DB_POOL_MAX_OVERFLOW (docker-compose.yml: "30"/"20",
+#      backend-ONLY -- celery_worker/celery_beat deliberately keep
+#      config.py's smaller defaults so the total stays under Postgres's
+#      max_connections=100) were dropped in translation -- added directly
+#      on this container, not the shared ConfigMap (which celery's own
+#      Deployments also read from).
+#   5. Both probes hit the dependency-free /health, which returns 200
+#      unconditionally even with Postgres/Redis fully down (confirmed live
+#      -- see linux/scripts/common.sh's own identical comment) -- so a
+#      backend pod that can't reach either dependency was still reported
+#      ready/alive, and would never be restarted or pulled from rotation.
+#      Changed both to /health/detailed, which genuinely checks them.
+#   6. Memory limit was 1Gi -- docker-compose.yml documents backend at 4g,
+#      specifically for the Metasploit Framework install + msfrpcd's own
+#      footprint on top of the normal Python/AI-client usage. Matched here.
 #
 # Config split:
 #   - envFrom configMapRef: non-secret host/port/URL structure
 #   - envFrom secretRef:    DATABASE_URL, JWT/AWS/provider API keys, passwords
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate
+  namespace: ioc-intel-platform
+  labels:
+    app: backend-migrate
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: backend-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ioc-intel-platform/backend:latest
+          imagePullPolicy: Always
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: ioc-intel-config
+            - secretRef:
+                name: ioc-intel-secrets
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,14 +81,19 @@ spec:
       labels:
         app: backend
     spec:
+      # Apply and wait for the backend-migrate Job above to complete before
+      # applying this Deployment (e.g. `kubectl apply -f backend-deployment.yaml
+      # -l app=backend-migrate && kubectl wait --for=condition=complete
+      # job/backend-migrate -n ioc-intel-platform` in a rollout script) --
+      # this Deployment's own pods no longer run migrations themselves.
       containers:
         - name: backend
           image: ioc-intel-platform/backend:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command:
             - "sh"
             - "-c"
-            - "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+            - "msfrpcd -f -P \"$(MSF_RPC_PASSWORD)\" -S -a 127.0.0.1 -p 55553 -U msf & uvicorn app.main:app --host 0.0.0.0 --port 8000"
           ports:
             - containerPort: 8000
               name: http
@@ -40,9 +102,14 @@ spec:
                 name: ioc-intel-config
             - secretRef:
                 name: ioc-intel-secrets
+          env:
+            - name: DB_POOL_SIZE
+              value: "30"
+            - name: DB_POOL_MAX_OVERFLOW
+              value: "20"
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/detailed
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -50,7 +117,7 @@ spec:
             failureThreshold: 6
           livenessProbe:
             httpGet:
-              path: /health
+              path: /health/detailed
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 15
@@ -62,7 +129,7 @@ spec:
               memory: 512Mi
             limits:
               cpu: 1000m
-              memory: 1Gi
+              memory: 4Gi
 ---
 apiVersion: v1
 kind: Service

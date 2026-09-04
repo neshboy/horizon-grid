@@ -18,9 +18,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import logging
+
 from app.core.provenance import category_for_provider_category
 from app.ioc.types import IOCType
 from app.providers.base import ProviderResult, ProviderStatus
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,41 @@ _FIELD_BASE_CONFIDENCE: dict[str, float] = {
 _CORROBORATION_BONUS_PER_PROVIDER = 0.15
 
 
+def _extract_relationship_value(raw_value: Any, field_name: str, provider_id: str) -> str | None:
+    """Real bug found live during overnight QA: correlate()'s extractor loop
+    assumed every element of a relationship-extractor field was already a
+    scalar and did `str(raw_value)` unconditionally -- crt.sh's own
+    "certificates" field (see app/providers/crtsh.py's _map()) is a list of
+    dicts ({"issuer_name", "common_name", "name_value", "serial_number",
+    "id", ...}), so this produced a garbage TLS_CERTIFICATE node whose value
+    was literally Python's dict repr string, polluting the correlation
+    graph and never actually correlating with anything. Returns None (skip
+    this entry, don't fabricate a node) rather than guessing for a
+    dict-shaped value this doesn't specifically know how to identify."""
+    if isinstance(raw_value, dict):
+        if field_name == "certificates":
+            serial = raw_value.get("serial_number")
+            if serial:
+                return str(serial)
+            common_name = raw_value.get("common_name")
+            return str(common_name) if common_name else None
+        # Generic defensive fallback for any other field that turns out to
+        # be dict-shaped (now, or in a future provider) -- try the most
+        # common identifying keys before giving up rather than stringifying
+        # the whole dict into a meaningless node value.
+        for key in ("id", "value", "name"):
+            candidate = raw_value.get(key)
+            if candidate:
+                return str(candidate)
+        logger.warning(
+            "correlate(): field %r from provider %r produced a dict-shaped value with no recognized "
+            "identifying key -- skipping rather than fabricating a garbage node: %r",
+            field_name, provider_id, raw_value,
+        )
+        return None
+    return str(raw_value)
+
+
 def correlate(
     seed_value: str, seed_type: IOCType, results: list[ProviderResult]
 ) -> CorrelationResult:
@@ -123,10 +162,13 @@ def correlate(
             for raw_value in values:
                 if not raw_value:
                     continue
+                extracted_value = _extract_relationship_value(raw_value, field_name, result.provider_id)
+                if extracted_value is None:
+                    continue
                 target_node = GraphNode(
-                    node_id=_node_id(target_type.value, str(raw_value)),
+                    node_id=_node_id(target_type.value, extracted_value),
                     ioc_type=target_type.value,
-                    value=str(raw_value),
+                    value=extracted_value,
                 )
                 nodes.setdefault(target_node.node_id, target_node)
                 base_confidence = _FIELD_BASE_CONFIDENCE.get(

@@ -14,6 +14,7 @@ get_settings() singleton, and never persists anything. Each check makes one
 minimal, real request to the backend's own API and reports what actually
 happened -- never a fabricated/simulated latency, model name, or result.
 """
+import asyncio
 import os
 import time
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from typing import Optional
 
 import httpx
 
+from app.ai.bedrock_client import BEARER_TOKEN_ENV_LOCK
 from app.core.url_safety import assert_safe_outbound_url
 
 _MINIMAL_SYSTEM = "You are a connection test. Reply with exactly one word: pong"
@@ -376,9 +378,6 @@ async def _check_bedrock(credentials: dict[str, str], model: str) -> AITestResul
     -- never app.core.config's global Settings -- so testing a key the user
     just typed can never be confused with, or mutate, the backend's actual
     configured Bedrock session."""
-    import boto3
-    from botocore.exceptions import BotoCoreError, ClientError
-
     bearer_token = credentials.get("bedrock_api_key", "")
     access_key = credentials.get("aws_access_key_id", "")
     secret_key = credentials.get("aws_secret_access_key", "")
@@ -387,17 +386,33 @@ async def _check_bedrock(credentials: dict[str, str], model: str) -> AITestResul
     if not bearer_token and not (access_key and secret_key):
         return AITestResult(ok=False, message="Provide either a Bedrock API key (bearer token) or an AWS access key + secret.")
 
+    # Real gap found live during overnight QA: this used boto3's SYNCHRONOUS
+    # client.converse() directly inside an async function with no await --
+    # every real network round-trip to AWS blocked the ENTIRE event loop
+    # (every other concurrent request this worker was handling) for its
+    # full duration, not just this connection test's own caller.
+    return await asyncio.to_thread(_check_bedrock_sync, bearer_token, access_key, secret_key, region, model)
+
+
+def _check_bedrock_sync(bearer_token: str, access_key: str, secret_key: str, region: str, model: str) -> AITestResult:
+    import boto3
+    from botocore.config import Config as BotoConfig
+    from botocore.exceptions import BotoCoreError, ClientError
+
     session_kwargs: dict[str, str] = {"region_name": region}
     restore_env = None
-    if bearer_token:
+    lock = BEARER_TOKEN_ENV_LOCK if bearer_token else None
+    if lock:
+        lock.acquire()
         restore_env = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
         os.environ["AWS_BEARER_TOKEN_BEDROCK"] = bearer_token
     else:
         session_kwargs["aws_access_key_id"] = access_key
         session_kwargs["aws_secret_access_key"] = secret_key
 
+    client = None
     try:
-        client = boto3.client("bedrock-runtime", **session_kwargs)
+        client = boto3.client("bedrock-runtime", config=BotoConfig(retries={"max_attempts": 1}), **session_kwargs)
         response = client.converse(
             modelId=model,
             system=[{"text": _MINIMAL_SYSTEM}],
@@ -418,11 +433,20 @@ async def _check_bedrock(credentials: dict[str, str], model: str) -> AITestResul
     except BotoCoreError as exc:
         return AITestResult(ok=False, message=f"AWS SDK error: {exc}")
     finally:
-        if bearer_token:
-            if restore_env is None:
-                os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
-            else:
-                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = restore_env
+        # Real gap found live during overnight QA: the boto3 client built
+        # here (and its underlying connection pool) was never closed --
+        # every connection test leaked one, however small, that never got
+        # cleaned up for the life of the process.
+        if client is not None:
+            client.close()
+        if lock:
+            try:
+                if restore_env is None:
+                    os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+                else:
+                    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = restore_env
+            finally:
+                lock.release()
 
 
 async def test_ai_connection(backend: str, credentials: dict[str, str], model: Optional[str] = None) -> AITestResult:

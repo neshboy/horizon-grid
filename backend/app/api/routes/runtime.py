@@ -25,7 +25,40 @@ router = APIRouter(prefix="/runtime", tags=["runtime"])
 
 @router.get("/ai-providers")
 async def list_ai_providers(user: CurrentUser = Depends(require_permission("provider:manage"))):
-    return await svc.list_ai_providers()
+    # Real gap found live during overnight QA: this used to be a bare
+    # passthrough to svc.list_ai_providers(), which only ever returns
+    # EXISTING DB rows -- unlike list_ioc_providers() below, which merges
+    # the DB against the live provider registry so a provider added to the
+    # code after this install's one-time seed_from_env_if_empty() ran is
+    # still visible (as a sensible unconfigured default) rather than
+    # invisible until someone manually inserts a row. A new AI backend
+    # added to AI_BACKENDS after an existing install's first boot was
+    # permanently unreachable from this route -- and therefore from the
+    # Admin UI's AI-provider configuration panel, which renders from it.
+    configured = {row["provider_id"]: row for row in await svc.list_ai_providers()}
+    out = []
+    for backend in svc.AI_BACKENDS:
+        row = configured.get(backend)
+        out.append(
+            row
+            or {
+                "provider_id": backend,
+                "provider_name": backend,
+                "kind": "ai",
+                "enabled": True,
+                "is_active": False,
+                "configured": False,
+                "model_id": None,
+                "extra_config": {},
+                "masked_credentials": {},
+                "credentials_unreadable": False,
+                "last_test_at": None,
+                "last_test_ok": None,
+                "last_test_message": None,
+                "updated_at": None,
+            }
+        )
+    return out
 
 
 class ConfigureAIProviderRequest(BaseModel):
