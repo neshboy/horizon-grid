@@ -37,6 +37,7 @@
   - [Reliability](#-reliability-and-mission-critical-deployment)
 - [Platform support](#-platform-support)
 - [Architecture](#️-architecture)
+- [Prerequisites](#-prerequisites)
 - [Installation / quick start](#-installation--quick-start)
 - [Documentation](#-documentation)
 - [Security](#-security)
@@ -287,6 +288,32 @@ afterward (full detail in the Mission-Critical Operations Manual):
   refresh jobs.
 - **Orchestration**: Docker Compose (`docker-compose.yml` for development,
   `docker-compose.prod.yml` for production).
+
+## 📦 Prerequisites
+
+- **Docker + Docker Compose** — required, no exceptions. The entire stack
+  (backend, frontend, Postgres, Redis, Neo4j, OpenSearch, Celery worker/beat)
+  runs as Compose services; there is no supported way to run HORIZON GRID
+  directly on bare metal. The Windows installer and Linux `.deb` package both
+  install onto an existing Docker install rather than bundling their own.
+- **Ollama** — required only if you use the default local AI backend
+  (`ai_backend: "ollama"` in `backend/app/core/config.py`, no API key/quota
+  needed). Ollama itself must be reachable from the backend container — either
+  running natively on the host with the platform's Docker networking pointed
+  at it, or run as its own container — and needs at least one model pulled
+  (e.g. `ollama pull llama3.2:3b`) before an AI analysis call will succeed.
+  If you configure any of the ten cloud AI backends instead (Anthropic,
+  Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, Grok, Mistral, OpenRouter —
+  see [AI analysis](#-ai-analysis) above) and switch `ai_backend` to one of
+  those, Ollama is not needed at all.
+
+> [!WARNING]
+> Ollama's own default context window can quietly balloon RAM usage on
+> resource-constrained hosts — HORIZON GRID caps this itself
+> (`backend/app/ai/ollama_client.py`'s `_estimate_num_ctx`, clamped to
+> 2048–8192 tokens) rather than accepting Ollama's default, but that only
+> helps once you're on a version that includes the fix; make sure Ollama
+> itself is a reasonably current release.
 
 ## 🚀 Installation / quick start
 
