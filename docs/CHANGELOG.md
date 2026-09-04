@@ -1,14 +1,15 @@
-# Changelog
+# Changelog (feature snapshot)
 
-> **No git history was available to build this changelog from.** The repository at
-> `C:\Users\User\ioc-intel-platform` is not (or is no longer) tracked as a git
-> repository with retrievable commit history, so nothing below is derived from
-> commit logs, tags, or PRs. This is a **snapshot changelog**: a single
-> "Unreleased" entry describing the feature set as it exists in the current
-> source tree, compiled by reading the backend and frontend code directly. It
-> will not show you *when* something was added or *why* it changed — only
-> *what is present today*. Future entries should be appended above this one
-> once real commit/release history exists.
+> **This is a snapshot, not the real release history.** It was originally
+> written at a point when this tree wasn't tracked as a git repo, hence the
+> single "Unreleased" entry below describing the feature set as it existed
+> at that time, compiled by reading the backend/frontend code directly
+> rather than from commit logs. That's no longer true -- a real git history
+> with tagged releases and a real, incrementally-maintained changelog exists
+> now: see the repository root's own `CHANGELOG.md` for the accurate,
+> version-by-version history (currently through v0.3.9). This file is kept
+> as a supplementary point-in-time feature inventory, not as the changelog
+> of record.
 
 For endpoint-level detail see [API_DOCUMENTATION.md](API_DOCUMENTATION.md); for
 schema detail see [DATA_MODEL.md](DATA_MODEL.md); for the AI subsystem see
