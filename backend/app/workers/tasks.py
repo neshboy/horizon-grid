@@ -23,7 +23,7 @@ from sqlalchemy import select
 
 from app.core.cache import set_cached_result
 from app.core.config import get_settings
-from app.core.db import new_session
+from app.core.db import _engine, new_session
 from app.crawler.collector import internet_intelligence_provider
 from app.ioc.types import IOCType
 from app.models.lookup import IOCLookup
@@ -100,20 +100,37 @@ async def _crawl_one(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClien
 
 
 async def _run_osint_crawl_async() -> int:
-    targets = await _recent_crawlable_iocs()
-    if not targets:
-        logger.info("Scheduled OSINT crawl: no recently-investigated crawlable IOCs, nothing to do")
-        return 0
+    try:
+        targets = await _recent_crawlable_iocs()
+        if not targets:
+            logger.info("Scheduled OSINT crawl: no recently-investigated crawlable IOCs, nothing to do")
+            return 0
 
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        for ioc_value, ioc_type_str in targets:
-            try:
-                await _crawl_one(ioc_value, ioc_type_str, client)
-            except Exception:  # noqa: BLE001 -- one bad target must not abort the whole run
-                logger.warning("Scheduled OSINT crawl failed for %r (%s)", ioc_value, ioc_type_str, exc_info=True)
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            for ioc_value, ioc_type_str in targets:
+                try:
+                    await _crawl_one(ioc_value, ioc_type_str, client)
+                except Exception:  # noqa: BLE001 -- one bad target must not abort the whole run
+                    logger.warning("Scheduled OSINT crawl failed for %r (%s)", ioc_value, ioc_type_str, exc_info=True)
 
-    logger.info("Scheduled OSINT crawl: refreshed cache for %d IOC(s)", len(targets))
-    return len(targets)
+        logger.info("Scheduled OSINT crawl: refreshed cache for %d IOC(s)", len(targets))
+        return len(targets)
+    finally:
+        # Real bug found live (reproduced deterministically by calling this
+        # coroutine via asyncio.run() twice in the same process): run_osint_crawl()
+        # below wraps this in a *fresh* asyncio.run() every invocation, but
+        # app/core/db.py's `_engine` (and its connection pool) is a process-wide
+        # singleton reused across every one of those invocations. asyncpg binds
+        # each pooled connection to the event loop that created it, so once
+        # asyncio.run() closes this run's loop, any connection left sitting idle
+        # in the pool is now attached to a dead loop. The *next* run's pre-ping
+        # check (or any use of that connection) then blows up with exactly
+        # "RuntimeError: Event loop is closed" / "Future ... attached to a
+        # different loop" instead of completing or failing cleanly.
+        # dispose() only drains/closes the pool's connections -- `_engine` itself
+        # is untouched and reused fine next run, opening fresh connections under
+        # whatever loop that run's asyncio.run() creates.
+        await _engine.dispose()
 
 
 @celery_app.task(name="app.workers.tasks.run_osint_crawl")

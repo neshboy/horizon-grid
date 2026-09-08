@@ -9,11 +9,35 @@ import json
 from typing import Any, Optional
 
 import redis.asyncio as aioredis
+from redis.exceptions import RedisError
 
 from app.core.config import get_settings
 
 _pool: Optional[aioredis.Redis] = None
 _pool_loop: Optional[asyncio.AbstractEventLoop] = None
+
+# Mirrors app/main.py's _HEALTH_CHECK_TIMEOUT_SECONDS -- same rationale (bound
+# a Redis round-trip to a few seconds instead of whatever redis-py's internal
+# connect/retry backoff happens to add up to) applied to the request path
+# rather than just the health check.
+_REDIS_CALL_TIMEOUT_SECONDS = 3.0
+
+
+class RateLimiterUnavailable(RuntimeError):
+    """Raised by RateLimiter.allow() when Redis cannot be reached (or the
+    call times out) instead of letting the underlying redis.exceptions error
+    fall all the way out of the route.
+
+    Real P1 found live: allow() previously called r.incr()/r.expire() with no
+    timeout and no exception handling at all. During a genuine Redis outage
+    (confirmed via `docker compose stop redis`), POST /api/v1/lookup/stream
+    hung for several seconds and then surfaced as a bare, content-free
+    Starlette 500 ("Internal Server Error"), and POST /api/v1/auth/login's
+    failed-credential branch hung indefinitely (never returned within a 10s
+    client timeout) -- both far worse than the /health/detailed docstring's
+    documented "DEGRADED" contract for a Redis outage. app/main.py registers
+    a handler for this exception that turns it into a clean 503 instead.
+    """
 
 
 def get_redis() -> aioredis.Redis:
@@ -68,7 +92,10 @@ class RateLimiter:
 
     async def allow(self) -> bool:
         r = get_redis()
-        current = await r.incr(self._key)
-        if current == 1:
-            await r.expire(self._key, self._window_seconds)
+        try:
+            current = await asyncio.wait_for(r.incr(self._key), timeout=_REDIS_CALL_TIMEOUT_SECONDS)
+            if current == 1:
+                await asyncio.wait_for(r.expire(self._key, self._window_seconds), timeout=_REDIS_CALL_TIMEOUT_SECONDS)
+        except (RedisError, asyncio.TimeoutError) as exc:
+            raise RateLimiterUnavailable(f"Redis unavailable for rate limiting: {exc!r}") from exc
         return current <= self._max_calls

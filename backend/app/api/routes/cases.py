@@ -7,13 +7,14 @@ private-per-analyst construct like the basket.
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth.rbac import CurrentUser, require_permission
 from app.core.db import get_db
-from app.models.case import Case, CaseIOC, CaseNote
+from app.models.case import Case, CaseIOC, CaseNote, CaseStatus
 from app.schemas.case import CaseCreateRequest, CaseIOCAddRequest, CaseNoteCreateRequest, CaseUpdateRequest
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -79,7 +80,7 @@ async def _load_case(case_id: uuid.UUID, db: AsyncSession) -> Case:
 
 @router.get("")
 async def list_cases(
-    status_filter: str | None = None,
+    status_filter: CaseStatus | None = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(require_permission("case:read")),
@@ -151,8 +152,6 @@ async def close_case(
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(require_permission("case:close")),
 ):
-    from app.models.case import CaseStatus
-
     case = await _load_case(case_id, db)
     case.status = CaseStatus.CLOSED
     await db.commit()
@@ -167,15 +166,58 @@ async def add_case_ioc(
     user: CurrentUser = Depends(require_permission("case:write")),
 ):
     await _load_case(case_id, db)
+
+    # Mirrors app/api/routes/basket.py's add_to_basket(): a case's IOC list
+    # must not silently accumulate exact duplicates from a double-click or a
+    # network retry. Case-insensitive on purpose, matching add_to_basket()'s
+    # own rationale (same IOC re-entered in different casing is still the
+    # same logical entry) -- and matching the uq_case_ioc_case_value unique
+    # constraint's own case-sensitive comparison is handled below by
+    # catching the IntegrityError this pre-check alone can't fully prevent.
+    existing = (
+        await db.execute(
+            select(CaseIOC).where(
+                CaseIOC.case_id == case_id, func.lower(CaseIOC.ioc_value) == payload.ioc_value.lower()
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return _serialize_case(await _load_case(case_id, db))
+
     ioc = CaseIOC(
         case_id=case_id,
         ioc_value=payload.ioc_value,
         ioc_type=payload.ioc_type,
-        lookup_id=uuid.UUID(payload.lookup_id) if payload.lookup_id else None,
+        # payload.lookup_id is Optional[uuid.UUID] (see app/schemas/case.py) --
+        # Pydantic already validated/coerced it, so no raw uuid.UUID() call
+        # (and no try/except around one) is needed here.
+        lookup_id=payload.lookup_id,
         added_by=user.id,
     )
     db.add(ioc)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Check-then-insert race, same class of bug as add_to_basket()'s own
+        # uq_basket_owner_ioc handling: two concurrent adds of the same
+        # (case_id, ioc_value) can both pass the 'existing' SELECT above
+        # (both see None), then both attempt the INSERT -- the DB's
+        # uq_case_ioc_case_value unique constraint lets exactly one commit
+        # through and raises IntegrityError to the loser. Treat that as the
+        # idempotent add it really is rather than a 500: roll back this
+        # request's now-aborted transaction and return the case as-is, since
+        # the winner's row already satisfies the same logical add.
+        await db.rollback()
+        existing = (
+            await db.execute(
+                select(CaseIOC).where(CaseIOC.case_id == case_id, CaseIOC.ioc_value == payload.ioc_value)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            # Constraint violation implies a matching row exists; if it
+            # somehow doesn't (e.g. a different constraint fired), don't
+            # mask the original error.
+            raise
     return _serialize_case(await _load_case(case_id, db))
 
 

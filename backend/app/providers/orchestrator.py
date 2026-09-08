@@ -35,7 +35,16 @@ async def _run_with_policy(
 ) -> ProviderResult:
     settings = get_settings()
 
-    cached = await get_cached_result(provider.provider_id, ioc_type.value, ioc_value)
+    try:
+        cached = await get_cached_result(provider.provider_id, ioc_type.value, ioc_value)
+    except Exception as exc:  # noqa: BLE001 -- cache is best-effort; a Redis blip must not drop this provider
+        logger.warning(
+            "Cache read failed for %s (%s): %s -- falling back to a live fetch",
+            provider.provider_id,
+            ioc_value,
+            exc,
+        )
+        cached = None
     if cached is not None:
         result = ProviderResult(
             **{
@@ -84,9 +93,17 @@ async def _run_with_policy(
         )
 
     if result.status == ProviderStatus.OK:
-        await set_cached_result(
-            provider.provider_id, ioc_type.value, ioc_value, result.to_dict(), settings.provider_cache_ttl_seconds
-        )
+        try:
+            await set_cached_result(
+                provider.provider_id, ioc_type.value, ioc_value, result.to_dict(), settings.provider_cache_ttl_seconds
+            )
+        except Exception as exc:  # noqa: BLE001 -- cache is best-effort; must not discard an already-fetched result
+            logger.warning(
+                "Cache write failed for %s (%s): %s -- returning the fetched result uncached",
+                provider.provider_id,
+                ioc_value,
+                exc,
+            )
     return result
 
 

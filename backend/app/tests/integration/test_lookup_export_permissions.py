@@ -24,12 +24,6 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 
-POSTGRES_HOST = "localhost"
-POSTGRES_PORT = 5433
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-
-
 def _reachable(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=1.0):
@@ -38,9 +32,27 @@ def _reachable(host: str, port: int) -> bool:
         return False
 
 
+def _resolve_infra_host_port(in_network_host, in_network_port, published_host, published_port):
+    """See test_lookup_stream_persistence.py's function of the same name for
+    the full rationale: prefer the real in-docker-network hostname
+    (`postgres`/`redis`), reachable when this test runs INSIDE the backend
+    container (the documented dev/CI way to run it); fall back to the
+    docker-compose HOST-published port for an out-of-container host run.
+    """
+    if _reachable(in_network_host, in_network_port):
+        return in_network_host, in_network_port
+    return published_host, published_port
+
+
+POSTGRES_HOST, POSTGRES_PORT = _resolve_infra_host_port("postgres", 5432, "localhost", 5433)
+REDIS_HOST, REDIS_PORT = _resolve_infra_host_port("redis", 6379, "localhost", 6379)
+
+
 pytestmark = pytest.mark.skipif(
     not (_reachable(POSTGRES_HOST, POSTGRES_PORT) and _reachable(REDIS_HOST, REDIS_PORT)),
-    reason="Postgres/Redis not reachable -- run `docker compose up -d postgres redis` first.",
+    reason="Postgres/Redis not reachable via either the in-network postgres/redis "
+    "hostnames or the docker-compose host-published localhost:5433/6379 ports -- "
+    "run `docker compose up -d postgres redis` first.",
 )
 
 
@@ -58,7 +70,15 @@ def _point_app_settings_at_host_infra():
 
     previous_db_url = os.environ.get("DATABASE_URL")
     previous_redis_url = os.environ.get("REDIS_URL")
-    os.environ["DATABASE_URL"] = f"postgresql+asyncpg://ioc:ioc@{POSTGRES_HOST}:{POSTGRES_PORT}/ioc_intel"
+    # Reads real POSTGRES_USER/PASSWORD/DB from the environment (rather than
+    # hardcoding "ioc:ioc") -- inside the backend container these are already
+    # set correctly (docker-compose's env_file: .env passes them through),
+    # and may legitimately differ from the "ioc"/"ioc" defaults if an
+    # operator rotated POSTGRES_PASSWORD away from its default.
+    _pg_user = os.environ.get("POSTGRES_USER", "ioc")
+    _pg_password = os.environ.get("POSTGRES_PASSWORD", "ioc")
+    _pg_db = os.environ.get("POSTGRES_DB", "ioc_intel")
+    os.environ["DATABASE_URL"] = f"postgresql+asyncpg://{_pg_user}:{_pg_password}@{POSTGRES_HOST}:{POSTGRES_PORT}/{_pg_db}"
     os.environ["REDIS_URL"] = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
     get_settings.cache_clear()
     cache_module._pool = None

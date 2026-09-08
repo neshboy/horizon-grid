@@ -39,12 +39,6 @@ from sqlalchemy import delete, func, select
 from app.core.config import get_settings
 from app.providers.base import ProviderCategory
 
-POSTGRES_HOST = "localhost"
-POSTGRES_PORT = 5433
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-
-
 def _reachable(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=1.0):
@@ -53,9 +47,27 @@ def _reachable(host: str, port: int) -> bool:
         return False
 
 
+def _resolve_infra_host_port(in_network_host, in_network_port, published_host, published_port):
+    """See test_lookup_stream_persistence.py's function of the same name for
+    the full rationale: prefer the real in-docker-network hostname
+    (`postgres`/`redis`), reachable when this test runs INSIDE the backend
+    container (the documented dev/CI way to run it); fall back to the
+    docker-compose HOST-published port for an out-of-container host run.
+    """
+    if _reachable(in_network_host, in_network_port):
+        return in_network_host, in_network_port
+    return published_host, published_port
+
+
+POSTGRES_HOST, POSTGRES_PORT = _resolve_infra_host_port("postgres", 5432, "localhost", 5433)
+REDIS_HOST, REDIS_PORT = _resolve_infra_host_port("redis", 6379, "localhost", 6379)
+
+
 pytestmark = pytest.mark.skipif(
     not (_reachable(POSTGRES_HOST, POSTGRES_PORT) and _reachable(REDIS_HOST, REDIS_PORT)),
-    reason="Postgres/Redis not reachable -- run `docker compose up -d postgres redis` first.",
+    reason="Postgres/Redis not reachable via either the in-network postgres/redis "
+    "hostnames or the docker-compose host-published localhost:5433/6379 ports -- "
+    "run `docker compose up -d postgres redis` first.",
 )
 
 
@@ -68,7 +80,15 @@ def _point_app_settings_at_host_infra():
 
     previous_db_url = os.environ.get("DATABASE_URL")
     previous_redis_url = os.environ.get("REDIS_URL")
-    os.environ["DATABASE_URL"] = f"postgresql+asyncpg://ioc:ioc@{POSTGRES_HOST}:{POSTGRES_PORT}/ioc_intel"
+    # Reads real POSTGRES_USER/PASSWORD/DB from the environment (rather than
+    # hardcoding "ioc:ioc") -- inside the backend container these are already
+    # set correctly (docker-compose's env_file: .env passes them through),
+    # and may legitimately differ from the "ioc"/"ioc" defaults if an
+    # operator rotated POSTGRES_PASSWORD away from its default.
+    _pg_user = os.environ.get("POSTGRES_USER", "ioc")
+    _pg_password = os.environ.get("POSTGRES_PASSWORD", "ioc")
+    _pg_db = os.environ.get("POSTGRES_DB", "ioc_intel")
+    os.environ["DATABASE_URL"] = f"postgresql+asyncpg://{_pg_user}:{_pg_password}@{POSTGRES_HOST}:{POSTGRES_PORT}/{_pg_db}"
     os.environ["REDIS_URL"] = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
     get_settings.cache_clear()
     cache_module._pool = None
@@ -139,7 +159,7 @@ async def fixture_lookup():
 
 
 async def _add_provider_result(
-    lookup_id: uuid.UUID, provider_id: str, status: str, created_at=None, latency_ms=None
+    lookup_id: uuid.UUID, provider_id: str, status: str, created_at=None, latency_ms=None, from_cache=False
 ) -> None:
     from app.core.db import new_session
     from app.models.lookup import ProviderResultRecord
@@ -153,6 +173,7 @@ async def _add_provider_result(
             status=status,
             data={},
             latency_ms=latency_ms,
+            from_cache=from_cache,
         )
         if created_at is not None:
             row.created_at = created_at
@@ -229,6 +250,13 @@ async def test_provider_health_percentage_excludes_not_configured_and_disabled_r
                 .where(
                     ProviderResultRecord.created_at >= window_start,
                     ProviderResultRecord.status.notin_(("not_configured", "disabled")),
+                    # get_kpis() also excludes replayed Redis cache hits from
+                    # both the numerator and denominator (see
+                    # app/core/dashboard.py's _real_attempt_clause()) -- this
+                    # ground truth must match that real definition or this
+                    # test would fail the moment any real from_cache=True row
+                    # exists anywhere in this shared, ever-growing 24h window.
+                    ProviderResultRecord.from_cache.is_(False),
                 )
             )
         ).scalar_one()
@@ -247,6 +275,7 @@ async def test_provider_health_percentage_excludes_not_configured_and_disabled_r
                 .where(
                     ProviderResultRecord.created_at >= window_start,
                     ProviderResultRecord.status.in_(("ok", "no_data", "unsupported_ioc")),
+                    ProviderResultRecord.from_cache.is_(False),
                 )
             )
         ).scalar_one()
@@ -298,6 +327,11 @@ async def test_provider_health_percentage_counts_no_data_as_healthy(fixture_look
                 .where(
                     ProviderResultRecord.created_at >= window_start,
                     ProviderResultRecord.status.notin_(("not_configured", "disabled")),
+                    # See the from_cache comment in
+                    # test_provider_health_percentage_excludes_not_configured_and_disabled_rows
+                    # above -- this ground truth must match get_kpis()'s real
+                    # definition, which also excludes replayed cache hits.
+                    ProviderResultRecord.from_cache.is_(False),
                 )
             )
         ).scalar_one()
@@ -308,6 +342,7 @@ async def test_provider_health_percentage_counts_no_data_as_healthy(fixture_look
                 .where(
                     ProviderResultRecord.created_at >= window_start,
                     ProviderResultRecord.status.in_(("ok", "no_data", "unsupported_ioc")),
+                    ProviderResultRecord.from_cache.is_(False),
                 )
             )
         ).scalar_one()
@@ -689,3 +724,320 @@ async def test_rate_limited_count_is_scoped_to_each_window(fixture_lookup, monke
     assert entry["24h"]["rate_limited_count"] == 2
     assert entry["7d"]["rate_limited_count"] == 2
     assert entry["30d"]["rate_limited_count"] == 3
+
+
+# --- from_cache exclusion (regression for a real P2 bug found via live E2E testing) ---
+#
+# A Redis cache hit (ProviderResult.from_cache=True -- the real provider was
+# NOT re-contacted; app/providers/orchestrator.py's _run_with_policy returned
+# a copy of an earlier real fetch verbatim) used to be persisted to
+# ProviderResultRecord as an indistinguishable, brand-new "real attempt" with
+# a fresh created_at and the stale original latency_ms -- there was no
+# from_cache column at all, and the insert in app/api/routes/lookup.py never
+# inspected result.from_cache. That let a single real check's cached replay
+# count as a fresh success on every subsequent lookup for up to
+# provider_cache_ttl_seconds (3600s, exactly the width of the "1h" window),
+# corrupting success_rate/consecutive_failures/avg_latency_ms/status exactly
+# as documented for _NON_ATTEMPT_STATUSES rows in app/core/dashboard.py.
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_rows_do_not_mask_a_real_failure_as_healthy(fixture_lookup, monkeypatch):
+    """The exact scenario from the bug report: 9 replayed cache hits (all
+    status='ok', from_cache=True) plus a single genuine, most-recent 'error'.
+    Before the fix, from_cache was dropped at insert time and every row here
+    was indistinguishable from a real attempt -- attempts=10, ok=9 -> 90%
+    success_rate -> status='healthy', hiding the one real failure entirely.
+    After the fix, the 9 cache hits are excluded from both the numerator and
+    denominator: attempts=1, ok=0 -> 0% -> status='down'."""
+    import app.core.dashboard as dashboard
+
+    provider_id = _fresh_fake_provider_id()
+    monkeypatch.setattr(dashboard, "get_all_providers", lambda: [_FakeProvider(provider_id)])
+
+    now = datetime.now(timezone.utc)
+    for _ in range(9):
+        await _add_provider_result(fixture_lookup, provider_id, "ok", created_at=now, from_cache=True)
+    await _add_provider_result(fixture_lookup, provider_id, "error", created_at=now, from_cache=False)
+
+    result = await dashboard.get_provider_health_history()
+    entry = next(e for e in result if e["provider_id"] == provider_id)
+
+    for window in ("1h", "24h", "7d", "30d"):
+        assert entry[window]["success_rate"] == 0.0, (
+            f"{window}: replayed cache hits must not be counted as real attempts/successes"
+        )
+        assert entry[window]["status"] == "down"
+
+
+@pytest.mark.asyncio
+async def test_consecutive_failures_is_not_reset_by_a_replayed_cache_hit(fixture_lookup, monkeypatch):
+    """Insert, oldest to newest: error, error, then a cache hit (status='ok',
+    from_cache=True) as the MOST RECENT row. Before the fix, walking
+    most-recent-first would hit that 'ok' row first and stop immediately,
+    reporting consecutive_failures=0 even though the provider was never
+    actually re-verified since its last two real failures. After the fix,
+    the cache-hit row is skipped (not counted, does not break the streak),
+    so the walk continues to the two real errors: consecutive_failures=2."""
+    import app.core.dashboard as dashboard
+
+    provider_id = _fresh_fake_provider_id()
+    monkeypatch.setattr(dashboard, "get_all_providers", lambda: [_FakeProvider(provider_id)])
+
+    now = datetime.now(timezone.utc)
+    await _add_provider_result(fixture_lookup, provider_id, "error", created_at=now - timedelta(minutes=2))
+    await _add_provider_result(fixture_lookup, provider_id, "error", created_at=now - timedelta(minutes=1))
+    await _add_provider_result(fixture_lookup, provider_id, "ok", created_at=now, from_cache=True)
+
+    result = await dashboard.get_provider_health_history()
+    entry = next(e for e in result if e["provider_id"] == provider_id)
+
+    for window in ("1h", "24h", "7d", "30d"):
+        assert entry[window]["consecutive_failures"] == 2, (
+            f"{window}: a replayed cache hit must not reset an ongoing real failure streak"
+        )
+
+
+@pytest.mark.asyncio
+async def test_avg_latency_ms_excludes_cache_hit_rows(fixture_lookup, monkeypatch):
+    """A cache hit's latency_ms is the STALE original fetch latency (copied
+    verbatim from an earlier real call), not a fresh measurement -- it must
+    not be averaged in as if the round-trip happened again on every replay."""
+    import app.core.dashboard as dashboard
+
+    provider_id = _fresh_fake_provider_id()
+    monkeypatch.setattr(dashboard, "get_all_providers", lambda: [_FakeProvider(provider_id)])
+
+    now = datetime.now(timezone.utc)
+    await _add_provider_result(fixture_lookup, provider_id, "ok", created_at=now, latency_ms=100, from_cache=False)
+    # Deliberately way outside a plausible real latency, so any accidental
+    # inclusion in the average is impossible to miss.
+    await _add_provider_result(fixture_lookup, provider_id, "ok", created_at=now, latency_ms=999999, from_cache=True)
+
+    result = await dashboard.get_provider_health_history()
+    entry = next(e for e in result if e["provider_id"] == provider_id)
+
+    for window in ("1h", "24h", "7d", "30d"):
+        assert entry[window]["avg_latency_ms"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_provider_health_percentage_excludes_cache_hit_rows_from_kpis(fixture_lookup):
+    """Same exclusion, proven at the get_kpis() provider_health_percentage
+    level (shared table, so ground truth is computed independently from the
+    same real DB, matching this file's own established pattern above)."""
+    from app.core.dashboard import get_kpis
+    from app.core.db import new_session
+    from app.models.lookup import ProviderResultRecord
+
+    now = datetime.now(timezone.utc)
+    provider_id = _fresh_fake_provider_id()
+    # 1 genuine failure, plus a pile of replayed cache hits that must NOT
+    # count as real attempts/successes at all.
+    await _add_provider_result(fixture_lookup, provider_id, "error", created_at=now, from_cache=False)
+    for _ in range(9):
+        await _add_provider_result(fixture_lookup, provider_id, "ok", created_at=now, from_cache=True)
+
+    kpis = await get_kpis()
+
+    window_start = now - timedelta(hours=24)
+    async with new_session() as db:
+        correct_attempts = (
+            await db.execute(
+                select(func.count())
+                .select_from(ProviderResultRecord)
+                .where(
+                    ProviderResultRecord.created_at >= window_start,
+                    ProviderResultRecord.status.notin_(("not_configured", "disabled")),
+                    ProviderResultRecord.from_cache.is_(False),
+                )
+            )
+        ).scalar_one()
+        correct_ok = (
+            await db.execute(
+                select(func.count())
+                .select_from(ProviderResultRecord)
+                .where(
+                    ProviderResultRecord.created_at >= window_start,
+                    ProviderResultRecord.status.in_(("ok", "no_data", "unsupported_ioc")),
+                    ProviderResultRecord.from_cache.is_(False),
+                )
+            )
+        ).scalar_one()
+        # The wrong computation a regression might reintroduce: counting
+        # from_cache=True rows as real attempts/successes too.
+        buggy_attempts = (
+            await db.execute(
+                select(func.count())
+                .select_from(ProviderResultRecord)
+                .where(
+                    ProviderResultRecord.created_at >= window_start,
+                    ProviderResultRecord.status.notin_(("not_configured", "disabled")),
+                )
+            )
+        ).scalar_one()
+        buggy_ok = (
+            await db.execute(
+                select(func.count())
+                .select_from(ProviderResultRecord)
+                .where(
+                    ProviderResultRecord.created_at >= window_start,
+                    ProviderResultRecord.status.in_(("ok", "no_data", "unsupported_ioc")),
+                )
+            )
+        ).scalar_one()
+
+    expected_correct_pct = round(correct_ok / correct_attempts * 100, 2)
+    expected_buggy_pct = round(buggy_ok / buggy_attempts * 100, 2)
+
+    assert kpis["provider_health_percentage"] == expected_correct_pct
+    assert expected_correct_pct != expected_buggy_pct
+    assert kpis["provider_health_percentage"] != expected_buggy_pct
+
+
+# --- get_kpis(): provider_attempts/provider_ok (and ai_success/ai_failed) must come from
+# ONE atomic query, not two racing ones (regression for a confirmed P3 finding) -----------
+
+
+@pytest.mark.asyncio
+async def test_provider_health_and_ai_outcome_counts_are_each_read_by_exactly_one_statement():
+    """Regression test for a confirmed P3 finding, found via live/runtime
+    testing: provider_attempts/provider_ok (and, identically,
+    ai_success/ai_failed) used to each be computed by TWO separate,
+    sequential `await db.execute(select(func.count())...)` calls in the same
+    session. Under Postgres's default READ COMMITTED isolation, each SELECT
+    sees the latest committed rows as of its OWN execution time, not a
+    shared snapshot -- a concurrent INSERT into provider_results (or
+    final_assessment_records) landing between the two statements skews one
+    count relative to the other, so the reported percentage corresponds to
+    no single real point-in-time state of the table. Confirmed live: 6
+    independent measurements of provider_health_percentage (3 via the HTTP
+    API, 3 calling get_kpis() directly) each disagreed with an
+    independently-computed, same-instant SQL ground truth, by ~1-5 points.
+
+    This test asserts the concrete structural fix directly: exactly ONE
+    statement reads provider_results, and exactly ONE statement reads
+    final_assessment_records, over the course of one get_kpis() call. A
+    single SQL statement is inherently evaluated against one consistent
+    snapshot under READ COMMITTED (see the module's own
+    _all_provider_window_metrics(), which relies on this same guarantee) --
+    so this one-statement invariant is precisely what makes the numerator
+    and denominator of both ratios mutually consistent, and would fail
+    immediately if either pair were ever re-split back into two sequential
+    count() queries.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.dashboard import get_kpis
+    from app.models.lookup import FinalAssessmentRecord, ProviderResultRecord
+
+    provider_results_table = ProviderResultRecord.__table__
+    final_assessment_table = FinalAssessmentRecord.__table__
+    hit_counts = {"provider_results": 0, "final_assessment_records": 0}
+
+    original_execute = AsyncSession.execute
+
+    async def _counting_execute(self, statement, *args, **kwargs):
+        try:
+            froms = set(statement.get_final_froms())
+        except AttributeError:
+            froms = set()
+        if provider_results_table in froms:
+            hit_counts["provider_results"] += 1
+        if final_assessment_table in froms:
+            hit_counts["final_assessment_records"] += 1
+        return await original_execute(self, statement, *args, **kwargs)
+
+    AsyncSession.execute = _counting_execute
+    try:
+        await get_kpis()
+    finally:
+        AsyncSession.execute = original_execute
+
+    assert hit_counts["provider_results"] == 1, (
+        "provider_health_percentage must read provider_results with exactly ONE statement "
+        f"(one atomic attempts+ok snapshot), got {hit_counts['provider_results']} -- "
+        "splitting this back into separate attempts/ok queries reopens the confirmed race"
+    )
+    assert hit_counts["final_assessment_records"] == 1, (
+        "ai_success_rate must read final_assessment_records with exactly ONE statement "
+        f"(one atomic success+failed snapshot), got {hit_counts['final_assessment_records']} -- "
+        "splitting this back into separate success/failed queries reopens the identical race"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_kpis_survives_a_genuine_concurrent_write_landing_mid_computation(fixture_lookup):
+    """Companion smoke test to the statement-count regression test above:
+    injects a REAL, committed write to provider_results from a genuinely
+    separate session at the exact moment get_kpis() reads that table (rather
+    than relying on a bare asyncio timing race, which
+    test_basket_add_race.py's docstring already established is too fast to
+    reliably interleave), and confirms get_kpis() still completes and returns
+    a well-formed, in-range percentage. With the fix in place, the injected
+    row's commit happens strictly after the one provider_results-reading
+    statement has already returned its result -- so it can only ever affect
+    a LATER call to get_kpis(), never split across the numerator/denominator
+    of the SAME call the way the old two-query implementation allowed.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.dashboard import get_kpis
+    from app.core.db import new_session
+    from app.models.lookup import ProviderResultRecord
+
+    provider_results_table = ProviderResultRecord.__table__
+    provider_id = _fresh_fake_provider_id()
+    injected = {"done": False}
+
+    original_execute = AsyncSession.execute
+
+    async def _injecting_execute(self, statement, *args, **kwargs):
+        result = await original_execute(self, statement, *args, **kwargs)
+        try:
+            froms = set(statement.get_final_froms())
+        except AttributeError:
+            froms = set()
+        if provider_results_table in froms and not injected["done"]:
+            injected["done"] = True
+            # A genuinely separate, unpatched session -- a real concurrent
+            # write landing exactly in what used to be the gap between the
+            # old implementation's attempts-count query and ok-count query.
+            async with new_session() as concurrent_db:
+                concurrent_db.add(
+                    ProviderResultRecord(
+                        lookup_id=fixture_lookup,
+                        provider_id=provider_id,
+                        provider_name=provider_id,
+                        category="threat_intel",
+                        status="ok",
+                        data={},
+                        from_cache=False,
+                    )
+                )
+                await concurrent_db.commit()
+        return result
+
+    AsyncSession.execute = _injecting_execute
+    try:
+        kpis = await get_kpis()
+    finally:
+        AsyncSession.execute = original_execute
+
+    assert injected["done"], "the injected concurrent write must actually have run during get_kpis()"
+    # A ratio can never legitimately be negative or exceed 100% -- get_kpis()
+    # must return a well-formed number even with a genuine concurrent write
+    # racing its single read of provider_results.
+    assert 0.0 <= kpis["provider_health_percentage"] <= 100.0
+
+    # The concurrent session's write must have actually committed (proving
+    # the injection itself, independent of get_kpis(), really happened).
+    async with new_session() as db:
+        injected_row_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(ProviderResultRecord)
+                .where(ProviderResultRecord.provider_id == provider_id)
+            )
+        ).scalar_one()
+    assert injected_row_count == 1, "the concurrent session's write must have actually committed"

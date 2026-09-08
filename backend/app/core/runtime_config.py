@@ -93,7 +93,9 @@ def _decrypt_credentials(row: ProviderRuntimeConfig) -> dict:
     return json.loads(raw) if raw else {}
 
 
-def _merge_credentials(row: ProviderRuntimeConfig, incoming: dict) -> dict:
+def _merge_credentials(
+    row: ProviderRuntimeConfig, incoming: dict, allowed_fields: Optional[list[str]] = None
+) -> dict:
     """Merges `incoming` onto the row's already-stored credentials rather
     than replacing the whole set -- confirmed live as a real bug (not
     hypothetical): the settings UI's per-field inputs start blank and only
@@ -108,7 +110,19 @@ def _merge_credentials(row: ProviderRuntimeConfig, incoming: dict) -> dict:
     showing a stale "Last test: OK." Only fields actually present in
     `incoming` are changed; anything not sent keeps its stored value.
     There is no "clear a credential" affordance in the UI today, so this
-    doesn't remove any reachable capability."""
+    doesn't remove any reachable capability.
+
+    `allowed_fields`, when given (callers pass the provider's declared field
+    list -- see IOC_PROVIDER_CREDENTIAL_FIELDS), rejects any incoming key
+    outside that list instead of silently merging it in. Real bug found
+    live: with no allow-list check here, POSTing a stray/misnamed field
+    (e.g. a client typo) to an IOC provider was accepted and permanently
+    persisted into that row's encrypted credential JSON right alongside the
+    real fields -- ProviderConfigRow.tsx only ever renders the fields listed
+    in IOC_PROVIDER_CREDENTIAL_FIELDS for that provider, so the stray field
+    could never again be seen or removed through the UI. Left as `None`
+    (no restriction) for AI providers, which this function also serves and
+    which have no equivalent declared-field registry today."""
     if not incoming:
         return _decrypt_credentials(row)
     merged = _decrypt_credentials(row)
@@ -128,6 +142,13 @@ def _merge_credentials(row: ProviderRuntimeConfig, incoming: dict) -> dict:
     # actually reachable before (there was never a way to deliberately
     # clear a field this way -- only to accidentally do so).
     non_blank_incoming = {k: v for k, v in incoming.items() if v}
+    if allowed_fields is not None:
+        unknown = sorted(set(non_blank_incoming) - set(allowed_fields))
+        if unknown:
+            raise ValueError(
+                f"Unknown credential field(s) for provider {getattr(row, 'provider_id', '?')!r}: "
+                f"{', '.join(unknown)}. Expected: {', '.join(allowed_fields) or '(none)'}."
+            )
     merged.update(non_blank_incoming)
     return merged
 
@@ -312,7 +333,7 @@ async def upsert_ai_provider(
                     # merged in from the stored row.
                     from app.core.url_safety import assert_safe_outbound_url
 
-                    assert_safe_outbound_url(merged["base_url"])
+                    await assert_safe_outbound_url(merged["base_url"])
                 row.encrypted_credentials = encrypt_secret(json.dumps(merged)) if merged else ""
                 if model_id is not None:
                     row.model_id = model_id
@@ -329,11 +350,24 @@ async def upsert_ai_provider(
 
 
 async def set_active_ai_backend(backend: str, *, actor_user_id=None, actor_email: Optional[str] = None) -> None:
+    # with_for_update() (see upsert_ai_provider's identical-purpose comment
+    # above) closes a real race here: without it, two concurrent callers each
+    # read the same "currently active" snapshot, each flip their own target
+    # row to True and every OTHER row to False in memory, and both commits
+    # succeed independently -- there's no unique constraint on is_active, so
+    # the DB can end up with two (or more) rows both True, violating this
+    # table's own documented invariant. Locking every AI row for the duration
+    # of the read-modify-write serializes concurrent calls: the second caller
+    # blocks on the SELECT until the first commits, then re-reads the
+    # first's already-applied result before applying its own -- so whichever
+    # call commits last always leaves exactly one row active, never two.
     if backend not in AI_BACKENDS:
         raise ValueError(f"Unknown AI backend {backend!r}")
     async with new_session() as db:
         rows = (
-            await db.execute(select(ProviderRuntimeConfig).where(ProviderRuntimeConfig.kind == ProviderKind.AI))
+            await db.execute(
+                select(ProviderRuntimeConfig).where(ProviderRuntimeConfig.kind == ProviderKind.AI).with_for_update()
+            )
         ).scalars().all()
         previous = next((r.provider_id for r in rows if r.is_active), None)
         found = False
@@ -349,21 +383,37 @@ async def set_active_ai_backend(backend: str, *, actor_user_id=None, actor_email
 
 
 async def record_ai_test_result(backend: str, ok: bool, message: str) -> None:
-    async with new_session() as db:
-        row = (
-            await db.execute(
-                select(ProviderRuntimeConfig).where(
-                    ProviderRuntimeConfig.kind == ProviderKind.AI, ProviderRuntimeConfig.provider_id == backend
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            row = ProviderRuntimeConfig(kind=ProviderKind.AI, provider_id=backend, provider_name=backend, enabled=True)
-            db.add(row)
-        row.last_test_at = datetime.now(timezone.utc)
-        row.last_test_ok = ok
-        row.last_test_message = message[:500]
-        await db.commit()
+    # Same with_for_update()-lock + IntegrityError-retry pattern as
+    # upsert_ai_provider() above, and for the identical reason: two
+    # concurrent first-ever calls for the same brand-new `backend` (no
+    # existing row yet) both find row=None and both try to INSERT, and the
+    # table's (kind, provider_id) unique constraint lets only one of those
+    # commits through -- the other used to raise an unhandled IntegrityError
+    # straight out to the HTTP caller (a bare 500) instead of just becoming a
+    # normal update once retried against the winner's now-committed row.
+    for attempt in range(2):
+        try:
+            async with new_session() as db:
+                row = (
+                    await db.execute(
+                        select(ProviderRuntimeConfig)
+                        .where(
+                            ProviderRuntimeConfig.kind == ProviderKind.AI, ProviderRuntimeConfig.provider_id == backend
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    row = ProviderRuntimeConfig(kind=ProviderKind.AI, provider_id=backend, provider_name=backend, enabled=True)
+                    db.add(row)
+                row.last_test_at = datetime.now(timezone.utc)
+                row.last_test_ok = ok
+                row.last_test_message = message[:500]
+                await db.commit()
+            break
+        except IntegrityError:
+            if attempt == 1:
+                raise
     await record_audit(
         "ai_provider.test", f"Test connection for '{backend}': {'succeeded' if ok else 'failed'}."
     )
@@ -433,7 +483,13 @@ async def upsert_ioc_provider(
                     row = ProviderRuntimeConfig(kind=ProviderKind.IOC, provider_id=provider_id, provider_name=provider_name, enabled=True)
                     db.add(row)
                 row.provider_name = provider_name or row.provider_name
-                merged = _merge_credentials(row, credentials)
+                # Allow-list is only enforced for provider_ids that actually
+                # declare a field list here -- a provider_id absent from
+                # IOC_PROVIDER_CREDENTIAL_FIELDS (a generic/custom provider,
+                # not one of this app's fixed built-in connectors) keeps the
+                # pre-existing "accept whatever fields it's given" behavior,
+                # matching _is_fully_configured's identical fallback below.
+                merged = _merge_credentials(row, credentials, IOC_PROVIDER_CREDENTIAL_FIELDS.get(provider_id))
                 row.encrypted_credentials = encrypt_secret(json.dumps(merged)) if merged else ""
                 if extra_config is not None:
                     row.extra_config = extra_config
@@ -452,20 +508,38 @@ async def upsert_ioc_provider(
 async def set_ioc_provider_enabled(
     provider_id: str, enabled: bool, *, actor_user_id=None, actor_email: Optional[str] = None
 ) -> None:
-    async with new_session() as db:
-        row = (
-            await db.execute(
-                select(ProviderRuntimeConfig).where(
-                    ProviderRuntimeConfig.kind == ProviderKind.IOC, ProviderRuntimeConfig.provider_id == provider_id
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            row = ProviderRuntimeConfig(kind=ProviderKind.IOC, provider_id=provider_id, provider_name=provider_id, enabled=enabled)
-            db.add(row)
-        else:
-            row.enabled = enabled
-        await db.commit()
+    # Same with_for_update()-lock + IntegrityError-retry pattern as
+    # upsert_ioc_provider() above, and for the identical reason: two
+    # concurrent first-ever calls for the same brand-new `provider_id` (no
+    # existing row yet -- e.g. an IOC provider added to the codebase after
+    # this install's original seed_from_env_if_empty() ran) both find
+    # row=None and both try to INSERT, and the table's (kind, provider_id)
+    # unique constraint lets only one of those commits through -- the other
+    # used to raise an unhandled IntegrityError straight out to the HTTP
+    # caller (a bare 500) instead of just becoming a normal update once
+    # retried against the winner's now-committed row.
+    for attempt in range(2):
+        try:
+            async with new_session() as db:
+                row = (
+                    await db.execute(
+                        select(ProviderRuntimeConfig)
+                        .where(
+                            ProviderRuntimeConfig.kind == ProviderKind.IOC, ProviderRuntimeConfig.provider_id == provider_id
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    row = ProviderRuntimeConfig(kind=ProviderKind.IOC, provider_id=provider_id, provider_name=provider_id, enabled=enabled)
+                    db.add(row)
+                else:
+                    row.enabled = enabled
+                await db.commit()
+            break
+        except IntegrityError:
+            if attempt == 1:
+                raise
     await record_audit(
         "ioc_provider.enable" if enabled else "ioc_provider.disable",
         f"{'Enabled' if enabled else 'Disabled'} IOC provider '{provider_id}'.",
@@ -475,21 +549,33 @@ async def set_ioc_provider_enabled(
 
 
 async def record_ioc_test_result(provider_id: str, ok: bool, message: str) -> None:
-    async with new_session() as db:
-        row = (
-            await db.execute(
-                select(ProviderRuntimeConfig).where(
-                    ProviderRuntimeConfig.kind == ProviderKind.IOC, ProviderRuntimeConfig.provider_id == provider_id
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            row = ProviderRuntimeConfig(kind=ProviderKind.IOC, provider_id=provider_id, provider_name=provider_id, enabled=True)
-            db.add(row)
-        row.last_test_at = datetime.now(timezone.utc)
-        row.last_test_ok = ok
-        row.last_test_message = message[:500]
-        await db.commit()
+    # Same with_for_update()-lock + IntegrityError-retry pattern as
+    # upsert_ioc_provider() above -- see set_ioc_provider_enabled()'s
+    # identical-purpose comment for why this is needed for a brand-new
+    # `provider_id` with no existing row yet.
+    for attempt in range(2):
+        try:
+            async with new_session() as db:
+                row = (
+                    await db.execute(
+                        select(ProviderRuntimeConfig)
+                        .where(
+                            ProviderRuntimeConfig.kind == ProviderKind.IOC, ProviderRuntimeConfig.provider_id == provider_id
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    row = ProviderRuntimeConfig(kind=ProviderKind.IOC, provider_id=provider_id, provider_name=provider_id, enabled=True)
+                    db.add(row)
+                row.last_test_at = datetime.now(timezone.utc)
+                row.last_test_ok = ok
+                row.last_test_message = message[:500]
+                await db.commit()
+            break
+        except IntegrityError:
+            if attempt == 1:
+                raise
     await record_audit(
         "ioc_provider.test", f"Test connection for '{provider_id}': {'succeeded' if ok else 'failed'}."
     )

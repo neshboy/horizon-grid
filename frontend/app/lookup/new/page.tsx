@@ -18,6 +18,7 @@ import type {
   ProviderSummary,
 } from "@/lib/types";
 import { cn, verdictColor } from "@/lib/utils";
+import { runEffectOnce, type OnceGuard } from "@/lib/runEffectOnce";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ThreatScoreGauge } from "@/components/dashboard/ThreatScoreGauge";
 import { ProviderProgressTracker } from "@/components/dashboard/ProviderProgressTracker";
@@ -71,6 +72,10 @@ function LookupNewPageInner() {
   const [providerHealth, setProviderHealth] = useState<Array<{ supported_types: string[] }> | null>(null);
   const [highlightedEvidenceIds, setHighlightedEvidenceIds] = useState<string[] | undefined>(undefined);
   const eventCounter = useRef(0);
+  // Tracks the single real streamLookup() call started below, surviving
+  // React 18 Strict Mode's dev-only double-invoke of the effect that starts
+  // it -- see lib/runEffectOnce.ts for why this is needed and how it works.
+  const streamGuardRef = useRef<OnceGuard<AbortController> | null>(null);
 
   useEffect(() => {
     getProviderHealth()
@@ -98,52 +103,72 @@ function LookupNewPageInner() {
       return;
     }
 
-    const controller = new AbortController();
-
-    streamLookup(
-      rawValue.trim(),
-      {
-        onDetected: (payload) => {
-          setLookupId(payload.lookup_id);
-          setIocValue(payload.ioc_value);
-          setIocType(payload.ioc_type);
-          logEvent(`detected: ${payload.ioc_type}`);
-        },
-        onProviderResult: (payload) => {
-          setProviderResults((prev) => ({ ...prev, [payload.provider_id]: payload }));
-          logEvent(`provider_result: ${payload.provider_id} (${payload.status})`);
-        },
-        onProviderSummary: (payload) => {
-          setProviderSummaries((prev) => ({ ...prev, [payload.provider_id]: payload }));
-          logEvent(`provider_summary: ${payload.provider_id}`);
-        },
-        onCorrelation: (payload) => {
-          setCorrelation(payload);
-          logEvent(`correlation: ${payload.nodes.length} nodes / ${payload.edges.length} edges`);
-        },
-        onFinalAssessment: (payload) => {
-          setFinalAssessment(payload);
-          logEvent(`final_assessment: verdict=${payload.final_verdict}`);
-        },
-        onDone: () => {
-          setIsDone(true);
-          logEvent("done");
-        },
-        onError: (payload) => {
-          setStreamError(payload.message);
-          logEvent(`error: ${payload.message}`);
-        },
-        onAuthExpired: () => {
-          router.replace(`/login?next=${encodeURIComponent(`/lookup/new?value=${rawValue}`)}`);
-        },
+    // Real P1 found live: starting the SSE stream is a real, non-idempotent
+    // POST /api/v1/lookup/stream call -- the backend fully processes it (one
+    // IOCLookup row, the whole provider fan-out, the whole AI pipeline)
+    // essentially as soon as it's received, well before this effect's
+    // cleanup has a chance to call controller.abort(). React 18 Strict Mode
+    // (dev only -- reactStrictMode in next.config.js, running live here via
+    // docker-compose's `npm run dev`) intentionally double-invokes this
+    // effect on first mount (setup -> cleanup -> setup) to surface exactly
+    // this class of bug: without runEffectOnce() below, that second setup
+    // call fired a second, real streamLookup() for the same value, confirmed
+    // live via network capture (2 identical POST bodies ~3ms apart) and via
+    // the database (2 distinct IOCLookup rows per single UI search, most
+    // runs) -- doubling real provider/AI cost and burning 2 of the user's
+    // 10-per-60s lookup:create rate-limit slots for one search. See
+    // lib/runEffectOnce.ts for exactly how the guard tells Strict Mode's
+    // transient double-invoke apart from a genuine unmount.
+    return runEffectOnce(
+      streamGuardRef,
+      () => {
+        const controller = new AbortController();
+        streamLookup(
+          rawValue.trim(),
+          {
+            onDetected: (payload) => {
+              setLookupId(payload.lookup_id);
+              setIocValue(payload.ioc_value);
+              setIocType(payload.ioc_type);
+              logEvent(`detected: ${payload.ioc_type}`);
+            },
+            onProviderResult: (payload) => {
+              setProviderResults((prev) => ({ ...prev, [payload.provider_id]: payload }));
+              logEvent(`provider_result: ${payload.provider_id} (${payload.status})`);
+            },
+            onProviderSummary: (payload) => {
+              setProviderSummaries((prev) => ({ ...prev, [payload.provider_id]: payload }));
+              logEvent(`provider_summary: ${payload.provider_id}`);
+            },
+            onCorrelation: (payload) => {
+              setCorrelation(payload);
+              logEvent(`correlation: ${payload.nodes.length} nodes / ${payload.edges.length} edges`);
+            },
+            onFinalAssessment: (payload) => {
+              setFinalAssessment(payload);
+              logEvent(`final_assessment: verdict=${payload.final_verdict}`);
+            },
+            onDone: () => {
+              setIsDone(true);
+              logEvent("done");
+            },
+            onError: (payload) => {
+              setStreamError(payload.message);
+              logEvent(`error: ${payload.message}`);
+            },
+            onAuthExpired: () => {
+              router.replace(`/login?next=${encodeURIComponent(`/lookup/new?value=${rawValue}`)}`);
+            },
+          },
+          controller.signal
+        ).catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setStreamError(err instanceof Error ? err.message : "Unknown streaming error");
+        });
+        return controller;
       },
-      controller.signal
-    ).catch((err: unknown) => {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      setStreamError(err instanceof Error ? err.message : "Unknown streaming error");
-    });
-
-    return () => controller.abort();
+      (controller) => controller.abort()
+    );
     // rawValue is derived once from the query param at mount; re-running this
     // effect is only desired if the user navigates to a brand new ?value=.
   }, [rawValue]);

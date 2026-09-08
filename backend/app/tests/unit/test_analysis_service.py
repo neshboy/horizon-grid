@@ -11,7 +11,13 @@ DisagreementSummary) so tests exercise real nested-model traversal, not a
 fabricated stand-in schema.
 """
 from app.ai.analysis_schemas import DisagreementSummary, ReasonWithEvidence, WhyMaliciousExplanation
-from app.ai.analysis_service import _backfill_evidence_ids_from_prose, _strip_invalid_evidence_ids
+from app.ai.analysis_service import (
+    _MAX_ANALYST_NOTE_LEN,
+    _MAX_ANALYST_NOTES_KEPT,
+    _backfill_evidence_ids_from_prose,
+    _prune_analyst_notes_for_prompt,
+    _strip_invalid_evidence_ids,
+)
 
 
 def test_strips_evidence_id_not_in_real_ids():
@@ -112,3 +118,59 @@ class TestBackfillEvidenceIdsFromProse:
         )
         result = _backfill_evidence_ids_from_prose(summary, real_ids={"real-1"})
         assert result.evidence_ids == []
+
+
+class TestPruneAnalystNotesForPrompt:
+    """Regression tests for the confirmed P2: unlike every other input fed
+    into an AI prompt in this codebase (see app/ai/service.py's
+    _prune_for_prompt/_prune_ioc_value_for_prompt, and this same function's
+    own edges[:100] slicing), answer_copilot_question() used to join the
+    entire, caller-supplied analyst_notes list into the prompt verbatim with
+    zero truncation. The frontend resends the full, ever-growing Q&A
+    transcript on every Copilot call, so an unbounded prompt here grows
+    roughly linearly with turn count for the life of a session, eventually
+    hitting HTTP 413 on token-budgeted backends (Groq) or silently starving
+    real context under Ollama's num_ctx clamp."""
+
+    def test_empty_notes_render_placeholder(self):
+        assert _prune_analyst_notes_for_prompt([]) == "(no analyst notes yet)"
+
+    def test_small_notes_list_passes_through_untouched(self):
+        notes = ["Q: is this IP known? A: yes, seen in feed X.", "Q: source? A: AbuseIPDB."]
+        rendered = _prune_analyst_notes_for_prompt(notes)
+        assert rendered == "- " + notes[0] + "\n- " + notes[1]
+        assert "truncated" not in rendered
+
+    def test_caps_total_number_of_retained_notes(self):
+        # Simulates a long-running Copilot session where the frontend has
+        # resent the full, ever-growing turn history: before the fix, ALL of
+        # these reached the prompt verbatim with no limit whatsoever.
+        notes = [f"Q: question {i}? A: answer {i}." for i in range(500)]
+
+        rendered = _prune_analyst_notes_for_prompt(notes)
+
+        kept_lines = [line for line in rendered.split("\n") if line.startswith("- ")]
+        assert len(kept_lines) == _MAX_ANALYST_NOTES_KEPT, (
+            "must retain at most _MAX_ANALYST_NOTES_KEPT notes, not the full, ever-growing list"
+        )
+        assert "truncated" in rendered
+        # Most recent turns are the relevant ones for the CURRENT question --
+        # confirm the tail (not the head) of the list survived.
+        assert "question 499" in rendered
+        assert "question 0" not in rendered
+
+    def test_caps_length_of_a_single_oversized_note(self):
+        # A single crafted note can be arbitrarily large (bounded only by the
+        # app-wide 10MB body cap) even with just one turn in the session.
+        huge_note = "A" * 50_000
+        rendered = _prune_analyst_notes_for_prompt([huge_note])
+        assert len(rendered) < len(huge_note)
+        assert "truncated" in rendered
+        assert f"{len(huge_note)} chars total" in rendered
+
+    def test_realistic_short_note_is_not_truncated(self):
+        note = "Q: any related infrastructure? A: yes, 3 correlated domains via shared cert."
+        assert len(note) < _MAX_ANALYST_NOTE_LEN
+        rendered = _prune_analyst_notes_for_prompt([note])
+        assert rendered == f"- {note}"
+        assert "truncated" not in rendered

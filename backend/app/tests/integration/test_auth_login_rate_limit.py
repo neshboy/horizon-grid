@@ -132,3 +132,48 @@ async def test_legitimate_logins_within_the_limit_are_unaffected(client):
             assert "access_token" in response.json()
     finally:
         await _delete_user(user_id)
+
+
+@pytest.mark.asyncio
+async def test_correct_password_is_not_locked_out_by_an_attackers_wrong_password_noise(client):
+    """Regression test for a P1: the per-email limiter used to be checked
+    BEFORE the password was verified, so a caller supplying the correct
+    password got the exact same 429 as an attacker who never supplied a
+    valid credential at all, once that shared per-email window was
+    exhausted. That meant an unauthenticated attacker who only knows a
+    victim's email (never their password) could indefinitely deny that
+    real account the ability to log in -- directly contradicting this
+    endpoint's own comment that a fixed-window limiter "can never itself
+    become a way to lock a real admin out."
+
+    This reproduces that exact scenario: an attacker exhausts the shared
+    per-email window with wrong-password noise (no knowledge of the real
+    password needed), and then the legitimate owner -- supplying the
+    100% correct password -- must still be able to log in rather than
+    receiving the attacker-triggered 429.
+    """
+    settings = get_settings()
+    email = _unique_email("qa-login-owner-vs-attacker")
+    created = await create_user(email, "the-real-password-1", "QA Owner", Role.ANALYST, None, "actor@qa.test")
+    user_id = uuid.UUID(created["id"])
+    try:
+        # Attacker: exhausts the per-email window with wrong-password noise,
+        # never supplying the real credential.
+        for _ in range(settings.login_rate_limit_max_attempts):
+            response = await client.post(f"{API}/auth/login", json={"email": email, "password": "wrong-password"})
+            assert response.status_code == 401
+        attacker_blocked = await client.post(
+            f"{API}/auth/login", json={"email": email, "password": "wrong-password"}
+        )
+        assert attacker_blocked.status_code == 429, "sanity check: the shared window must actually be exhausted"
+
+        # Real owner: same email, correct password, same exhausted window.
+        # Before the fix this also came back 429; it must succeed.
+        owner_login = await client.post(f"{API}/auth/login", json={"email": email, "password": "the-real-password-1"})
+        assert owner_login.status_code == 200, (
+            "the legitimate owner's correct password must never be blocked by an "
+            "unauthenticated attacker's wrong-password noise against the same email"
+        )
+        assert "access_token" in owner_login.json()
+    finally:
+        await _delete_user(user_id)

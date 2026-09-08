@@ -21,12 +21,26 @@ spec:
         - name: celery-worker
           image: ioc-intel-platform/backend:latest
           imagePullPolicy: IfNotPresent
+          # --concurrency: without this, Celery's prefork pool defaults to
+          # multiprocessing.cpu_count() -- see docker-compose.yml's
+          # celery_worker.command comment for the full live-confirmed repro
+          # (a 32-core host pinned the container at ~970-1015MiB/99% of its
+          # 1g-equivalent memory limit below, at 0% CPU, purely from
+          # per-process Python/import overhead x32 forked children, before a
+          # single task ever ran). A real k8s worker node routinely has more
+          # cores than a modest docker-compose/dev host, so this pod is at
+          # least as exposed to the same OOM as the docker-compose service
+          # was pre-fix. Run via `sh -c` (matching backend-deployment.yaml's
+          # own pattern for MSF_RPC_PASSWORD) so CELERY_WORKER_CONCURRENCY can
+          # override the default of 4 -- set it in configmap.yaml/the
+          # environment if a deployment adds more/heavier scheduled task
+          # types later, exactly like docker-compose.yml's own override.
           command:
-            - "celery"
-            - "-A"
-            - "app.workers.celery_app"
-            - "worker"
-            - "--loglevel=info"
+            - "sh"
+            - "-c"
+            - >-
+              celery -A app.workers.celery_app worker --loglevel=info
+              --concurrency=${CELERY_WORKER_CONCURRENCY:-4}
           envFrom:
             - configMapRef:
                 name: ioc-intel-config

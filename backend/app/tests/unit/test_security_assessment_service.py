@@ -47,8 +47,14 @@ def test_accepts_matching_confirmation_for_a_scannable_type():
 
 
 def test_accepts_a_small_cidr_at_exactly_the_cap():
-    lookup = _lookup("10.0.0.0/28", "cidr")  # exactly 16 addresses
-    assert _validate_scope(lookup, "10.0.0.0/28", True) == IOCType.CIDR
+    # 8.8.8.0/28 -- exactly 16 addresses, all within Google's globally-
+    # routable 8.8.8.0/24 block (same address family this suite already
+    # uses elsewhere, e.g. test_accepts_a_real_globally_routable_ipv4_target,
+    # as the established "known-public" test range). Must NOT be an RFC1918
+    # range here: see test_rejects_a_private_rfc1918_cidr_target below for
+    # why that matters.
+    lookup = _lookup("8.8.8.0/28", "cidr")
+    assert _validate_scope(lookup, "8.8.8.0/28", True) == IOCType.CIDR
 
 
 def test_rejects_a_cidr_larger_than_the_cap():
@@ -128,3 +134,20 @@ def test_rejects_url_target_resolving_to_internal_docker_service(monkeypatch):
     lookup = _lookup("http://opensearch:9200/_cluster/health", "url")
     with pytest.raises(UnsafeTargetError):
         _validate_scope(lookup, "http://opensearch:9200/_cluster/health", True)
+
+
+def test_rejects_a_private_rfc1918_cidr_target():
+    """Regression test for the CIDR-typed sibling of the SSRF bug above:
+    _validate_scope's CIDR branch size-checked the network but never called
+    assert_globally_routable_target the way the IPV4/IPV6/DOMAIN/HOSTNAME/
+    URL branch does. Confirmed live: a lookup of ioc_value='172.19.0.0/28'
+    (auto-detected as ioc_type=cidr by app/ioc/detector.py for any value
+    containing '/' that parses as a network -- no special hint needed) was
+    accepted by _validate_scope and went on to a real nmap scan of this
+    deployment's own docker-compose subnet, returning genuine open ports
+    (Postgres, etc.) on sibling containers as if they were an external
+    finding. A CIDR-typed target must be rejected exactly like a directly
+    IPV4/IPV6-typed one would be for the same underlying address range."""
+    lookup = _lookup("172.19.0.0/28", "cidr")
+    with pytest.raises(UnsafeTargetError):
+        _validate_scope(lookup, "172.19.0.0/28", True)

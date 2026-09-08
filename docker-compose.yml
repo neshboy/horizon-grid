@@ -269,7 +269,22 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    command: celery -A app.workers.celery_app worker --loglevel=info
+    # --concurrency: without this, Celery's prefork pool defaults to
+    # multiprocessing.cpu_count() -- confirmed live on a 32-core host that
+    # this alone (before running a single task) pins the container at
+    # ~970-1015MiB/99% of the 1g mem_limit above at 0% CPU, just from
+    # per-process Python/import overhead x32 forked children, leaving
+    # almost no headroom for real task execution (httpx connections, DB
+    # sessions, AI calls) and risking an OOM-kill under any concurrent
+    # load rather than a genuine leak. This worker only ever runs one task
+    # type (app.workers.tasks.run_osint_crawl, scheduled hourly by
+    # celery_beat below, and itself already internally concurrent via
+    # asyncio/httpx rather than fanning out into separate Celery tasks --
+    # see tasks.py), so a small fixed pool comfortably covers a normal
+    # run plus overlap from a manual/retry trigger without needing to
+    # scale with host core count. Overridable via CELERY_WORKER_CONCURRENCY
+    # for a deployment that adds more/heavier scheduled task types later.
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-4}
     restart: unless-stopped
 
   celery_beat:

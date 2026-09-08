@@ -145,6 +145,33 @@ async def test_viewer_cannot_disable_another_users_account_idor(client):
 
 
 @pytest.mark.asyncio
+async def test_admin_cannot_disable_their_own_account_via_api(client):
+    """Sibling of test_analyst_cannot_promote_self_to_admin_via_api above:
+    an ADMIN targets their OWN user_id on the /active endpoint with
+    is_active=false. Must be rejected (400) at the service layer the same
+    way a self-role-change is, not silently accepted just because the
+    caller does hold user:manage -- a self-target check, not a permission
+    check, is what has to catch this one."""
+    admin_id, admin_email, admin_token = await _make_user(Role.ADMIN, "qa-self-disable-api")
+    try:
+        response = await client.post(
+            f"{API}/admin/users/{admin_id}/active", json={"is_active": False}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 400
+
+        from sqlalchemy import select
+
+        from app.core.db import new_session
+        from app.models.user import User
+
+        async with new_session() as db:
+            user = (await db.execute(select(User).where(User.id == admin_id))).scalar_one()
+            assert user.is_active is True, "the caller's own account must be untouched after a rejected self-disable"
+    finally:
+        await _delete_user(admin_id)
+
+
+@pytest.mark.asyncio
 async def test_admin_endpoints_reject_an_unauthenticated_request(client):
     response = await client.get(f"{API}/admin/users")
     assert response.status_code in (401, 403)

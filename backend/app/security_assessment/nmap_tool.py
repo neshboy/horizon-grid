@@ -42,6 +42,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
+from app.core.url_safety import resolve_safe_address
 from app.ioc.types import IOCType
 from app.security_assessment.base import Finding, ScanProfile, SecurityAssessmentTool, ToolRunResult
 from app.security_assessment.vuln_intel import search_cves_by_service
@@ -115,7 +116,15 @@ class NmapTool(SecurityAssessmentTool):
     async def is_available(self) -> bool:
         return shutil.which("nmap") is not None
 
-    async def run(self, target: str, ioc_type: IOCType, profile_id: str) -> ToolRunResult:
+    async def run(self, target: str, ioc_type: IOCType, profile_id: str, allow_private: bool = False) -> ToolRunResult:
+        """`allow_private`: see resolve_safe_address's own docstring. Only
+        the Pentest Suite orchestrator sets this True, and only after its
+        own scope-authorization check for this exact target -- the
+        per-lookup Security Assessment Toolkit never sets it, so its
+        behavior (reject a DOMAIN/HOSTNAME target that resolves privately)
+        is completely unchanged. IPV4/IPV6/CIDR targets never call
+        resolve_safe_address at all (see the comment below), so this only
+        actually changes anything for DOMAIN/HOSTNAME targets."""
         if target.startswith("-"):
             # Confirmed live during overnight QA (CWE-88): nmap's own argv
             # parser -- not a shell -- treats a leading '-' as the start of
@@ -148,15 +157,56 @@ class NmapTool(SecurityAssessmentTool):
         if profile_id not in _PROFILE_ARGS:
             return self._error(target, ioc_type, ProviderStatus.ERROR, f"Unknown scan profile: {profile_id!r}")
 
+        # Resolve a DOMAIN/HOSTNAME target to a single, just-validated
+        # address ONCE here, then pass THAT exact address to nmap as the
+        # real scan target -- never let the real nmap binary perform its
+        # own, later, independent DNS resolution of the same (potentially
+        # attacker-controlled) hostname. This mirrors tls_tool.py's own
+        # _connect_sync and closes the same confirmed DNS-rebinding TOCTOU
+        # documented on resolve_safe_address's docstring: app/core/
+        # security_assessment.py's _validate_scope checks this hostname
+        # exactly once, well before this coroutine ever runs (a separately
+        # scheduled background task, possibly queued behind the 4-slot
+        # semaphore) -- a caller who controls this hostname's DNS (TTL=0 /
+        # rapid rebind) could otherwise return a safe public address for
+        # that earlier check and a private/internal address for nmap's own
+        # later resolution. IPV4/IPV6 targets are already IP literals (no
+        # DNS involved either way) and a CIDR target is validated per-
+        # address, up front, by _validate_scope -- neither needs this.
+        scan_target = target
+        if ioc_type in (IOCType.DOMAIN, IOCType.HOSTNAME):
+            # resolve_safe_address is a plain synchronous function (a real
+            # blocking DNS lookup, same as socket.getaddrinfo) -- run it in
+            # a worker thread via asyncio.to_thread, exactly like
+            # tls_tool.py's own _connect_sync, rather than calling it
+            # directly on this coroutine's event loop thread and freezing
+            # every other concurrent request the backend is serving for the
+            # duration of the lookup (see app/core/url_safety.py's own
+            # assert_safe_outbound_url docstring for a measured example of
+            # that exact failure mode).
+            try:
+                scan_target = await asyncio.to_thread(resolve_safe_address, target, allow_private=allow_private)
+            except ValueError as exc:
+                return self._error(
+                    target, ioc_type, ProviderStatus.ERROR, f"Refusing to scan {target!r}: {exc}"
+                )
+
         # nmap requires an explicit "-6" flag for any IPv6 literal target --
         # without it, nmap treats the argument as malformed, prints a
         # warning to stderr, and exits 0 having scanned 0 hosts. Confirmed
         # live: this was previously silently reported as a normal
         # "completed, 0 findings" result, indistinguishable from a real
         # clean scan, even though supported_types above has always claimed
-        # IPv6 support and no scan of any kind ever actually ran.
-        ipv6_flag = ["-6"] if ioc_type == IOCType.IPV6 else []
-        argv = ["nmap", "-oX", "-", *ipv6_flag, *_PROFILE_ARGS[profile_id], target]
+        # IPv6 support and no scan of any kind ever actually ran. Checked
+        # against the actual resolved scan_target (not just ioc_type==IPV6)
+        # so a DOMAIN/HOSTNAME target that resolve_safe_address pinned to an
+        # IPv6-only address above also gets the flag it needs.
+        try:
+            resolved_is_ipv6 = ipaddress.ip_address(scan_target).version == 6
+        except ValueError:
+            resolved_is_ipv6 = False
+        ipv6_flag = ["-6"] if resolved_is_ipv6 else []
+        argv = ["nmap", "-oX", "-", *ipv6_flag, *_PROFILE_ARGS[profile_id], scan_target]
         timeout_seconds = _timeout_for(target, ioc_type)
         try:
             proc = await asyncio.create_subprocess_exec(

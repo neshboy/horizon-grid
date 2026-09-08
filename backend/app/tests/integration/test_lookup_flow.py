@@ -29,24 +29,47 @@ from app.ioc.types import IOCType
 from app.providers.base import BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
 from app.providers.orchestrator import run_all_providers, run_all_providers_collected
 
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-
-
-def _redis_reachable() -> bool:
+def _reachable(host: str, port: int) -> bool:
     """Best-effort real TCP probe -- distinct from app.core.cache, which lazily
     opens its connection on first use and would not fail fast here."""
     import socket
 
     try:
-        with socket.create_connection((REDIS_HOST, REDIS_PORT), timeout=1.0):
+        with socket.create_connection((host, port), timeout=1.0):
             return True
     except OSError:
         return False
 
 
+def _resolve_redis_host_port():
+    """Prefer the real in-docker-network `redis:6379` hostname -- reachable
+    when this test runs INSIDE the backend container via `docker compose
+    exec`, which is both this project's documented dev workflow and its own
+    CI's "integration-docker" job. Falls back to the docker-compose
+    HOST-published port (localhost:6379) for a developer invoking pytest
+    directly on the bare host, outside any container.
+
+    Bug this fixes: this module used to hardcode ONLY "localhost", 6379 --
+    which happens to be the same port number Redis's host-published mapping
+    also uses, but "localhost" still resolves to the container's OWN
+    loopback from inside the backend container, where nothing listens on
+    6379 (confirmed live: only the in-network `redis` hostname routes to
+    the real Redis instance from in there). That made the skipif below
+    always evaluate to True whenever this file was run the documented way
+    (`docker compose exec backend python -m pytest ...`), so every test in
+    it silently skipped there -- never actually executing anywhere in the
+    automated pipeline.
+    """
+    if _reachable("redis", 6379):
+        return "redis", 6379
+    return "localhost", 6379
+
+
+REDIS_HOST, REDIS_PORT = _resolve_redis_host_port()
+
+
 pytestmark = pytest.mark.skipif(
-    not _redis_reachable(),
+    not _reachable(REDIS_HOST, REDIS_PORT),
     reason=f"Redis not reachable at {REDIS_HOST}:{REDIS_PORT} -- run `docker compose up -d redis` first.",
 )
 
@@ -266,6 +289,39 @@ async def clean_redis_cache():
     await _flush()
     await client.aclose()
     cache_module._pool = None
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _fresh_db_engine_per_test():
+    """This module's own docstring says Postgres is never touched, but
+    run_all_providers() (app/providers/orchestrator.py) unconditionally
+    calls get_ioc_provider_snapshot() (app/core/runtime_config.py) before
+    dispatching to any provider -- a real SELECT against the real Postgres
+    this docker-compose stack's backend container talks to, every single
+    call, regardless of which fake providers are passed in. That dependency
+    was never exercised by this file before the fix to its own Redis-only
+    skipif guard (see _resolve_redis_host_port above): every test in this
+    module used to unconditionally skip inside the backend container, so
+    this gap was never caught here.
+    app.core.db's module-global engine/sessionmaker is created lazily and
+    bound to whatever asyncio event loop was running on first use; since
+    pytest-asyncio (in strict/function mode) gives each test function its
+    own event loop, a pool created in one test is reused -- against a now-
+    closed loop -- by the next one, raising "RuntimeError: ... attached to
+    a different loop" (confirmed live: the second Postgres-touching test in
+    this file failed exactly that way when run after the first). Mirrors
+    clean_redis_cache's identical-purpose reset above, and the
+    `_fresh_engine_per_test` fixture already used by most sibling
+    integration test files (e.g. test_basket_compare_status_filter.py,
+    test_security_assessment_api.py) for this same reason.
+    """
+    import app.core.db as db_module
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    db_module._engine = create_async_engine(get_settings().database_url, pool_pre_ping=True, echo=False)
+    db_module._SessionLocal = async_sessionmaker(bind=db_module._engine, expire_on_commit=False, class_=AsyncSession)
+    yield
+    await db_module._engine.dispose()
 
 
 # --------------------------------------------------------------------------

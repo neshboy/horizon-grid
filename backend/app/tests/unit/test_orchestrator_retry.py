@@ -28,16 +28,17 @@ class _FlakyProvider(BaseProvider):
     requires_key = False
     configured = True
 
-    def __init__(self, fail_times: int) -> None:
+    def __init__(self, fail_times: int, exc_cls: type[Exception] = httpx.ConnectError) -> None:
         super().__init__()
         self._fail_times = fail_times
+        self._exc_cls = exc_cls
         self.call_count = 0
 
     async def fetch(self, ioc_value, ioc_type, client):
         self.call_count += 1
         if self.call_count <= self._fail_times:
             request = httpx.Request("GET", "https://example.test")
-            raise httpx.ConnectError("connection refused", request=request)
+            raise self._exc_cls("connection refused", request=request)
         return ProviderResult(
             provider_id=self.provider_id,
             provider_name=self.provider_name,
@@ -84,3 +85,22 @@ async def test_exhausting_every_retry_degrades_cleanly_to_error_not_a_crash(clie
     assert result.status == ProviderStatus.ERROR
     assert "Connection error after retries" in result.error_message
     assert provider.call_count == settings.provider_max_retries + 1
+
+
+@pytest.mark.asyncio
+async def test_a_connect_timeout_is_retried_and_can_still_succeed(client):
+    """Regression test for a real bug: RETRYABLE_EXCEPTIONS in
+    app/providers/base.py omitted httpx.ConnectTimeout (and its sibling
+    httpx.WriteTimeout), even though it is the exact exception httpx raises
+    when a connection attempt itself times out (e.g. against an unreachable
+    host) -- confirmed live against 192.0.2.1 (RFC 5737 TEST-NET-1).
+    Before the fix, BaseProvider.run()'s generic `except Exception` caught
+    ConnectTimeout before the orchestrator's tenacity retry loop ever saw
+    it, so fetch() was invoked exactly once instead of being retried up to
+    provider_max_retries times. This mirrors
+    test_a_transient_connect_error_is_retried_and_can_still_succeed above,
+    but for httpx.ConnectTimeout specifically."""
+    provider = _FlakyProvider(fail_times=1, exc_cls=httpx.ConnectTimeout)  # fails once, then succeeds
+    result = await orchestrator_module._run_with_policy(provider, "1.2.3.4", IOCType.IPV4, client)
+    assert result.status == ProviderStatus.OK
+    assert provider.call_count == 2, "must have retried after the first ConnectTimeout instead of giving up immediately"

@@ -30,12 +30,17 @@ k8s/base/
 - `configmap.yaml` holds everything non-sensitive: service hostnames/ports
   (`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`), broker/cache URLs
   (`REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`), `NEO4J_URI`,
-  `OPENSEARCH_URL`, and the Bedrock model/region settings.
+  `OPENSEARCH_URL`, the AI backend selector (`AI_BACKEND`), Ollama's
+  connection info (`OLLAMA_BASE_URL`, `OLLAMA_MODEL`), and the model-ID
+  settings for every alternative AI backend (Bedrock, Gemini, Anthropic,
+  Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter).
 - The Secret (`ioc-intel-secrets`) holds everything with a credential in it:
   `DATABASE_URL` (embeds the postgres password), `POSTGRES_PASSWORD`,
-  `NEO4J_PASSWORD`, `JWT_SECRET_KEY`, AWS keys, and every provider API key
-  from `.env.example` (VirusTotal, AbuseIPDB, OTX, NVD, abuse.ch, and the
-  paid/stub providers).
+  `NEO4J_PASSWORD`, `JWT_SECRET_KEY`, `ENCRYPTION_MASTER_KEY`,
+  `MSF_RPC_PASSWORD`, AWS/Bedrock keys, the API key for every alternative AI
+  backend (Gemini, Anthropic, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral,
+  OpenRouter), and every provider API key from `.env.example` (VirusTotal,
+  AbuseIPDB, OTX, NVD, abuse.ch, and the paid/stub providers).
 - `backend`, `celery-worker`, and `celery-beat` all consume both via
   `envFrom` (a `configMapRef` + a `secretRef`), exactly mirroring how
   docker-compose merges `environment:` and `env_file: .env`.
@@ -92,10 +97,15 @@ kubectl kustomize k8s/base
 - **Images**: `backend-deployment.yaml`, `celery-worker-deployment.yaml`,
   `celery-beat-deployment.yaml`, and `frontend-deployment.yaml` reference
   `ioc-intel-platform/backend:latest` and `ioc-intel-platform/frontend:latest`.
-  Build and push these from `backend/Dockerfile` and a `frontend/Dockerfile`
-  (production build: `npm run build && npm start`, not the docker-compose dev
-  command) to a registry your cluster can pull from, then update the image
-  references (and pin a real tag instead of `latest`).
+  Build and push these from `backend/Dockerfile` and `frontend/Dockerfile` to
+  a registry your cluster can pull from, then update the image references
+  (and pin a real tag instead of `latest`). For the frontend, do NOT use
+  `npm run build && npm start`: `next.config.js` sets `output: "standalone"`,
+  which `next start` does not serve correctly. `frontend-deployment.yaml`'s
+  `command` already does the right sequence (build, copy `public/` and
+  `.next/static` into the standalone output, then run
+  `node .next/standalone/server.js`), matching `docker-compose.prod.yml`'s
+  `frontend.command` -- keep both in sync if you change one.
 - **Ingress**: `ingress.yaml` uses the legacy
   `kubernetes.io/ingress.class: "nginx"` annotation and a placeholder host
   (`ioc-intel.example.com`). Update the host, and switch to
@@ -108,3 +118,15 @@ kubectl kustomize k8s/base
 - **Storage**: PVC sizes in the StatefulSets (postgres 5Gi, neo4j 5Gi,
   opensearch 10Gi) are starting points -- size them for your data volume, and
   set `storageClassName` if your cluster's default isn't what you want.
+- **AI backend**: `configmap.yaml` defaults `AI_BACKEND` to `ollama` with
+  `OLLAMA_BASE_URL: "http://host.docker.internal:11434"`, copied straight
+  from `.env.example`/`docker-compose.yml`'s default. That hostname only
+  resolves inside a container because docker-compose.yml adds an explicit
+  `extra_hosts: host.docker.internal:host-gateway` to the backend/celery
+  services -- no Deployment in `k8s/base/*.yaml` configures an equivalent
+  `hostAliases` entry, so this default will NOT resolve from inside a pod as
+  shipped. Before deploying, either add a `hostAliases` mapping (or point
+  `OLLAMA_BASE_URL` at a real reachable Ollama host/IP), or switch
+  `AI_BACKEND` to one of the API-key-based backends (`anthropic`, `gemini`,
+  `bedrock`, `groq`, `openai`, `kimi`, `deepseek`, `xai`, `mistral`,
+  `openrouter`) and fill in its `*_API_KEY` in the real Secret.

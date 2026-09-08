@@ -10,7 +10,7 @@
  * providers, or a fixed api_key+model shape for AI backends).
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -26,7 +26,15 @@ export interface ProviderConfigRowProps {
   onToggleEnabled?: (enabled: boolean) => Promise<void>;
   onSetActive?: () => Promise<void>;
   showModelField?: boolean;
-  modelOptions?: string[];
+  /** Fetches this backend's model list (see lib/api.ts `listAIModels`, which
+   * calls POST /api/v1/ai/{backend}/models) using whatever credentials are
+   * currently typed into this row's form. Real/live discovery for backends
+   * that support it (Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral,
+   * OpenRouter, Ollama's actually-pulled models); a curated static list
+   * otherwise (Anthropic/Gemini/Bedrock). Omit to keep the Model field a
+   * plain free-text input -- e.g. IOC providers, which have no model
+   * concept at all. */
+  onFetchModels?: (credentials: Record<string, string>) => Promise<{ models: string[]; default: string | null }>;
   /** Fields that are real config (e.g. Ollama's base_url), not secrets --
    * the backend returns these in masked_credentials unmasked, so pre-fill
    * the edit form from them (matching how modelId already pre-fills below)
@@ -55,7 +63,7 @@ export function ProviderConfigRow({
   onToggleEnabled,
   onSetActive,
   showModelField,
-  modelOptions,
+  onFetchModels,
   plaintextFields,
 }: ProviderConfigRowProps) {
   const plaintextInitialValues = () => {
@@ -73,6 +81,35 @@ export function ProviderConfigRow({
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+
+  const fetchModels = async () => {
+    if (!onFetchModels) return;
+    setModelsLoading(true);
+    try {
+      const result = await onFetchModels(values);
+      setModelOptions(result.models);
+    } catch {
+      // Best-effort: leave whatever options (if any) were already loaded --
+      // the Model field still falls back to a free-text input below when
+      // modelOptions ends up empty, so discovery failing never blocks
+      // configuring a model id by hand.
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
+  // Load this backend's model list once per expand, seeded with whatever
+  // credentials are already typed/pre-filled (e.g. Ollama's base_url) --
+  // the "Refresh models" button below re-runs this with freshly typed
+  // credentials (a new API key, say) without requiring Save first.
+  useEffect(() => {
+    if (expanded && showModelField && onFetchModels) {
+      fetchModels();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -156,13 +193,37 @@ export function ProviderConfigRow({
 
           {showModelField && (
             <label className="flex flex-col gap-1 text-xs">
-              <span className="text-muted-foreground">Model</span>
-              {modelOptions && modelOptions.length > 0 ? (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Model</span>
+                {onFetchModels && (
+                  <button
+                    type="button"
+                    onClick={fetchModels}
+                    disabled={modelsLoading}
+                    className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
+                  >
+                    {modelsLoading ? "Loading models..." : "Refresh models"}
+                  </button>
+                )}
+              </div>
+              {modelOptions.length > 0 ? (
                 <select
                   value={modelId}
                   onChange={(e) => setModelId(e.target.value)}
                   className="rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-primary"
                 >
+                  {/* Keeps an already-configured model id selectable even if
+                   * it isn't in the fetched list (e.g. a custom/newer model
+                   * id typed by hand before this dropdown existed) --
+                   * without this, the <select> would silently fall back to
+                   * showing its first option while `modelId` state still
+                   * held the real value, misleading the operator into
+                   * re-saving a different model than the one configured. */}
+                  {modelId && !modelOptions.includes(modelId) && (
+                    <option key={modelId} value={modelId}>
+                      {modelId}
+                    </option>
+                  )}
                   {modelOptions.map((m) => (
                     <option key={m} value={m}>
                       {m}

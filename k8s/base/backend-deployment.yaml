@@ -4,6 +4,15 @@
 # dropped since there's no source bind-mount here, but the alembic migration
 # step is kept so the Deployment is self-sufficient on rollout.
 #
+# Also mirrors docker-compose.yml's msfrpcd startup: backend/app/pentest/
+# msf_client.py's MsfRpcClient (config.py's msf_rpc_host default) always
+# talks to 127.0.0.1:55553, i.e. it expects msfrpcd running in this same
+# container/pod, not a separate Service -- so msfrpcd must be started here
+# too, exactly like docker-compose.yml's backend command does, or every
+# Pentest Suite exploit-validation call fails with "msfrpcd unreachable"
+# even though MSF_RPC_PASSWORD (see secret.example.yaml) is configured and
+# the image has the full Metasploit Framework installed to back this.
+#
 # Config split:
 #   - envFrom configMapRef: non-secret host/port/URL structure
 #   - envFrom secretRef:    DATABASE_URL, JWT/AWS/provider API keys, passwords
@@ -31,7 +40,10 @@ spec:
           command:
             - "sh"
             - "-c"
-            - "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+            - >-
+              msfrpcd -f -P "$MSF_RPC_PASSWORD" -S -a 127.0.0.1 -p 55553 -U msf &
+              alembic upgrade head &&
+              uvicorn app.main:app --host 0.0.0.0 --port 8000
           ports:
             - containerPort: 8000
               name: http
@@ -40,9 +52,54 @@ spec:
                 name: ioc-intel-config
             - secretRef:
                 name: ioc-intel-secrets
+          # app-backend is the ONLY workload here that serves concurrent
+          # user-facing HTTP traffic (celery-worker/celery-beat deliberately
+          # do NOT set these, falling back to backend/app/core/config.py's
+          # much smaller defaults -- see that file's own comment on
+          # db_pool_size/db_pool_max_overflow for the full rationale,
+          # including why every authenticated request already costs 2
+          # connections, not 1). Mirrors docker-compose.yml's backend-only
+          # DB_POOL_SIZE/DB_POOL_MAX_OVERFLOW override exactly -- set here
+          # (rather than in the shared ConfigMap, which envFrom above wires
+          # into celery-worker/celery-beat identically) so those two
+          # lightweight, DB-light processes aren't also bumped to this much
+          # larger pool. A directly-listed `env:` entry takes precedence over
+          # the same key coming from `envFrom` above.
+          env:
+            - name: DB_POOL_SIZE
+              value: "30"
+            - name: DB_POOL_MAX_OVERFLOW
+              value: "20"
+            # backend/app/core/security_assessment.py's platform-wide
+            # concurrent-scan cap (SECURITY_ASSESSMENT_MAX_CONCURRENT_SCANS,
+            # config.py default 4) is an in-process asyncio.Semaphore built
+            # once per backend process -- it does NOT coordinate across
+            # pods. This Deployment's `replicas: 2` above means, left at the
+            # default, each of the 2 pods would enforce its own independent
+            # 4-scan cap, silently doubling the real platform-wide ceiling to
+            # 8 concurrent scans/nmap subprocesses versus the 4 every other
+            # deployment path (docker-compose.yml, the Windows/Linux
+            # installers -- all single-container) actually enforces, and
+            # undermining the 4g mem_limit that cap is deliberately paired
+            # with there (see docker-compose.yml's backend service comment).
+            # 2 per pod x 2 replicas = 4 platform-wide, matching that
+            # intended ceiling. Mirrors the DB_POOL_SIZE/DB_POOL_MAX_OVERFLOW
+            # backend-only override just above -- if `replicas:` above ever
+            # changes, recompute this value to keep the product at 4 (or
+            # whatever the re-tuned platform-wide ceiling should be).
+            - name: SECURITY_ASSESSMENT_MAX_CONCURRENT_SCANS
+              value: "2"
+          # Hits /health/detailed (real Postgres/Redis check), not plain
+          # /health (which is deliberately dependency-free -- see
+          # backend/app/main.py's own comment on GET /health). Mirrors
+          # docker-compose.yml's backend healthcheck: and the Windows/Linux
+          # watchdog scripts, all of which point at /health/detailed for the
+          # same reason -- plain /health still returns 200 even with
+          # Postgres fully stopped, so it can never take a DB-broken pod out
+          # of the Service's endpoint list.
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/detailed
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -50,7 +107,7 @@ spec:
             failureThreshold: 6
           livenessProbe:
             httpGet:
-              path: /health
+              path: /health/detailed
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 15

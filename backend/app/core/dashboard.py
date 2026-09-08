@@ -46,6 +46,27 @@ PROVIDER_HEALTH_WINDOW_HOURS = 24
 # per-window success_rate/status).
 _NON_ATTEMPT_STATUSES = (ProviderStatus.NOT_CONFIGURED.value, ProviderStatus.DISABLED.value)
 
+
+def _real_attempt_clause():
+    """SQLAlchemy boolean expression: True for ProviderResultRecord rows that
+    represent a genuine, freshly-made attempt to reach the live provider.
+
+    Excludes _NON_ATTEMPT_STATUSES rows (see above) AND rows with
+    from_cache=True. A from_cache=True row is a replayed Redis cache hit
+    (app/providers/base.py's ProviderResult.from_cache, set by
+    app/providers/orchestrator.py's _run_with_policy on a cache hit) -- the
+    real provider was NOT re-contacted; its status/latency_ms/data are just a
+    copy of an earlier real fetch, persisted with a brand-new created_at.
+    Every success-rate/avg_latency_ms/consecutive_failures computation in this
+    module uses this same clause so a stale, unverified cache hit can never
+    make a provider look freshly healthy (inflating success_rate, skewing
+    avg_latency_ms toward stale numbers, or resetting a real failure streak).
+    """
+    return and_(
+        ProviderResultRecord.status.notin_(_NON_ATTEMPT_STATUSES),
+        ProviderResultRecord.from_cache.is_(False),
+    )
+
 # Statuses that represent the provider being reached and behaving CORRECTLY --
 # as opposed to a genuine problem (ERROR/TIMEOUT/RATE_LIMITED). NO_DATA means
 # the provider was queried fine and truthfully reported "nothing on this
@@ -161,31 +182,53 @@ async def get_kpis() -> dict:
         # provider_health_percentage: % of ProviderResultRecord rows with a
         # HEALTHY outcome (see _HEALTHY_OUTCOME_STATUSES above -- OK or the
         # provider correctly reporting NO_DATA/UNSUPPORTED_IOC) out of all
-        # rows in the last 24h, EXCLUDING not_configured/disabled from BOTH
-        # numerator and denominator (see _NON_ATTEMPT_STATUSES above) -- a
-        # provider nobody configured must never drag this number down, and a
-        # provider correctly reporting "nothing found" must never look like a
-        # failure either.
-        provider_attempts = (
+        # rows in the last 24h, EXCLUDING not_configured/disabled AND replayed
+        # cache hits (from_cache=True) from BOTH numerator and denominator
+        # (see _real_attempt_clause() above) -- a provider nobody configured
+        # must never drag this number down, a provider correctly reporting
+        # "nothing found" must never look like a failure, and a stale,
+        # replayed cache hit (the real provider was never re-contacted) must
+        # never count as a fresh, genuine success either.
+        #
+        # DELIBERATELY one query, not two: attempts/ok used to be two
+        # sequential `await db.execute(select(func.count())...)` calls in this
+        # same session. Under Postgres's default READ COMMITTED isolation,
+        # each SELECT sees the latest committed rows as of its OWN execution
+        # time, not a shared snapshot -- a concurrent INSERT into
+        # provider_results landing between the two statements (this table is
+        # written continuously by real, ongoing lookups) changes the
+        # denominator without changing the numerator (or vice versa), so the
+        # two counts could come from two different, inconsistent snapshots of
+        # the table and the resulting percentage would not correspond to any
+        # single actual point-in-time state. Confirmed live: 6 independent
+        # measurements (3 via the HTTP API, 3 calling get_kpis() directly)
+        # each disagreed with an equivalent single-query SQL ground-truth
+        # check taken at essentially the same instant, by ~1-5 points. One
+        # conditional-aggregation query (the same technique
+        # _all_provider_window_metrics() already uses below) computes both
+        # counts from one atomic snapshot, exactly like a single `SELECT
+        # count(*) FILTER (...), count(*) FILTER (...)` would.
+        provider_health_row = (
             await db.execute(
-                select(func.count())
-                .select_from(ProviderResultRecord)
-                .where(
-                    ProviderResultRecord.created_at >= health_window_start,
-                    ProviderResultRecord.status.notin_(_NON_ATTEMPT_STATUSES),
-                )
+                select(
+                    func.sum(case((_real_attempt_clause(), 1), else_=0)).label("attempts"),
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    ProviderResultRecord.status.in_(_HEALTHY_OUTCOME_STATUSES),
+                                    ProviderResultRecord.from_cache.is_(False),
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("ok"),
+                ).where(ProviderResultRecord.created_at >= health_window_start)
             )
-        ).scalar_one()
-        provider_ok = (
-            await db.execute(
-                select(func.count())
-                .select_from(ProviderResultRecord)
-                .where(
-                    ProviderResultRecord.created_at >= health_window_start,
-                    ProviderResultRecord.status.in_(_HEALTHY_OUTCOME_STATUSES),
-                )
-            )
-        ).scalar_one()
+        ).one()
+        provider_attempts = provider_health_row.attempts or 0
+        provider_ok = provider_health_row.ok or 0
         provider_health_percentage = _rate_or(provider_ok, provider_attempts, 0.0)
 
         # ai_success_rate: success / (success + failed) from
@@ -206,26 +249,24 @@ async def get_kpis() -> dict:
         # the comparison feature. If success+failed == 0 in the window,
         # returns None (not 0, not 100) -- there is no rate when there is no
         # data, and reporting either number would misrepresent AI reliability.
-        ai_success = (
+        #
+        # Same one-query-not-two fix as provider_health_percentage above, for
+        # the identical reason: two sequential count() queries in one session
+        # can each see a different committed snapshot of
+        # final_assessment_records under concurrent writes (a new AI
+        # assessment landing between the two SELECTs would move one count but
+        # not the other). One conditional-aggregation query guarantees both
+        # counts come from the same atomic snapshot.
+        ai_outcome_row = (
             await db.execute(
-                select(func.count())
-                .select_from(FinalAssessmentRecord)
-                .where(
-                    FinalAssessmentRecord.ai_outcome == "success",
-                    FinalAssessmentRecord.created_at >= kpi_window_start,
-                )
+                select(
+                    func.sum(case((FinalAssessmentRecord.ai_outcome == "success", 1), else_=0)).label("success"),
+                    func.sum(case((FinalAssessmentRecord.ai_outcome == "failed", 1), else_=0)).label("failed"),
+                ).where(FinalAssessmentRecord.created_at >= kpi_window_start)
             )
-        ).scalar_one()
-        ai_failed = (
-            await db.execute(
-                select(func.count())
-                .select_from(FinalAssessmentRecord)
-                .where(
-                    FinalAssessmentRecord.ai_outcome == "failed",
-                    FinalAssessmentRecord.created_at >= kpi_window_start,
-                )
-            )
-        ).scalar_one()
+        ).one()
+        ai_success = ai_outcome_row.success or 0
+        ai_failed = ai_outcome_row.failed or 0
         ai_denominator = ai_success + ai_failed
         ai_success_rate = _rate_or(ai_success, ai_denominator, None)
 
@@ -284,27 +325,30 @@ async def _consecutive_failures(db, provider_id: str) -> int:
     first, across ALL time (not scoped to any window -- a genuine current
     failure streak doesn't reset just because it crossed a window boundary).
     Skips (doesn't count, doesn't break on) rows in _NON_ATTEMPT_STATUSES,
-    since those aren't real attempts. Stops at the first row with a HEALTHY
-    outcome (_HEALTHY_OUTCOME_STATUSES -- OK or a correct NO_DATA/
-    UNSUPPORTED_IOC response), not just a literal 'ok' row -- otherwise a
-    provider that's been correctly returning NO_DATA would show a fictitious,
-    ever-growing "failure streak" for doing nothing wrong.
+    since those aren't real attempts -- and, for the same reason, skips rows
+    with from_cache=True (a replayed Redis cache hit never re-contacted the
+    live provider, so it must not be able to reset an ongoing real failure
+    streak back to 0 just because it happened to be inserted more recently).
+    Stops at the first row with a HEALTHY outcome (_HEALTHY_OUTCOME_STATUSES --
+    OK or a correct NO_DATA/UNSUPPORTED_IOC response) that is NOT itself a
+    cache hit, not just a literal 'ok' row -- otherwise a provider that's been
+    correctly returning NO_DATA would show a fictitious, ever-growing
+    "failure streak" for doing nothing wrong.
     """
     rows = (
         (
             await db.execute(
-                select(ProviderResultRecord.status)
+                select(ProviderResultRecord.status, ProviderResultRecord.from_cache)
                 .where(ProviderResultRecord.provider_id == provider_id)
                 .order_by(ProviderResultRecord.created_at.desc())
                 .limit(_CONSECUTIVE_FAILURE_LOOKBACK_ROWS)
             )
         )
-        .scalars()
         .all()
     )
     count = 0
-    for status in rows:
-        if status in _NON_ATTEMPT_STATUSES:
+    for status, from_cache in rows:
+        if status in _NON_ATTEMPT_STATUSES or from_cache:
             continue
         if status in _HEALTHY_OUTCOME_STATUSES:
             break
@@ -358,12 +402,22 @@ async def _all_provider_window_metrics(db, provider_ids: list[str], now: datetim
         in_window = ProviderResultRecord.created_at >= window_start
         columns.append(
             func.sum(
-                case((and_(in_window, ProviderResultRecord.status.notin_(_NON_ATTEMPT_STATUSES)), 1), else_=0)
+                case((and_(in_window, _real_attempt_clause()), 1), else_=0)
             ).label(f"attempts_{label}")
         )
         columns.append(
             func.sum(
-                case((and_(in_window, ProviderResultRecord.status.in_(_HEALTHY_OUTCOME_STATUSES)), 1), else_=0)
+                case(
+                    (
+                        and_(
+                            in_window,
+                            ProviderResultRecord.status.in_(_HEALTHY_OUTCOME_STATUSES),
+                            ProviderResultRecord.from_cache.is_(False),
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
             ).label(f"ok_{label}")
         )
         columns.append(
@@ -374,6 +428,7 @@ async def _all_provider_window_metrics(db, provider_ids: list[str], now: datetim
                             in_window,
                             ProviderResultRecord.status.in_(_LATENCY_ELIGIBLE_STATUSES),
                             ProviderResultRecord.latency_ms.is_not(None),
+                            ProviderResultRecord.from_cache.is_(False),
                         ),
                         ProviderResultRecord.latency_ms,
                     ),
@@ -441,11 +496,15 @@ async def get_provider_health_history() -> list[dict]:
       - success_rate: % of this window's real attempts with a HEALTHY outcome
         (_HEALTHY_OUTCOME_STATUSES -- status='ok' OR the provider correctly
         reporting no_data/unsupported_ioc), excluding not_configured/disabled
+        AND replayed cache hits (from_cache=True -- see _real_attempt_clause())
         from the denominator too. None if this window has zero real attempts
         (there is no rate to report).
       - avg_latency_ms: AVG(latency_ms) over status IN (ok, no_data) rows
         (_LATENCY_ELIGIBLE_STATUSES -- both represent a completed real
-        network round-trip) with latency_ms IS NOT NULL, for this window.
+        network round-trip) with latency_ms IS NOT NULL AND from_cache=False,
+        for this window. A cache hit's latency_ms is the STALE original fetch
+        latency, not a fresh measurement -- averaging it in would repeatedly
+        count one real round-trip as if it happened again on every replay.
         None if no qualifying rows.
       - consecutive_failures: see _consecutive_failures() -- NOT scoped to
         this window (identical across all four windows for a given

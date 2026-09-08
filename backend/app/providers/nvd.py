@@ -36,13 +36,24 @@ class NVDProvider(BaseProvider):
 
         response = await client.get(self.base_url, headers=headers, params={"cveId": ioc_value})
         if response.status_code == 404:
+            # NVD's real API only ever returns HTTP 404 for a request-level
+            # error -- an invalid/expired apiKey or a malformed cveId -- never
+            # for a genuinely nonexistent CVE (confirmed live: a real,
+            # nonexistent CVE returns HTTP 200 with vulnerabilities: [],
+            # already handled correctly below). Treating 404 as NO_DATA would
+            # silently misreport a bad/expired NVD key as "nothing found for
+            # this CVE", hiding real vulnerability data with no indication
+            # anything is misconfigured.
+            detail = response.headers.get("message") or response.text or "no further detail provided"
+            reason = "invalid/expired NVD apiKey" if api_key else "malformed cveId or rejected request"
             return ProviderResult(
                 provider_id=self.provider_id,
                 provider_name=self.provider_name,
                 category=self.category,
-                status=ProviderStatus.NO_DATA,
+                status=ProviderStatus.ERROR,
                 ioc_value=ioc_value,
                 ioc_type=ioc_type,
+                error_message=f"NVD API request rejected ({reason}): {detail}",
                 source_url=f"https://nvd.nist.gov/vuln/detail/{ioc_value}",
             )
         response.raise_for_status()

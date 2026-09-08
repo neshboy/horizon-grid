@@ -10,7 +10,7 @@ and enables/disables IOC providers, all without a process restart.
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
 from app.auth.rbac import CurrentUser, require_permission
@@ -24,7 +24,18 @@ router = APIRouter(prefix="/runtime", tags=["runtime"])
 
 
 @router.get("/ai-providers")
-async def list_ai_providers(user: CurrentUser = Depends(require_permission("provider:manage"))):
+async def list_ai_providers(user: CurrentUser = Depends(require_permission("lookup:read"))):
+    """Read-only listing (provider_id/configured/masked_credentials/etc. --
+    see app/core/runtime_config.py's _row_to_public_dict, which never
+    returns a raw credential) -- deliberately gated on "lookup:read", NOT
+    "provider:manage", the same lower-privilege choice already made for the
+    sibling GET /ai-active below. ANALYST (and VIEWER) hold "lookup:read"
+    but not "provider:manage"; ANALYST specifically needs this to populate
+    AiComparisonPanel's backend-picker dropdown (the "Analyze with a
+    different AI" feature it already has "lookup:create"/reanalyze access
+    to -- see POST /{lookup_id}/reanalyze in app/api/routes/lookup.py).
+    Every route that actually WRITES provider config below still requires
+    "provider:manage"; only this read was ever over-gated."""
     return await svc.list_ai_providers()
 
 
@@ -91,6 +102,8 @@ async def record_ai_test(
     """Records the result of a /api/v1/ai/test call against this backend's
     now-saved credential, so the Manage Providers panel can show
     "last tested: ok, 3 minutes ago" without re-testing on every page load."""
+    if backend not in svc.AI_BACKENDS:
+        raise HTTPException(status_code=400, detail=f"Unknown AI backend {backend!r}")
     await svc.record_ai_test_result(backend, payload.ok, payload.message)
     return {"recorded": True}
 
@@ -145,14 +158,17 @@ async def configure_ioc_provider(
     provider = known.get(provider_id)
     if provider is None:
         raise HTTPException(status_code=404, detail=f"Unknown IOC provider {provider_id!r}")
-    return await svc.upsert_ioc_provider(
-        provider_id,
-        provider.provider_name,
-        payload.credentials,
-        payload.extra_config,
-        actor_user_id=user.id,
-        actor_email=user.email,
-    )
+    try:
+        return await svc.upsert_ioc_provider(
+            provider_id,
+            provider.provider_name,
+            payload.credentials,
+            payload.extra_config,
+            actor_user_id=user.id,
+            actor_email=user.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class EnableRequest(BaseModel):
@@ -168,6 +184,8 @@ async def set_ioc_provider_enabled(
     """Takes effect on the NEXT investigation started after this call --
     no restart, no reinstall. Historical investigation data for this
     provider is never touched."""
+    if provider_id not in {p.provider_id for p in get_all_providers()}:
+        raise HTTPException(status_code=404, detail=f"Unknown IOC provider {provider_id!r}")
     await svc.set_ioc_provider_enabled(provider_id, payload.enabled, actor_user_id=user.id, actor_email=user.email)
     return {"provider_id": provider_id, "enabled": payload.enabled}
 
@@ -178,6 +196,8 @@ async def record_ioc_test(
     payload: TestResultRequest,
     user: CurrentUser = Depends(require_permission("provider:manage")),
 ):
+    if provider_id not in {p.provider_id for p in get_all_providers()}:
+        raise HTTPException(status_code=404, detail=f"Unknown IOC provider {provider_id!r}")
     await svc.record_ioc_test_result(provider_id, payload.ok, payload.message)
     return {"recorded": True}
 
@@ -186,5 +206,8 @@ async def record_ioc_test(
 
 
 @router.get("/audit-log")
-async def audit_log(limit: int = 200, user: CurrentUser = Depends(require_permission("audit:read"))):
+async def audit_log(
+    limit: int = Query(200, ge=0, le=200),
+    user: CurrentUser = Depends(require_permission("audit:read")),
+):
     return await svc.list_audit_log(limit)

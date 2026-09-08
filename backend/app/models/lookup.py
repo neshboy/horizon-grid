@@ -98,6 +98,20 @@ class ProviderResultRecord(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     source_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # True when this row is a replayed Redis cache hit (app/providers/base.py's
+    # ProviderResult.from_cache, set by app/providers/orchestrator.py's
+    # _run_with_policy) -- meaning the real provider was NOT actually
+    # re-contacted for this row; its status/latency_ms/data are copied
+    # verbatim from an earlier real fetch. app/core/dashboard.py's health
+    # computations treat this exactly like _NON_ATTEMPT_STATUSES (excluded
+    # from both the numerator and denominator of success_rate/avg_latency_ms,
+    # and skipped without breaking the streak in consecutive_failures) --
+    # a cache hit is not a genuine attempt to reach the live provider, so it
+    # must never be able to make a stale, unverified provider look
+    # freshly-healthy. default=False (not nullable) so every pre-existing row
+    # (persisted before this column existed, back when caching already
+    # existed) is correctly treated as a real attempt rather than NULL.
+    from_cache: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     lookup: Mapped["IOCLookup"] = relationship(back_populates="provider_results")
 

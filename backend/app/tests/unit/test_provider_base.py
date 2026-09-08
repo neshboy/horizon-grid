@@ -193,7 +193,16 @@ async def test_successful_fetch_returns_ok_with_latency(client):
     assert result.latency_ms >= 0
 
 
-@pytest.mark.parametrize("exc_cls", [httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout])
+@pytest.mark.parametrize(
+    "exc_cls",
+    [
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+    ],
+)
 @pytest.mark.asyncio
 async def test_retryable_exceptions_propagate_out_of_run_instead_of_being_normalized(client, exc_cls):
     """Real bug fixed: run() previously caught these in its own generic
@@ -218,7 +227,13 @@ async def test_retryable_exceptions_tuple_matches_what_run_reraises(client):
     drifting apart -- orchestrator.py imports RETRYABLE_EXCEPTIONS from here
     rather than redefining it, but a future edit to either side re-adding a
     local tuple would silently break that sharing without this assertion."""
-    assert RETRYABLE_EXCEPTIONS == (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout)
+    assert RETRYABLE_EXCEPTIONS == (
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+    )
 
 
 @pytest.mark.asyncio

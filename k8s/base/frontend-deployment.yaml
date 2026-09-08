@@ -1,9 +1,16 @@
 # Translation of docker-compose `frontend` service. docker-compose runs
 # `npm run dev` against a bind-mounted source tree; in k8s there's no source
-# bind-mount, so this runs the production server (`npm start` against a
-# `next build` output) baked into the image instead. NEXT_PUBLIC_API_URL is
-# supplied via the shared ConfigMap (see configmap.yaml) since it's a
-# build/runtime URL, not a secret.
+# bind-mount, so this runs a production server instead. Plain `npm start`
+# (`next start`) does NOT work here: nothing in frontend/Dockerfile ever runs
+# `next build`, so there is no `.next` build output to serve, and even with a
+# build step, next.config.js sets `output: "standalone"`, which `next start`
+# does not use -- see docker-compose.prod.yml's `frontend.command` for the
+# same problem solved for the docker-compose production path. This mirrors
+# that exact command: build, copy `public/` and `.next/static` into the
+# standalone output (both are intentionally excluded from the traced
+# standalone build by Next itself), then run the standalone entrypoint
+# directly. NEXT_PUBLIC_API_URL is supplied via the shared ConfigMap (see
+# configmap.yaml) since it's a build/runtime URL, not a secret.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +32,15 @@ spec:
         - name: frontend
           image: ioc-intel-platform/frontend:latest
           imagePullPolicy: IfNotPresent
-          command: ["npm", "start"]
+          command:
+            - sh
+            - -c
+            - >
+              npm run build &&
+              ([ -d public ] && cp -r public .next/standalone/public || true) &&
+              mkdir -p .next/standalone/.next/static &&
+              cp -r .next/static/. .next/standalone/.next/static/ &&
+              node .next/standalone/server.js
           ports:
             - containerPort: 3000
               name: http
@@ -36,19 +51,24 @@ spec:
                   name: ioc-intel-config
                   key: NEXT_PUBLIC_API_URL
           readinessProbe:
+            # initialDelaySeconds/failureThreshold are generous because the
+            # command above runs `next build` on every pod start (see above)
+            # before the server is listening on 3000 -- a short delay here
+            # would make the probe fail (and, worse, make the liveness probe
+            # below restart the pod) before the build even finishes.
             tcpSocket:
               port: 3000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 45
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 18
           livenessProbe:
             tcpSocket:
               port: 3000
-            initialDelaySeconds: 20
+            initialDelaySeconds: 90
             periodSeconds: 15
             timeoutSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 8
           resources:
             requests:
               cpu: 100m

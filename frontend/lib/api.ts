@@ -78,13 +78,69 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * Error subclass carrying the HTTP status code alongside the backend's
+ * `detail` message. login() below needs this (unlike the other `throw new
+ * Error(...)` call sites in this file) because the login page has to tell a
+ * genuine "wrong password" apart from a 429 rate-limit or a 5xx server
+ * error -- a `.message`-only Error can't be branched on reliably since the
+ * message text itself may be missing (non-JSON body) or backend-controlled.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/**
+ * Maps whatever login() threw to the message the login page should show.
+ * Pulled out of the page component (rather than left inline in its catch
+ * block) so it's unit-testable under the existing Node-only vitest setup --
+ * no jsdom/React rendering needed.
+ *
+ * Real bug found live: the login page used to only special-case 429 and
+ * >=500 here, so every other case -- a 403 "Account disabled" (the backend
+ * already computes and returns exactly that detail) and a genuine
+ * network-level failure (fetch() itself throwing because the request never
+ * reached the backend at all, so `err` isn't even an ApiError) -- fell into
+ * the same generic branch and showed "Invalid email or password.", actively
+ * misleading an admin/demo presenter into thinking the credential itself
+ * was the problem.
+ */
+export function getLoginErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 429) return err.message || "Too many attempts, try again shortly.";
+    if (err.status >= 500) return "Server error, try again later.";
+    if (err.status === 403) return err.message || "This account has been disabled.";
+    // 401 (or any other 4xx) is a genuine bad-credential rejection -- stays
+    // deliberately vague so this can't be used to enumerate valid emails.
+    return "Invalid email or password.";
+  }
+  // Not an ApiError at all: fetch() itself threw (DNS failure, connection
+  // refused, CORS, offline, etc.) -- the request never reached the backend,
+  // so no credential was ever actually checked.
+  return "Unable to reach the server. Check your connection and try again.";
+}
+
 export async function login(email: string, password: string) {
   const res = await fetch(`${getApiUrl()}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
-  if (!res.ok) throw new Error("Login failed");
+  if (!res.ok) {
+    // Real bug: this used to throw a bare Error("Login failed") for every
+    // non-2xx status, discarding both the backend's `detail` (e.g. the
+    // specific rate-limit message) and the status code itself -- so the
+    // login page had no way to distinguish a 429/5xx from an actual wrong
+    // password and showed "Invalid email or password." for all of them.
+    const body = await res.json().catch(() => null);
+    throw new ApiError(body?.detail ?? "Login failed", res.status);
+  }
   const data = await res.json();
   localStorage.setItem("access_token", data.access_token);
   localStorage.setItem("refresh_token", data.refresh_token);
@@ -163,11 +219,70 @@ export function logout(): void {
 }
 
 /**
+ * Guards handleUnrecoverableAuth() below against firing more than once --
+ * a page that fires several authedFetch calls in parallel (e.g. the
+ * dashboard's KPI tiles, or WorkspaceNav's own listBasket()/getCurrentUser()
+ * alongside the page's own data fetch) would otherwise each independently
+ * detect the same dead session and race to reassign window.location.
+ */
+let redirectingToLogin = false;
+
+/**
+ * Real bug found live during overnight QA: a session that becomes
+ * unrecoverable mid-use -- either an access token whose refresh also fails
+ * (expired/garbage refresh token), or a 403 "Account disabled" response for
+ * an account an admin just deactivated -- left the user parked on the same
+ * broken-looking protected page indefinitely: every authedFetch caller just
+ * got back a failing Response and rendered its own generic "Failed to fetch
+ * X" message, while the stale/invalid tokens stayed in localStorage with no
+ * in-page way to recover (WorkspaceNav has no sign-out control at all --
+ * only the home page, '/', does). Clearing local state and hard-redirecting
+ * to /login here -- the one place every authedFetch-based page routes
+ * through -- fixes every one of those callers (dashboard, basket, cases,
+ * admin, providers, pentest, provider-health, ...) at once, without having
+ * to individually teach ~10 page components to check response status.
+ * `next` round-trips the user back to where they were after signing in
+ * again, matching the pattern the login page and streamLookup's own
+ * onAuthExpired already use. A plain `window.location` assignment (rather
+ * than a router push) is deliberate: this module has no access to Next's
+ * router, and a full reload guarantees every stale in-memory React state
+ * from the dead session is discarded, not just the URL.
+ */
+function handleUnrecoverableAuth(): void {
+  if (typeof window === "undefined" || redirectingToLogin) return;
+  redirectingToLogin = true;
+  logout();
+  const next = `${window.location.pathname}${window.location.search}`;
+  window.location.href = `/login?sessionExpired=1&next=${encodeURIComponent(next)}`;
+}
+
+/** True for the specific, unrecoverable-without-resigning-in 403 that
+ * get_current_user() raises for a deactivated account -- deliberately NOT
+ * true for a require_permission() 403 (e.g. a non-admin hitting an
+ * admin-only route), which is a normal, recoverable authorization outcome
+ * that must not force a logout. */
+async function isAccountDisabledResponse(res: Response): Promise<boolean> {
+  if (res.status !== 403) return false;
+  try {
+    const body = await res.clone().json();
+    return body?.detail === "Account disabled";
+  } catch {
+    // Non-JSON body, or a Response-like object with no clone()/json() at
+    // all -- never let inspecting the body for this one message crash the
+    // caller's real request.
+    return false;
+  }
+}
+
+/**
  * fetch() wrapper for authenticated JSON endpoints: on a 401 (expired/invalid
  * access token), transparently refreshes once and retries with the new token
  * before giving up -- this is the piece that was missing, which is why an
  * access token older than ACCESS_TOKEN_EXPIRE_MINUTES (30 min) produced a raw
- * 401 instead of silently refreshing.
+ * 401 instead of silently refreshing. If that retry (or the refresh itself)
+ * still leaves an unrecoverable 401, or the account was disabled out from
+ * under an otherwise-valid token, hands off to handleUnrecoverableAuth()
+ * above instead of just returning the still-failing Response.
  */
 async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const doFetch = () => fetch(url, { ...init, headers: { ...init.headers, ...authHeaders() } });
@@ -178,6 +293,9 @@ async function authedFetch(url: string, init: RequestInit = {}): Promise<Respons
     if (refreshed) {
       res = await doFetch();
     }
+  }
+  if (res.status === 401 || (await isAccountDisabledResponse(res))) {
+    handleUnrecoverableAuth();
   }
   return res;
 }
@@ -531,6 +649,38 @@ export async function configureAIProvider(
   return res.json();
 }
 
+// Real/live model discovery for the Manage Providers dropdown -- see
+// backend/app/api/routes/ai_config.py `ai_list_models`. Groq/OpenAI/Kimi/
+// DeepSeek/xAI/Mistral/OpenRouter run a genuine live discovery call against
+// the candidate credentials just typed (falling back to a curated static
+// list on error or if no key was entered yet); Ollama lists whatever is
+// actually pulled at base_url; Anthropic/Gemini/Bedrock return a curated
+// static list. Callers should treat `models` as suggestions, not an
+// enforced allow-list -- the backend never rejects a model id this list
+// didn't happen to include.
+export interface AIModelListResult {
+  backend: string;
+  models: string[];
+  source: "live" | "fallback" | "static" | "unknown";
+  default: string | null;
+}
+
+export async function listAIModels(
+  backend: string,
+  credentials: Record<string, string> = {}
+): Promise<AIModelListResult> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/ai/${backend}/models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credentials }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to list AI models");
+  }
+  return res.json();
+}
+
 export async function setActiveAIBackend(backend: string): Promise<{ active_backend: string }> {
   const res = await authedFetch(`${getApiUrl()}/api/v1/runtime/ai-active`, {
     method: "POST",
@@ -574,7 +724,15 @@ export async function testAIBackend(
 
 export async function listIOCProviders(): Promise<RuntimeProviderConfig[]> {
   const res = await authedFetch(`${getApiUrl()}/api/v1/runtime/ioc-providers`);
-  if (!res.ok) throw new Error("Failed to list IOC providers");
+  if (!res.ok) {
+    // Real bug found live: this used to throw a bare Error(), discarding the
+    // status code -- so a VIEWER/ANALYST (who both lack provider:manage) got
+    // a genuine 403 here that the Manage Providers page couldn't tell apart
+    // from "the provider list is just empty" (see getAuditLog() below, same
+    // issue). ApiError carries the status so callers can branch on it.
+    const body = await res.json().catch(() => null);
+    throw new ApiError(body?.detail ?? "Failed to list IOC providers", res.status);
+  }
   return res.json();
 }
 
@@ -627,7 +785,15 @@ export async function testIOCProvider(
 
 export async function getAuditLog(limit = 200): Promise<AuditLogEntry[]> {
   const res = await authedFetch(`${getApiUrl()}/api/v1/runtime/audit-log?limit=${limit}`);
-  if (!res.ok) throw new Error("Failed to fetch audit log");
+  if (!res.ok) {
+    // Same real bug/fix as listIOCProviders() above: a bare Error() here
+    // discarded the 403 a VIEWER/ANALYST (both lack audit:read) genuinely
+    // gets back, so the Audit Log tab rendered "No changes recorded yet."
+    // -- indistinguishable from a real empty log -- instead of explaining
+    // why nothing showed up.
+    const body = await res.json().catch(() => null);
+    throw new ApiError(body?.detail ?? "Failed to fetch audit log", res.status);
+  }
   return res.json();
 }
 

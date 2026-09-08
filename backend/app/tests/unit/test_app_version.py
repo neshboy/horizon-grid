@@ -5,7 +5,13 @@ reporting "0.3.0" via /health and the OpenAPI schema), because there is no
 single canonical version source shared across Python/Inno/Debian. This
 can't prevent the next manual-bump miss, but it turns it into an immediate,
 loud test failure instead of a silent drift discovered live in production.
+
+Also covers frontend/package.json's "version" field, which suffered the
+exact same drift (still "0.3.0" while _APP_VERSION/installer.iss/debian
+control had all already moved to "0.3.9") because the original guard above
+never inspected it.
 """
+import json
 import re
 from pathlib import Path
 
@@ -24,6 +30,7 @@ from app.main import _APP_VERSION
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _INSTALLER_ISS = _REPO_ROOT / "windows" / "installer.iss"
 _DEBIAN_CONTROL = _REPO_ROOT / "linux" / "debian" / "control"
+_FRONTEND_PACKAGE_JSON = _REPO_ROOT / "frontend" / "package.json"
 
 
 def _read_installer_version() -> str:
@@ -53,4 +60,19 @@ def test_app_version_matches_linux_debian_control_version():
     assert _APP_VERSION == _read_debian_control_version(), (
         f"_APP_VERSION ({_APP_VERSION}) does not match linux/debian/control's Version "
         f"({_read_debian_control_version()}) -- bump whichever one is stale."
+    )
+
+
+def _read_frontend_package_json_version() -> str:
+    data = json.loads(_FRONTEND_PACKAGE_JSON.read_text(encoding="utf-8"))
+    version = data.get("version")
+    assert version, 'could not find "version" in frontend/package.json'
+    return version
+
+
+@pytest.mark.skipif(not _FRONTEND_PACKAGE_JSON.exists(), reason="frontend/package.json not mounted in this environment (host-only check)")
+def test_app_version_matches_frontend_package_json_version():
+    assert _APP_VERSION == _read_frontend_package_json_version(), (
+        f"_APP_VERSION ({_APP_VERSION}) does not match frontend/package.json's version "
+        f"({_read_frontend_package_json_version()}) -- bump whichever one is stale."
     )

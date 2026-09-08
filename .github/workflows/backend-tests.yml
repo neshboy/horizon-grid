@@ -16,11 +16,15 @@ permissions:
 #     guard) -- only resolvable inside the real docker-compose network, so
 #     they run via "docker compose exec backend pytest ..." in the second job,
 #     exactly as their own docstrings document.
-#   - 6 integration files: skipif-guarded on host-published localhost:5433/6379
-#     being reachable -- these will SKIP (not fail) in the second job too,
-#     since inside the backend container "localhost" is the container itself,
-#     not the compose host; that's an accepted, non-fatal skip, not a bug
-#     introduced by this workflow.
+#   - 6 integration files: skipif-guarded on Postgres/Redis reachability.
+#     Previously hardcoded ONLY the host-published localhost:5433/6379 pair,
+#     which is never reachable from inside the backend container (nothing
+#     listens on those ports there) -- so all 42 of their tests silently
+#     SKIPPED in the second job below, never actually running anywhere in
+#     this pipeline. Fixed: each now resolves to the in-network `postgres`/
+#     `redis` hostnames when reachable (the case here), falling back to the
+#     host-published pair only for an out-of-container host-side run -- so
+#     they now actually execute in the second job, same as the 5 above.
 
 on:
   push:

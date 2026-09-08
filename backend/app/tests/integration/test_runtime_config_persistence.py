@@ -34,7 +34,15 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.db import new_session
 from app.core import runtime_config as runtime_config_module
-from app.core.runtime_config import get_ai_config, upsert_ai_provider, upsert_ioc_provider
+from app.core.runtime_config import (
+    get_ai_config,
+    record_ai_test_result,
+    record_ioc_test_result,
+    set_active_ai_backend,
+    set_ioc_provider_enabled,
+    upsert_ai_provider,
+    upsert_ioc_provider,
+)
 from app.models.runtime_config import ProviderKind, ProviderRuntimeConfig
 
 
@@ -95,6 +103,41 @@ async def test_upsert_ioc_provider_empty_save_preserves_credential_end_to_end():
         assert result["masked_credentials"].get("api_key")
     finally:
         await _cleanup(provider_id, ProviderKind.IOC)
+
+
+@pytest.mark.asyncio
+async def test_upsert_ioc_provider_rejects_undeclared_credential_field_end_to_end():
+    """Regression test for a real, live-reproduced bug: POSTing
+    {"credentials": {"totally_made_up_field": "junk"}} to
+    POST /api/v1/runtime/ioc-providers/virustotal (whose only declared
+    field is api_key, per IOC_PROVIDER_CREDENTIAL_FIELDS) returned 200 and
+    permanently persisted `totally_made_up_field` into that row's encrypted
+    credential JSON alongside the real api_key -- a field the settings
+    UI's ProviderConfigRow.tsx never renders (it only renders
+    `credential_fields` for the provider), so it could never again be seen
+    or removed once saved.
+
+    Uses the real "virustotal" provider_id (not a synthetic one) since the
+    fix is specifically scoped to provider_ids that declare a field list in
+    IOC_PROVIDER_CREDENTIAL_FIELDS -- snapshots and restores whatever was
+    already configured so this doesn't leave the shared dev DB's real
+    virustotal row any different than it found it."""
+    from app.core.runtime_config import get_ioc_provider_snapshot
+
+    before_snapshot = (await get_ioc_provider_snapshot()).get("virustotal", {})
+    before_creds = dict(before_snapshot.get("credentials") or {})
+
+    try:
+        with pytest.raises(ValueError, match="totally_made_up_field"):
+            await upsert_ioc_provider("virustotal", "VirusTotal", {"totally_made_up_field": "junkvalue123"})
+
+        after_snapshot = (await get_ioc_provider_snapshot()).get("virustotal", {})
+        assert after_snapshot.get("credentials") == before_creds, (
+            "a rejected save must not mutate the already-stored virustotal credentials"
+        )
+    finally:
+        if before_creds:
+            await upsert_ioc_provider("virustotal", "VirusTotal", before_creds)
 
 
 @pytest.mark.asyncio
@@ -269,3 +312,197 @@ async def test_upsert_ai_provider_rejects_a_link_local_ollama_base_url():
             await upsert_ai_provider("ollama", before["credentials"], before["model_id"])
         else:
             await _cleanup("ollama", ProviderKind.AI)
+
+
+@pytest.mark.asyncio
+async def test_set_active_ai_backend_locks_the_rows_it_reads():
+    """Regression test for BUG-01-sibling: unlike upsert_ai_provider/
+    upsert_ioc_provider (see test_upsert_ioc_provider_locks_the_row_it_reads
+    above), set_active_ai_backend used to read every AI provider row with a
+    plain, unlocked SELECT, flip `is_active` on each row in a Python loop,
+    and commit. Two concurrent calls (e.g. one admin picking 'openai' while
+    another picks 'groq' at the same moment) could each read the same
+    "currently active" snapshot before either commits, each independently
+    decide which rows should now be True/False, and both commits succeed --
+    leaving TWO rows with is_active=True, violating this table's own
+    documented invariant ("exactly one AI row should have is_active=True at
+    a time") and making get_active_ai_config()'s .scalar_one_or_none() raise
+    an unhandled MultipleResultsFound for every AI-assisted feature
+    platform-wide.
+
+    Per this file's own documented lessons learned on
+    test_upsert_ioc_provider_locks_the_row_it_reads above (three different
+    real-concurrency approaches for this exact class of race each proved
+    unreliable or tested the wrong thing against a local Postgres), this
+    verifies the fix's own defining characteristic directly: capture the
+    real SQL set_active_ai_backend() sends to Postgres and confirm the
+    SELECT against provider_runtime_configs includes `FOR UPDATE`. That is
+    what actually serializes concurrent callers (the second caller's SELECT
+    blocks until the first's transaction commits, so it re-reads the
+    first's already-applied result before applying its own) -- a passing
+    test here is not a proxy for the fix, it verifies the fix's own
+    mechanism.
+
+    Uses a synthetic backend id temporarily added to AI_BACKENDS (mirroring
+    test_plaintext_credential_field_is_not_masked's pattern above) so this
+    never touches any of the app's real, already-configured AI provider
+    rows (which other agents/tests may be relying on concurrently in this
+    shared dev DB)."""
+    from sqlalchemy import event
+
+    from app.core.db import _engine
+
+    backend_id = _unique_provider_id("qa-ai-lock")
+    original_backends = list(runtime_config_module.AI_BACKENDS)
+    runtime_config_module.AI_BACKENDS = original_backends + [backend_id]
+    captured_statements: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        if "provider_runtime_configs" in statement and statement.strip().upper().startswith("SELECT"):
+            captured_statements.append(statement)
+
+    event.listen(_engine.sync_engine, "before_cursor_execute", _capture)
+    try:
+        await set_active_ai_backend(backend_id)
+    finally:
+        event.remove(_engine.sync_engine, "before_cursor_execute", _capture)
+        runtime_config_module.AI_BACKENDS = original_backends
+        await _cleanup(backend_id, ProviderKind.AI)
+
+    assert captured_statements, "set_active_ai_backend must issue a SELECT against provider_runtime_configs"
+    assert any("FOR UPDATE" in s.upper() for s in captured_statements), (
+        "set_active_ai_backend's read of every AI provider row must use SELECT ... FOR UPDATE -- "
+        f"captured statements: {captured_statements}"
+    )
+
+
+# --- Regression tests: record_ai_test_result / record_ioc_test_result /
+# set_ioc_provider_enabled never got the same SELECT-then-INSERT-if-None
+# race protection as upsert_ai_provider/upsert_ioc_provider above.
+#
+# Live reproduction that motivated these (see PR description): calling any
+# of these three functions concurrently for the same brand-new provider_id
+# (no ProviderRuntimeConfig row yet -- e.g. a custom AI backend, or any IOC
+# provider added after this install's original seed_from_env_if_empty() ran)
+# reliably raised an unhandled sqlalchemy.exc.IntegrityError
+# (asyncpg.exceptions.UniqueViolationError on uq_provider_runtime_kind_id)
+# out of one of the concurrent calls -- surfacing as a bare HTTP 500 from
+# POST /api/v1/runtime/ai-providers/{backend}/record-test,
+# POST /api/v1/runtime/ioc-providers/{provider_id}/record-test, and
+# POST /api/v1/runtime/ioc-providers/{provider_id}/enabled respectively.
+#
+# Per this file's own documented lessons learned above (test_upsert_ioc_provider_
+# locks_the_row_it_reads's docstring), a bare asyncio.gather() of two real
+# calls against a fast local Postgres is not a reliable way to force this
+# race in a test. These reuse the same commit-patching technique as
+# test_first_time_save_recovers_from_a_concurrent_insert_collision above:
+# force the FIRST commit() to raise IntegrityError (simulating "a concurrent
+# request's INSERT for this same brand-new provider_id won"), and confirm
+# each function retries its whole read-modify-write instead of propagating
+# the error to the caller.
+
+
+@pytest.mark.asyncio
+async def test_record_ai_test_result_first_time_recovers_from_a_concurrent_insert_collision():
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    backend = _unique_provider_id("qa-ai-test-race")
+    original_commit = AsyncSession.commit
+    call_count = {"value": 0}
+
+    async def _fail_first_commit(self, *args, **kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise IntegrityError("simulated concurrent INSERT collision", params=None, orig=Exception())
+        return await original_commit(self, *args, **kwargs)
+
+    row = None
+    AsyncSession.commit = _fail_first_commit
+    try:
+        await record_ai_test_result(backend, True, "ok")
+        async with new_session() as db:
+            row = (
+                await db.execute(
+                    select(ProviderRuntimeConfig).where(
+                        ProviderRuntimeConfig.kind == ProviderKind.AI, ProviderRuntimeConfig.provider_id == backend
+                    )
+                )
+            ).scalar_one_or_none()
+    finally:
+        AsyncSession.commit = original_commit
+        await _cleanup(backend, ProviderKind.AI)
+
+    # >= 2 rather than == 2 for the same reason as the upsert_ioc_provider
+    # version above: this patches AsyncSession.commit() globally, so it also
+    # counts record_audit()'s own unrelated commit after
+    # record_ai_test_result returns.
+    assert call_count["value"] >= 2, "must retry after the simulated collision, not propagate it"
+    assert row is not None and row.last_test_ok is True
+
+
+@pytest.mark.asyncio
+async def test_record_ioc_test_result_first_time_recovers_from_a_concurrent_insert_collision():
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    provider_id = _unique_provider_id("qa-ioc-test-race")
+    original_commit = AsyncSession.commit
+    call_count = {"value": 0}
+
+    async def _fail_first_commit(self, *args, **kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise IntegrityError("simulated concurrent INSERT collision", params=None, orig=Exception())
+        return await original_commit(self, *args, **kwargs)
+
+    row = None
+    AsyncSession.commit = _fail_first_commit
+    try:
+        await record_ioc_test_result(provider_id, True, "ok")
+        async with new_session() as db:
+            row = (
+                await db.execute(
+                    select(ProviderRuntimeConfig).where(
+                        ProviderRuntimeConfig.kind == ProviderKind.IOC, ProviderRuntimeConfig.provider_id == provider_id
+                    )
+                )
+            ).scalar_one_or_none()
+    finally:
+        AsyncSession.commit = original_commit
+        await _cleanup(provider_id, ProviderKind.IOC)
+
+    assert call_count["value"] >= 2, "must retry after the simulated collision, not propagate it"
+    assert row is not None and row.last_test_ok is True
+
+
+@pytest.mark.asyncio
+async def test_set_ioc_provider_enabled_first_time_recovers_from_a_concurrent_insert_collision():
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    provider_id = _unique_provider_id("qa-ioc-enable-race")
+    original_commit = AsyncSession.commit
+    call_count = {"value": 0}
+
+    async def _fail_first_commit(self, *args, **kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise IntegrityError("simulated concurrent INSERT collision", params=None, orig=Exception())
+        return await original_commit(self, *args, **kwargs)
+
+    row = None
+    AsyncSession.commit = _fail_first_commit
+    try:
+        await set_ioc_provider_enabled(provider_id, False)
+        async with new_session() as db:
+            row = (
+                await db.execute(
+                    select(ProviderRuntimeConfig).where(
+                        ProviderRuntimeConfig.kind == ProviderKind.IOC, ProviderRuntimeConfig.provider_id == provider_id
+                    )
+                )
+            ).scalar_one_or_none()
+    finally:
+        AsyncSession.commit = original_commit
+        await _cleanup(provider_id, ProviderKind.IOC)
+
+    assert call_count["value"] >= 2, "must retry after the simulated collision, not propagate it"
+    assert row is not None and row.enabled is False

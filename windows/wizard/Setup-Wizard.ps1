@@ -201,7 +201,8 @@ if ($State.IsUpgrade) {
             if ($_ -match '^\s*([A-Z0-9_]+)\s*=\s*(.*)$') {
                 $key = $Matches[1]; $val = $Matches[2]
                 $map = @{
-                    JWT_SECRET_KEY = "JwtSecretKey"; POSTGRES_PASSWORD = "PostgresPassword"; NEO4J_PASSWORD = "Neo4jPassword"
+                    JWT_SECRET_KEY = "JwtSecretKey"; ENCRYPTION_MASTER_KEY = "EncryptionMasterKey"
+                    POSTGRES_PASSWORD = "PostgresPassword"; NEO4J_PASSWORD = "Neo4jPassword"
                     HOST_PORT_FRONTEND = "PortFrontend"; HOST_PORT_BACKEND = "PortBackend"; HOST_PORT_POSTGRES = "PortPostgres"
                     HOST_PORT_REDIS = "PortRedis"; HOST_PORT_NEO4J_HTTP = "PortNeo4jHttp"; HOST_PORT_NEO4J_BOLT = "PortNeo4jBolt"
                     HOST_PORT_OPENSEARCH = "PortOpenSearch"; PUBLIC_API_URL = "PublicApiUrl"; DETECTED_LAN_IP = "DetectedLanIp"

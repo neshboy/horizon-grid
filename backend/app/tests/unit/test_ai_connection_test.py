@@ -533,8 +533,17 @@ async def test_ollama_literal_null_message_does_not_crash():
 async def test_ollama_connect_error_is_reported_cleanly():
     # Deliberately unreachable port -- exercises the real httpx.ConnectError
     # path without needing respx (no mock installed, so the connection
-    # genuinely fails at the TCP layer).
-    result = await check_ai_connection("ollama", {"base_url": "http://localhost:1"}, model="llama3.2:3b")
+    # genuinely fails at the TCP layer). Must be Ollama's real default port
+    # (11434), not an arbitrary one like ":1" -- url_safety.
+    # assert_safe_outbound_url() now rejects any OTHER port on a
+    # private/loopback address (see test_url_safety_ollama_port_scan.py),
+    # specifically to stop this same base_url field being used to port-scan
+    # this app's own internal services, so an arbitrary "obviously
+    # unreachable" port would now be refused by that check before ever
+    # reaching the network layer -- 11434 is still genuinely unreachable in
+    # the test environment (nothing listens on it inside the backend
+    # container) while staying a realistic, allowed Ollama address.
+    result = await check_ai_connection("ollama", {"base_url": "http://localhost:11434"}, model="llama3.2:3b")
     assert result.ok is False
     assert "reach ollama" in result.message.lower()
 

@@ -243,6 +243,45 @@ async def test_malformed_result_json_maps_to_error(provider, client):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_submission_connect_error_propagates_for_orchestrator_retry(provider, client):
+    # Real bug fixed: httpx.ConnectError is one of base.py's
+    # RETRYABLE_EXCEPTIONS, which BaseProvider.run() is specifically designed
+    # to re-raise (rather than normalize) so the orchestrator's tenacity
+    # retry loop (provider_max_retries) can retry a transient connection
+    # blip -- see base.py's RETRYABLE_EXCEPTIONS comment and
+    # app/tests/unit/test_orchestrator_retry.py. fetch() previously caught
+    # this via its own `except httpx.HTTPError`, which also matches
+    # ConnectError, swallowing it into a terminal ProviderResult before it
+    # could ever reach run()'s dedicated re-raise branch. It must now
+    # propagate instead. Other httpx.HTTPError subclasses (e.g. malformed
+    # request errors) are unaffected and still map to ProviderStatus.ERROR.
+    respx.post("https://urlscan.io/api/v1/scan/").mock(side_effect=httpx.ConnectError("connection refused"))
+
+    with pytest.raises(httpx.ConnectError):
+        await provider.fetch("http://evil.test/", IOCType.URL, client)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_poll_connect_error_propagates_for_orchestrator_retry(provider, client):
+    # Same bug, mid-poll: a transient connection blip while polling for the
+    # scan result must also propagate rather than being normalized inside
+    # _poll_for_result(), or a dropped connection during the poll loop
+    # terminates the whole scan instead of being retried by the
+    # orchestrator.
+    respx.post("https://urlscan.io/api/v1/scan/").mock(
+        return_value=httpx.Response(200, json={"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"})
+    )
+    respx.get("https://urlscan.io/api/v1/result/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        await provider.fetch("http://evil.test/", IOCType.URL, client)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_absent_malicious_signal_maps_to_unknown_not_fabricated_clean(provider, client):
     respx.post("https://urlscan.io/api/v1/scan/").mock(
         return_value=httpx.Response(200, json={"uuid": "99999999-9999-9999-9999-999999999999"})

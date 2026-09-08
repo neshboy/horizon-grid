@@ -269,6 +269,80 @@ def test_single_provider_flooding_distinct_correlation_edges_is_capped_like_a_lo
     assert corroborated.overall_risk_score > flooded.overall_risk_score
 
 
+def test_single_provider_correlation_cap_holds_beyond_the_exact_saturation_point():
+    """Regression test for a real defect in the "fix" the previous test
+    (test_single_provider_flooding_distinct_correlation_edges_is_capped_like_a_lone_vote)
+    was meant to guard: that test only ever exercised EXACTLY 4 edges at 0.5
+    confidence each, i.e. sum == 2.0 == _CORRELATION_SATURATION -- the one
+    point where the (buggy) `total_confidence * corroboration` formula
+    happens to coincide with the intended `min(1, fraction) * corroboration`
+    formula. _correlation_fraction() multiplied an UNBOUNDED sum of
+    qualifying-edge confidences by the corroboration factor and only clipped
+    the *product*, so it did not actually cap the achievable fraction at
+    corroboration's value (0.40 for a lone provider) -- it just raised how
+    much raw confidence was needed to reach full (100%) saturation, from 2.0
+    to 5.0. A single provider asserting 10 distinct qualifying tags (5.0 of
+    total confidence at 0.5 each, e.g. 10 OTX malware_families from one
+    pulse-heavy indicator) drove correlation_qualifying_fraction to a full
+    1.0 pre-fix, saturating the entire 35-point correlation weight with zero
+    cross-provider corroboration -- exactly what this module's own docstring
+    says must never happen. Sweeping edge count with everything else held
+    constant (still ONE provider, still 0.5 confidence/edge) must keep the
+    fraction capped at 0.40 the whole way, not just at the single point the
+    sibling test happened to check."""
+    provider_results = [make_result("otx", {"verdict": "malicious"})]
+    for edge_count in (4, 6, 8, 10):
+        correlation = CorrelationResult(
+            nodes=[],
+            edges=[
+                GraphEdge(
+                    source=f"ipv4:{SEED_VALUE}",
+                    target=f"malware_family:fake{i}",
+                    relationship="associated_with",
+                    confidence=0.5,
+                    provenance="otx",
+                )
+                for i in range(edge_count)
+            ],
+            deduplicated_facts={},
+            provider_agreement={},
+        )
+        result = score_investigation(provider_results, correlation)
+        assert result.breakdown["correlation_qualifying_fraction"] <= 0.4 + 1e-9, (
+            f"edge_count={edge_count}: single-provider correlation fraction "
+            f"{result.breakdown['correlation_qualifying_fraction']} exceeded the 40% cap"
+        )
+        assert result.severity not in ("high", "critical"), f"edge_count={edge_count} reached {result.severity}"
+        assert result.overall_risk_score < 55.0, f"edge_count={edge_count} reached the 'high' threshold"
+
+    # At 10 edges (5.0 of raw confidence), the pre-fix formula fully
+    # saturated the component (fraction == 1.0, correlation_component ==
+    # 35.0) and, combined with the lone provider's own vote, reproduced the
+    # documented 61.0/"high" outcome. Confirm that specific numeric
+    # regression is gone.
+    ten_edges = score_investigation(
+        provider_results,
+        CorrelationResult(
+            nodes=[],
+            edges=[
+                GraphEdge(
+                    source=f"ipv4:{SEED_VALUE}",
+                    target=f"malware_family:fake{i}",
+                    relationship="associated_with",
+                    confidence=0.5,
+                    provenance="otx",
+                )
+                for i in range(10)
+            ],
+            deduplicated_facts={},
+            provider_agreement={},
+        ),
+    )
+    assert ten_edges.breakdown["correlation_component"] <= 14.1, "correlation_component must stay ~<=40% of 35"
+    assert ten_edges.overall_risk_score != 61.0
+    assert ten_edges.severity != "high"
+
+
 def test_purely_infrastructural_edge_does_not_raise_score():
     """resolves_to/hosts/belongs_to_asn/etc. are not, by themselves,
     evidence of malice -- only malware/threat-actor/campaign/MITRE/CVE
@@ -377,6 +451,55 @@ def test_severity_band_thresholds():
     assert _severity_band(79.9) == "high"
     assert _severity_band(80) == "critical"
     assert _severity_band(100) == "critical"
+
+
+def test_severity_matches_severity_band_of_the_returned_overall_risk_score():
+    """Regression test for a real bug: severity was classified from the
+    full-precision `overall_risk_score` BEFORE it got rounded to 1 decimal
+    for the field actually returned in the same ScoringResult. When the
+    unrounded value sits just under a threshold but rounds up onto/over it,
+    the two returned fields disagreed with each other under the module's
+    own _SEVERITY_THRESHOLDS table.
+
+    Concrete boundary case: 4 "clean" + 1 "suspicious" provider votes (mean
+    vote -> provider_component == 6.5) plus one qualifying, single-provider
+    correlation edge at confidence 0.4 (correlation_component == 2.8) sums
+    to a raw threat_intel_score of 9.950000000000003 -- just under the 10.0
+    "low" cutoff, so pre-fix this classified as "none". But
+    round(9.950000000000003, 1) == 10.0, which _SEVERITY_THRESHOLDS itself
+    maps to "low" -- so the API returned overall_risk_score=10.0 alongside
+    severity="none", an internally self-contradictory pair. Post-fix,
+    severity must be derived from that same rounded 10.0 and therefore
+    agree with _severity_band applied to the exact value returned."""
+    from app.scoring.engine import _severity_band
+
+    results = [
+        make_result(f"p{i}", {"verdict": v})
+        for i, v in enumerate(["clean", "clean", "clean", "clean", "suspicious"])
+    ]
+    correlation = CorrelationResult(
+        nodes=[],
+        edges=[
+            GraphEdge(
+                source=f"ipv4:{SEED_VALUE}",
+                target="malware_family:f0",
+                relationship="associated_with",
+                confidence=0.4,
+                provenance="p",
+            )
+        ],
+        deduplicated_facts={},
+        provider_agreement={},
+    )
+    result = score_investigation(results, correlation)
+
+    assert result.overall_risk_score == 10.0
+    assert result.severity == _severity_band(result.overall_risk_score), (
+        f"severity={result.severity!r} must agree with _severity_band() applied to the "
+        f"exact overall_risk_score returned ({result.overall_risk_score}) -> "
+        f"{_severity_band(result.overall_risk_score)!r}"
+    )
+    assert result.severity == "low"
 
 
 def test_engine_version_is_stamped_on_every_result():

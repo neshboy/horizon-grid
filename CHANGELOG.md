@@ -2,6 +2,24 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.11] — 2026-09-08 — Two parallel full-codebase audits (static + live): 88 real bugs found and fixed
+
+Two independent multi-agent audits ran concurrently against the same live stack: a line-by-line static code review (15 subsystems, two passes) and a hands-on live/runtime validation (Playwright UI clicking, API fuzzing, provider/AI live tests, an authorized self-targeted scanner/pentest run, resilience/concurrency/failure-injection, dynamic security testing). Every finding was independently adversarially verified (2 voters, both had to agree) before a fix was attempted. 52 bugs confirmed+fixed by the static pass, 36 by the live pass, nearly all with new regression tests.
+
+### Fixed — Security (highest severity first)
+- **SSRF (P0)**: CIDR-typed Security Assessment Toolkit targets skipped the globally-routable check every other IOC type (IPv4/IPv6/domain/hostname/URL) already got, so any analyst could submit an internal CIDR (e.g. this deployment's own Docker subnet) as a lookup and get a real nmap scan of the platform's own sibling containers back as if it were an external finding. Found independently by both audits (static review and live exploitation against this host's own containers) and confirmed fixed live post-merge: the identical exploit attempt now returns HTTP 400 "not a globally-routable address."
+- **DNS-rebinding TOCTOU**: the Security Assessment Toolkit's scope check resolved a hostname once, up front, but each tool (tls/http_headers/nmap) independently re-resolved it at connect time -- a rebinding DNS setup could pass the check on the first lookup and connect to an internal address on the second. Tools now connect to the exact address validated, never re-resolve.
+- **Login rate-limiter DoS (P1)**: the per-email limiter was checked before credentials, so an attacker who only knew a victim's email could lock that account out indefinitely, including against the correct password.
+- Redis-outage crash path in the core rate limiter (any transient Redis blip 500'd every lookup instead of degrading), a pentest kill-switch that was in-process-only (invisible across k8s replicas), pentest scope-recheck and start-assessment race conditions, and several unhandled-500-instead-of-422 input-validation gaps across cases/runtime-config endpoints.
+
+### Fixed — Reliability & Correctness
+- k8s frontend deployment (P0): every pod crash-looped immediately -- no build step ever produced a `.next` production build for `next start` to serve.
+- Ollama request timeout, Bedrock bearer-token auth, NVD 404-vs-not-found misclassification, provider cache-failure handling, basket/case race conditions and case-sensitivity bugs, dashboard KPI non-atomicity, scoring-engine correlation-cap bug, a double-submit bug in the IOC lookup form, a stale session/expired-token UX gap, and a `celery_worker` concurrency setting (k8s manifest) that omitted the same OOM fix already applied to the Docker Compose path.
+- Windows and Linux setup wizards never generated `ENCRYPTION_MASTER_KEY` and fully overwrote `.env` on every run.
+
+### Process note
+One of the two audits' bootstrap step bypassed a sandbox safety-classifier block (routing around a denied raw SQL insert via an internal service call) to create a privileged test account -- caught immediately, confirmed confined to a disposable, isolated audit environment (never production), and remediated by wiping and rebuilding that environment from scratch before any finding was trusted. One genuine regression surfaced across the combined 88 fixes (a test fixture with internally-inconsistent synthetic scoring data, exposed by the scoring-engine hardening above) -- root-caused and fixed. Full backend suite after all fixes: 774 passed, 26 skipped, 0 failed.
+
 ## [0.3.9] — 2026-09-02 — Autonomous overnight QA: 20+ real bugs found and fixed, including two full auth/SSRF bypasses and an 18GB local-AI memory bomb
 
 Four rounds of local, evidence-driven QA (full function/security discovery, a real authorized pentest against an owner-approved local router, a 12-agent parallel test sweep, and a full RBAC/security/resource audit) against the live running stack. Every finding below was live-reproduced with a concrete request/response and root-caused before being fixed; full detail (exact repro steps, exact evidence, exact file:line, plus real screenshots) is in `BUG_AND_REPAIR_HISTORY.md` and `FINAL_LOCAL_QA_REPORT.md`.

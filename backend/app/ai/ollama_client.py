@@ -32,7 +32,23 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_SECONDS = 120
+# Fallback only -- used if a caller ever constructs OllamaClient against a
+# Settings-like object that doesn't define ollama_timeout_seconds (the real
+# app/core/config.py Settings always does; see its own comment for the
+# reasoning). Confirmed real P1 bug: this used to be a hardcoded 120,
+# justified by a now-disproven assumption that "a model sized to fit fully
+# in VRAM responds in seconds" -- but this backend's own default model
+# (llama3.2:3b) runs CPU-only on a real dev/QA host (confirmed via
+# `size_vram: 0` in Ollama's own /api/ps), and Ollama's default idle-unload
+# behavior means the FIRST call after any idle period pays a full model
+# reload (measured live at 62.8s and 78.8s on two separate cold loads) on
+# top of CPU-speed generation (measured live at ~4.7 tokens/sec). The exact
+# request generate_final_assessment() sends (app/ai/service.py) was
+# confirmed live to complete successfully with valid JSON in 187s when not
+# artificially cut off at 120s -- so 120s was aborting ordinary, working
+# requests, not just genuinely hung ones. 300s leaves real headroom above
+# that measured 187s baseline for slightly larger prompts/outputs.
+_TIMEOUT_SECONDS = 300
 
 # Real P1 bug found live during overnight QA: with no num_ctx set at all,
 # Ollama 0.33.0 defaults the KV-cache to the MODEL's own trained maximum
@@ -62,33 +78,91 @@ class OllamaClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        timeout_seconds: Optional[int] = None,
+        *,
+        _ssrf_checked: bool = False,
     ) -> None:
         # Optional overrides let app/core/runtime_config.py construct a
         # client from the currently-active runtime configuration instead of
         # the frozen .env-derived Settings singleton -- defaults preserve
         # the original settings-only behavior for any other caller.
+        #
+        # _ssrf_checked is deliberately keyword-only, private (leading
+        # underscore), and defaults to False: the ONLY supported way to
+        # construct a real OllamaClient is `await OllamaClient.create(...)`
+        # (or the get_ollama_client() singleton below, which itself goes
+        # through create()) -- never this constructor directly. That is
+        # enforced here, not just documented, because a validation call
+        # (app/core/url_safety.py's assert_safe_outbound_url, blocking
+        # link-local addresses including the 169.254.169.254 cloud
+        # instance-metadata address) used to live directly in this
+        # constructor -- which meant every caller got it "for free" by
+        # construction, but that check does a real DNS resolution, and
+        # __init__ cannot be async. That forced the resolution through the
+        # synchronous, un-timeboxed socket.getaddrinfo() called directly on
+        # the shared asyncio event loop -- freezing the ENTIRE backend
+        # process (every route, every other in-flight request, not just
+        # this one) for however long resolution took, on every single
+        # Ollama-backed AI call once runtime-config was seeded. Measured
+        # live: a background asyncio ticker task ticking every 50ms recorded
+        # ZERO ticks during a 0.567s synchronous getaddrinfo() call for an
+        # unresolvable host, vs. the ~11 ticks expected if the loop had
+        # stayed responsive. assert_safe_outbound_url() is now async (awaits
+        # the event loop's own non-blocking resolver instead of calling
+        # socket.getaddrinfo() directly) -- which an __init__ can never
+        # await -- so the check now lives in create() below. Raising here
+        # if some future caller reintroduces a direct `OllamaClient(...)`
+        # call is what keeps that check from silently being skipped again.
+        if not _ssrf_checked:
+            raise RuntimeError(
+                "OllamaClient must not be constructed directly -- use "
+                "`await OllamaClient.create(...)` (or get_ollama_client()) so the "
+                "SSRF/DNS-resolution safety check runs without blocking the event loop."
+            )
         settings = get_settings()
         resolved_base_url = (base_url if base_url is not None else settings.ollama_base_url).rstrip("/")
-        # Real gap fixed: a validation call here (app/core/url_safety.py's
-        # assert_safe_outbound_url, blocks link-local addresses including
-        # cloud instance-metadata services at 169.254.169.254) previously
-        # existed only in app/ai/service.py's _build_client(), which is
-        # skipped entirely whenever no runtime-config DB row has ever been
-        # saved for this backend (get_ollama_client() below, which reads
-        # ONLY the frozen .env-derived OLLAMA_BASE_URL) -- confirmed via
-        # every real caller of get_ollama_client()/OllamaClient() that this
-        # is actually the COMMON case for a wizard-driven install that never
-        # touches the runtime-config web UI afterward, not an edge case.
-        # Centralizing the check in __init__ covers every construction path
-        # (settings-only singleton and explicit override alike) by
-        # construction, rather than requiring every future caller to
-        # remember to check first.
-        from app.core.url_safety import assert_safe_outbound_url
-
-        assert_safe_outbound_url(resolved_base_url)
         self._base_url = resolved_base_url
         self._model = model if model is not None else settings.ollama_model
         self._max_tokens = max_tokens if max_tokens is not None else settings.ollama_max_tokens
+        # getattr fallback: some tests construct a minimal Settings stand-in
+        # that predates this field; real app/core/config.py Settings always
+        # defines ollama_timeout_seconds.
+        self._timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else getattr(settings, "ollama_timeout_seconds", _TIMEOUT_SECONDS)
+        )
+
+    @classmethod
+    async def create(
+        cls,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        timeout_seconds: Optional[int] = None,
+    ) -> "OllamaClient":
+        """The one real construction choke point for OllamaClient -- awaits
+        the SSRF/link-local check (app/core/url_safety.py's
+        assert_safe_outbound_url) before constructing, so both the
+        runtime-config override path (app/ai/service.py's _build_client)
+        and the settings-only singleton path (get_ollama_client() below)
+        are covered by construction, exactly like the previous __init__-
+        based check was -- just async-safe now, so a slow/hanging DNS
+        resolution for the configured host delays only this call, not every
+        other concurrent request this process is serving."""
+        settings = get_settings()
+        resolved_base_url = (base_url if base_url is not None else settings.ollama_base_url).rstrip("/")
+
+        from app.core.url_safety import assert_safe_outbound_url
+
+        await assert_safe_outbound_url(resolved_base_url)
+        return cls(
+            base_url=resolved_base_url,
+            model=model,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            _ssrf_checked=True,
+        )
 
     @property
     def is_configured(self) -> bool:
@@ -121,12 +195,17 @@ class OllamaClient:
             },
         }
 
-        # A model sized to fit fully in VRAM (~4GB card) responds in
-        # seconds; _TIMEOUT_SECONDS leaves headroom for first-load latency
-        # without masking a genuinely hung request. Raise this if a larger
-        # model that spills to CPU/mmap is ever configured -- that was
-        # observed to take several minutes per response.
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+        # self._timeout_seconds (settings.ollama_timeout_seconds, default
+        # 300) intentionally assumes CPU-only inference plus a possible cold
+        # model reload, NOT "a model sized to fit fully in VRAM" -- this
+        # backend's own default model/config runs CPU-only on an ordinary
+        # dev/QA host, and Ollama's default idle-unload behavior means the
+        # first call after any idle period pays a full reload (measured live
+        # at 60-80s) on top of generation. See the module-level
+        # _TIMEOUT_SECONDS comment for the live measurements this default is
+        # based on. Operators running an even slower/larger model can raise
+        # OLLAMA_TIMEOUT_SECONDS further without a code change.
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
             try:
                 response = await client.post(f"{self._base_url}/api/chat", json=body)
             except httpx.ConnectError as exc:
@@ -135,7 +214,7 @@ class OllamaClient:
                 ) from exc
             except httpx.TimeoutException as exc:
                 raise RuntimeError(
-                    f"Ollama did not respond within {_TIMEOUT_SECONDS}s (model={self._model}) -- "
+                    f"Ollama did not respond within {self._timeout_seconds}s (model={self._model}) -- "
                     "likely too slow for available hardware"
                 ) from exc
             except httpx.HTTPError as exc:
@@ -169,8 +248,8 @@ class OllamaClient:
 _singleton: Optional[OllamaClient] = None
 
 
-def get_ollama_client() -> OllamaClient:
+async def get_ollama_client() -> OllamaClient:
     global _singleton
     if _singleton is None:
-        _singleton = OllamaClient()
+        _singleton = await OllamaClient.create()
     return _singleton

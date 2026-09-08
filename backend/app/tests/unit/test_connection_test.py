@@ -103,6 +103,28 @@ async def test_abusech_ok_query_status_is_success():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_abusech_malformed_200_body_is_graceful_failure_not_crash():
+    # Regression test: abuse.ch (or a WAF/CDN in front of it) can return
+    # HTTP 200 with a non-JSON body (e.g. an HTML error/outage page). Before
+    # the fix, _check_abusech's unconditional r.json() raised an uncaught
+    # json.JSONDecodeError that propagated all the way out of
+    # test_provider_connection() -- _timed() only caught httpx.TimeoutException
+    # and httpx.HTTPError, neither of which covers a JSON decode failure --
+    # turning a routine "provider had a hiccup" into a bare 500 for the
+    # POST /api/v1/providers/{provider_id}/test route (which has no
+    # try/except of its own). It must instead resolve to a graceful
+    # TestResult(ok=False, ...), like every other failure branch here.
+    respx.post("https://threatfox-api.abuse.ch/api/v1/").mock(
+        return_value=httpx.Response(200, content=b"<html>service unavailable</html>")
+    )
+    result = await check_provider_connection("urlhaus", {"auth_key": "dummy"})
+    assert result.ok is False
+    assert result.message
+    assert result.latency_ms is not None
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_nvd_works_with_no_key():
     respx.get("https://services.nvd.nist.gov/rest/json/cves/2.0").mock(
         return_value=httpx.Response(200, json={})
@@ -167,3 +189,49 @@ async def test_timeout_is_reported_cleanly():
     result = await check_provider_connection("virustotal", {"api_key": "real-key"})
     assert result.ok is False
     assert "timed out" in result.message.lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_safe_browsing_200_is_success():
+    respx.post("https://safebrowsing.googleapis.com/v4/threatMatches:find").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    result = await check_provider_connection("google_safe_browsing", {"api_key": "real-key"})
+    assert result.ok is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_safe_browsing_401_is_auth_failure():
+    respx.post("https://safebrowsing.googleapis.com/v4/threatMatches:find").mock(
+        return_value=httpx.Response(401)
+    )
+    result = await check_provider_connection("google_safe_browsing", {"api_key": "bad-key"})
+    assert result.ok is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_safe_browsing_api_key_is_sent_as_header_not_query_param():
+    """Regression test: the "Test Connection" button's candidate key must
+    never be sent as a `?key=` query parameter, because httpx logs the full
+    request URL (query string included) at INFO level, and the app's root
+    logger (which the 'httpx' logger propagates to, unsuppressed) runs at
+    INFO -- see app/main.py:54-58. Before the fix, clicking Test Connection
+    for this provider put the just-typed, not-yet-saved candidate key in
+    plain text into the backend logs. Mirrors the same regression test for
+    the real connector in app/tests/unit/test_google_safe_browsing.py.
+    """
+    route = respx.post("https://safebrowsing.googleapis.com/v4/threatMatches:find").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    api_key = "PLAINTEXT_SECRET_KEY_ABC123"
+
+    result = await check_provider_connection("google_safe_browsing", {"api_key": api_key})
+
+    assert result.ok is True
+    sent_request = route.calls.last.request
+    assert api_key not in str(sent_request.url)
+    assert "key=" not in str(sent_request.url)
+    assert sent_request.headers.get("x-goog-api-key") == api_key

@@ -30,7 +30,13 @@ import httpx
 from app.core.config import get_settings
 from app.core.runtime_context import get_credential
 from app.ioc.types import IOCType
-from app.providers.base import BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
+from app.providers.base import (
+    RETRYABLE_EXCEPTIONS,
+    BaseProvider,
+    ProviderCategory,
+    ProviderResult,
+    ProviderStatus,
+)
 
 _TIMEOUT_SECONDS = 60  # wall-clock cap for submit + poll-until-ready
 _POLL_INTERVAL_SECONDS = 3
@@ -80,6 +86,13 @@ class UrlscanProvider(BaseProvider):
                 headers=headers,
                 json={"url": target, "visibility": "unlisted"},
             )
+        except RETRYABLE_EXCEPTIONS:
+            # Deliberately NOT normalized here -- these must propagate up to
+            # BaseProvider.run()'s dedicated re-raise branch so the
+            # orchestrator's tenacity retry loop can retry a transient
+            # connection blip, per base.py's own documented design. See
+            # app/providers/base.py's RETRYABLE_EXCEPTIONS comment.
+            raise
         except httpx.TimeoutException as exc:
             return self._error(ioc_value, ioc_type, ProviderStatus.TIMEOUT, f"urlscan.io submission timed out: {exc}")
         except httpx.HTTPError as exc:
@@ -139,6 +152,12 @@ class UrlscanProvider(BaseProvider):
         while time.monotonic() < deadline:
             try:
                 response = await client.get(result_url, headers=headers)
+            except RETRYABLE_EXCEPTIONS:
+                # See the matching comment on the submit call above -- must
+                # propagate so the orchestrator's retry policy can retry a
+                # transient connection blip mid-poll instead of the whole
+                # scan giving up after exactly one dropped connection.
+                raise
             except httpx.TimeoutException as exc:
                 return self._error(ioc_value, ioc_type, ProviderStatus.TIMEOUT, f"urlscan.io poll request timed out: {exc}")
             except httpx.HTTPError as exc:

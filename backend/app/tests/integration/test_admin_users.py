@@ -24,6 +24,7 @@ from app.core.db import new_session
 from app.core.users import (
     DuplicateEmailError,
     LastAdminError,
+    SelfDeactivationError,
     SelfRoleChangeError,
     UserNotFoundError,
     create_user,
@@ -146,6 +147,33 @@ async def test_admin_cannot_change_their_own_role():
 
 
 @pytest.mark.asyncio
+async def test_admin_cannot_disable_their_own_account():
+    """Sibling guard to test_admin_cannot_change_their_own_role() above:
+    set_user_active() backs the same kind of self-service access change
+    (disabling your own account) that update_user()'s self-role-change
+    check exists to prevent, just via the /active endpoint instead of a
+    role edit. A companion admin is created so the (unrelated) last-active-
+    admin invariant has two active admins to work with and would NOT itself
+    have blocked this call -- isolating that it's specifically the
+    self-target guard doing the rejecting."""
+    email = _unique_email("qa-self-disable")
+    companion_email = _unique_email("qa-self-disable-companion")
+    created = await create_user(email, "pw-self-1", "QA Self Disable", Role.ADMIN, None, "actor@qa.test")
+    companion = await create_user(companion_email, "pw-1", "Companion", Role.ADMIN, None, "actor@qa.test")
+    user_id = uuid.UUID(created["id"])
+    companion_id = uuid.UUID(companion["id"])
+    try:
+        with pytest.raises(SelfDeactivationError):
+            await set_user_active(user_id, False, actor_user_id=user_id, actor_email=email)
+        async with new_session() as db:
+            user = (await db.execute(select(User).where(User.id == user_id))).scalar_one()
+            assert user.is_active is True, "the caller's own account must be untouched after a rejected self-disable"
+    finally:
+        await _delete_user(user_id)
+        await _delete_user(companion_id)
+
+
+@pytest.mark.asyncio
 async def test_cannot_demote_the_last_active_admin(_isolated_admin_set):
     email = _unique_email("qa-lastadmin-demote")
     created = await create_user(email, "pw-1", "QA Last Admin", Role.ADMIN, None, "actor@qa.test")
@@ -242,6 +270,41 @@ async def test_list_users_search_and_role_filter():
         assert result_role["items"] == []
     finally:
         await _delete_user(uuid.UUID(created["id"]))
+
+
+@pytest.mark.asyncio
+async def test_list_users_sort_by_last_login_desc_puts_nulls_last():
+    """Regression test for the NULLS-FIRST-on-DESC bug: last_login_at is
+    nullable (NULL for a user who has never logged in), and Postgres's
+    default null-ordering puts NULLs FIRST for a bare `ORDER BY ... DESC`
+    unless the query overrides it. That silently buried every user with a
+    real recent login behind every never-logged-in user on a descending
+    sort -- list_users() must instead put the never-logged-in (NULL) user
+    LAST, symmetric with the ascending case."""
+    shared = uuid.uuid4().hex[:10]
+    email_logged = f"qa-sortnull-{shared}-logged@qa.test"
+    email_never = f"qa-sortnull-{shared}-never@qa.test"
+    logged = await create_user(email_logged, "pw-1", "Sort Logged", Role.ANALYST, None, "actor@qa.test")
+    never = await create_user(email_never, "pw-1", "Sort Never", Role.ANALYST, None, "actor@qa.test")
+    logged_id, never_id = uuid.UUID(logged["id"]), uuid.UUID(never["id"])
+    try:
+        await record_login_success(logged_id, email_logged)
+
+        desc = await list_users(search=f"qa-sortnull-{shared}", sort_by="last_login_at", sort_dir="desc")
+        assert [u["email"] for u in desc["items"]] == [email_logged, email_never], (
+            "descending sort must put the user with a real last_login_at first "
+            "and the never-logged-in (NULL) user last"
+        )
+        assert desc["items"][0]["last_login_at"] is not None
+        assert desc["items"][1]["last_login_at"] is None
+
+        asc = await list_users(search=f"qa-sortnull-{shared}", sort_by="last_login_at", sort_dir="asc")
+        assert [u["email"] for u in asc["items"]] == [email_logged, email_never], (
+            "ascending sort must also put the never-logged-in (NULL) user last"
+        )
+    finally:
+        await _delete_user(logged_id)
+        await _delete_user(never_id)
 
 
 @pytest.mark.asyncio

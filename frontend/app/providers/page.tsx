@@ -17,10 +17,12 @@ import { NetworkAccessPanel } from "@/components/dashboard/NetworkAccessPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
+  ApiError,
   configureAIProvider,
   configureIOCProvider,
   getAuditLog,
   isLoggedIn,
+  listAIModels,
   listAIProviders,
   listIOCProviders,
   recordAITestResult,
@@ -56,13 +58,44 @@ export default function ProvidersPage() {
   const router = useRouter();
   const [aiProviders, setAiProviders] = useState<RuntimeProviderConfig[]>([]);
   const [iocProviders, setIocProviders] = useState<RuntimeProviderConfig[]>([]);
+  const [iocProvidersError, setIocProvidersError] = useState<string | null>(null);
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
+  const [auditLogError, setAuditLogError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Real bug found live: both catch handlers below used to be `.catch(() =>
+  // {})`, silently discarding the error. VIEWER/ANALYST both lack
+  // provider:manage/audit:read, so listIOCProviders()/getAuditLog() genuinely
+  // 403 for them -- but swallowing that made the IOC Providers/Audit Log
+  // tabs render identically to "this list is really empty", with nothing
+  // telling a VIEWER apart from an admin looking at a freshly-installed,
+  // truly-empty instance. Surface the 403 as a distinct message instead.
   const refreshAll = () => {
     listAIProviders().then(setAiProviders).catch(() => {});
-    listIOCProviders().then(setIocProviders).catch(() => {});
-    getAuditLog(50).then(setAuditLog).catch(() => {});
+    listIOCProviders()
+      .then((data) => {
+        setIocProviders(data);
+        setIocProvidersError(null);
+      })
+      .catch((err) => {
+        setIocProvidersError(
+          err instanceof ApiError && err.status === 403
+            ? "You don't have permission to view IOC providers."
+            : "Failed to load IOC providers."
+        );
+      });
+    getAuditLog(50)
+      .then((data) => {
+        setAuditLog(data);
+        setAuditLogError(null);
+      })
+      .catch((err) => {
+        setAuditLogError(
+          err instanceof ApiError && err.status === 403
+            ? "You don't have permission to view the audit log."
+            : "Failed to load the audit log."
+        );
+      });
   };
 
   useEffect(() => {
@@ -119,6 +152,7 @@ export default function ProvidersPage() {
                 fields={AI_CREDENTIAL_FIELDS[p.provider_id] ?? ["api_key"]}
                 plaintextFields={p.provider_id === "ollama" ? ["base_url"] : []}
                 showModelField
+                onFetchModels={(credentials) => listAIModels(p.provider_id, credentials)}
                 onSave={async (credentials, modelId) => {
                   try {
                     const updated = await configureAIProvider(p.provider_id, credentials, modelId);
@@ -147,7 +181,10 @@ export default function ProvidersPage() {
           </Tabs.Content>
 
           <Tabs.Content value="ioc" className="flex flex-col gap-3">
-            {iocProviders.map((p) => (
+            {iocProvidersError && (
+              <p className="text-sm text-muted-foreground">{iocProvidersError}</p>
+            )}
+            {!iocProvidersError && iocProviders.map((p) => (
               <ProviderConfigRow
                 key={p.provider_id}
                 provider={p}
@@ -192,8 +229,11 @@ export default function ProvidersPage() {
                   Every configuration change, recorded without ever storing a credential value.
                 </p>
                 <ul className="flex flex-col gap-2 text-sm">
-                  {auditLog.length === 0 && <li className="text-muted-foreground">No changes recorded yet.</li>}
-                  {auditLog.map((entry) => (
+                  {auditLogError && <li className="text-muted-foreground">{auditLogError}</li>}
+                  {!auditLogError && auditLog.length === 0 && (
+                    <li className="text-muted-foreground">No changes recorded yet.</li>
+                  )}
+                  {!auditLogError && auditLog.map((entry) => (
                     <li key={entry.id} className="border-b border-border/50 pb-2 last:border-none">
                       <span className="font-data tabular-nums text-xs text-muted-foreground">
                         {new Date(entry.timestamp).toLocaleString()}

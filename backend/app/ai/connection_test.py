@@ -335,7 +335,7 @@ async def _check_ollama(base_url: str, model: str) -> AITestResult:
     if not base_url or not model:
         return AITestResult(ok=False, message="Ollama base URL and model are both required.")
     try:
-        assert_safe_outbound_url(base_url)
+        await assert_safe_outbound_url(base_url)
     except ValueError as exc:
         return AITestResult(ok=False, message=f"Refusing to connect to {base_url}: {exc}")
     async with httpx.AsyncClient(timeout=60) as client:

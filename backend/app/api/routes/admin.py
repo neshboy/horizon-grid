@@ -84,6 +84,8 @@ async def set_user_active(
         return await svc.set_user_active(user_id, payload.is_active, user.id, user.email)
     except svc.LastAdminError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except svc.SelfDeactivationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except svc.UserNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

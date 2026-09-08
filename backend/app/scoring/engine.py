@@ -353,12 +353,32 @@ def _correlation_fraction(edges: Iterable[GraphEdge]) -> float:
     penalize a real multi-provider corroborated finding (which already had
     boosted per-edge confidence from correlate() itself) -- it specifically
     closes the "one source, many fabricated distinct edges" flood gap.
+
+    IMPORTANT: `total_confidence` (the sum of qualifying-edge confidences) is
+    UNBOUNDED -- it grows with every additional distinct qualifying edge, and
+    correlate() places no ceiling on how many edges one provider can assert.
+    `corroboration` MUST therefore be applied as a multiplier on an
+    already-0.0-1.0-bounded evidence fraction, never on the raw unbounded
+    sum -- multiplying an unbounded sum by a fixed 0.4 and clipping the
+    *product* to 100 does NOT cap the achievable fraction at 40%; it only
+    raises how much raw evidence is needed to reach 100% (from
+    _CORRELATION_SATURATION to _CORRELATION_SATURATION / 0.4), so enough
+    distinct same-provider edges still saturate this component fully with
+    zero corroboration -- this exact bug is what this docstring's own
+    "capped at 40% strength" claim previously failed to deliver. Bounding
+    the evidence fraction to [0, 1] FIRST (mirroring how the provider-vote
+    component bounds mean_vote to [0, 1] via an average before multiplying by
+    its own corroboration factor), THEN multiplying by corroboration, makes
+    corroboration a true ceiling: a lone provider's fraction can never exceed
+    corroboration's value (0.40) no matter how much raw confidence it piles
+    up.
     """
     qualifying = [edge for edge in edges if edge.relationship in _QUALIFYING_RELATIONSHIPS]
     total_confidence = sum(edge.confidence for edge in qualifying)
     distinct_providers = {provider_id for edge in qualifying for provider_id in edge.provenance.split(",")}
     corroboration = _corroboration_factor(len(distinct_providers))
-    return _clip(100.0 * total_confidence * corroboration / _CORRELATION_SATURATION) / 100.0
+    evidence_fraction = min(1.0, total_confidence / _CORRELATION_SATURATION)
+    return evidence_fraction * corroboration
 
 
 def _top_severity(security_finding_severities: Optional[Iterable[Any]]) -> Optional[str]:
@@ -435,11 +455,18 @@ def score_investigation(
     overall_risk_score = _clip(max(threat_intel_score, sa_risk_floor))
     confidence_score = _clip(max(threat_intel_confidence, sa_confidence_floor))
 
+    # Round FIRST, then classify severity off that same rounded value -- the
+    # severity label must always agree with _SEVERITY_THRESHOLDS applied to
+    # the actual overall_risk_score returned below, not to the pre-round
+    # full-precision value (which can sit just under a threshold while its
+    # rounded form lands on/over it, e.g. 29.9958 -> 30.0).
+    overall_risk_score_rounded = round(overall_risk_score, 1)
+
     return ScoringResult(
-        overall_risk_score=round(overall_risk_score, 1),
+        overall_risk_score=overall_risk_score_rounded,
         confidence_score=round(confidence_score, 1),
         malicious_probability=round(malicious_probability, 1),
-        severity=_severity_band(overall_risk_score),
+        severity=_severity_band(overall_risk_score_rounded),
         breakdown={
             "voting_provider_count": float(n),
             "mean_provider_vote": round(mean_vote, 3),

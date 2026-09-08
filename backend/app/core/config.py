@@ -146,6 +146,14 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "llama3.2:3b"
     ollama_max_tokens: int = 8192
+    # Deliberately generous: CPU-only inference (this backend's own default
+    # model/config, and the whole point of a "no GPU required" local
+    # backend) plus Ollama's default idle-unload behavior (a full model
+    # reload, measured 60-80s, on the first call after any idle period) are
+    # both normal conditions here, not edge cases -- see
+    # app/ai/ollama_client.py's _TIMEOUT_SECONDS comment for the live
+    # measurements this default is based on.
+    ollama_timeout_seconds: int = 300
 
     ai_backend: str = "ollama"  # "ollama", "anthropic", "gemini", "bedrock", "groq", "openai", "kimi", "deepseek", "xai", "mistral", or "openrouter"
 
@@ -173,6 +181,38 @@ class Settings(BaseSettings):
     provider_timeout_seconds: int = 20
     provider_max_retries: int = 2
     provider_cache_ttl_seconds: int = 3600
+
+    # --- Security Assessment Toolkit (app/core/security_assessment.py) ---
+    # Platform-wide cap on concurrent tool executions (nmap subprocesses etc.),
+    # enforced via a module-level asyncio.Semaphore built from this value once
+    # at import time -- which only bounds however many scans run at once
+    # WITHIN THIS ONE PROCESS. docker-compose.yml and the Windows/Linux
+    # installers all run exactly one backend container, so this default IS
+    # the real platform-wide ceiling there, deliberately paired with that
+    # service's 4g mem_limit (see docker-compose.yml's backend comment).
+    # k8s/base/backend-deployment.yaml runs `replicas: 2` of this same image,
+    # each enforcing its OWN independent semaphore built from this same
+    # setting -- left at this default there, the real platform-wide ceiling
+    # would silently double (2 pods x 4 = 8), not stay at 4. That manifest
+    # overrides this down to 2 per pod (2 x 2 = 4) via its own container-level
+    # `env:`, mirroring DB_POOL_SIZE/DB_POOL_MAX_OVERFLOW's existing
+    # backend-only override pattern there for the same reason.
+    security_assessment_max_concurrent_scans: int = 4
+
+    # --- Dashboard AI narrative (app/ai/dashboard_summary.py) ---
+    # GET /dashboard/executive-summary is an at-a-glance ops view sharing the
+    # single active AI backend with every other AI-calling feature
+    # platform-wide (lookups, pentest, security assessments) -- unlike those
+    # features, this endpoint has a documented, number-accurate, deterministic
+    # fallback (_template_fallback_narrative) ready to go the instant the AI
+    # call fails, so there is no reason for it to wait anywhere near the
+    # underlying AI client's own much longer timeout (e.g. Ollama's 300s,
+    # sized for a cold CPU-only model reload -- see
+    # app/ai/ollama_client.py's _TIMEOUT_SECONDS comment). Deliberately much
+    # shorter than provider_timeout_seconds above: a busy/slow shared local
+    # AI backend should fail this call over to the template fallback within
+    # a short, predictable ceiling rather than leave the dashboard hanging.
+    dashboard_summary_ai_timeout_seconds: int = 20
 
     # --- Rate limiting (per user, on the lookup-creation endpoint) ---
     lookup_rate_limit_max_calls: int = 10

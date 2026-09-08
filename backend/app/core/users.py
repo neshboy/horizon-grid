@@ -30,7 +30,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, nullslast, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.auth.security import hash_password
@@ -50,6 +50,10 @@ class LastAdminError(UserManagementError):
 
 
 class SelfRoleChangeError(UserManagementError):
+    pass
+
+
+class SelfDeactivationError(UserManagementError):
     pass
 
 
@@ -104,7 +108,13 @@ async def list_users(
         "last_login_at": User.last_login_at,
     }
     column = sort_columns.get(sort_by, User.created_at)
-    order = column.asc() if sort_dir == "asc" else column.desc()
+    # Explicit NULLS LAST in both directions: last_login_at is nullable
+    # (NULL for never-logged-in users), and Postgres's default null-ordering
+    # (NULLS FIRST for DESC) would otherwise bury every real recent login
+    # behind every never-logged-in user on a descending sort. Pinning NULLS
+    # LAST for ASC too keeps both directions symmetric regardless of the
+    # underlying DB's default null-ordering.
+    order = nullslast(column.asc()) if sort_dir == "asc" else nullslast(column.desc())
 
     async with new_session() as db:
         filters = []
@@ -235,6 +245,18 @@ async def update_user(
 async def set_user_active(
     user_id: uuid.UUID, is_active: bool, actor_user_id: Optional[uuid.UUID], actor_email: str
 ) -> dict:
+    # Mirrors update_user()'s self-role-change guard above: an admin
+    # disabling their own account is the same kind of self-service access
+    # change that guard exists to prevent, just via this sibling endpoint
+    # instead of a role edit. Only the deactivating direction is blocked --
+    # re-enabling your own (already active) account is a no-op, and there is
+    # no path to call this while already disabled since get_current_user()
+    # would already be rejecting that caller's requests.
+    if not is_active and actor_user_id is not None and user_id == actor_user_id:
+        raise SelfDeactivationError(
+            "Administrators cannot disable their own account. Ask another administrator to do it."
+        )
+
     async with new_session() as db:
         locked_admins = await _lock_all_admin_rows(db)
         user = (await db.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one_or_none()

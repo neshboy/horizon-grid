@@ -360,6 +360,53 @@ async def explain_score(ioc_value: str, risk_summary: str, evidence: list[Eviden
     )
 
 
+_MAX_ANALYST_NOTES_KEPT = 40
+_MAX_ANALYST_NOTE_LEN = 800
+
+
+def _prune_analyst_notes_for_prompt(analyst_notes: list[str]) -> str:
+    """Caps the analyst-notes/conversation-history blob before it reaches the
+    Copilot prompt -- every OTHER input fed into an AI prompt in this module
+    and in app/ai/service.py is capped this way (see that module's
+    _prune_for_prompt/_prune_ioc_value_for_prompt docstrings, and the
+    edges[:100] slicing just above in this function) but analyst_notes was
+    the one call path that received no equivalent guard.
+
+    The frontend (InvestigationCopilot.tsx) resends the ENTIRE, ever-growing
+    Q&A transcript verbatim as `notes` on every single Copilot call for the
+    life of an investigation session, with no cap or eviction on its side --
+    so left unbounded, this prompt grows roughly linearly with turn count.
+    On a cloud backend with a small token budget (Groq, 12000 TPM per this
+    codebase's own documented limit) a long enough session eventually hits
+    HTTP 413, the exact failure mode already fixed for NVD's oversized
+    fields. On Ollama, _estimate_num_ctx still clamps num_ctx to at most
+    8192 tokens regardless of true prompt size, so an oversized notes blob
+    just silently pushes real evidence/question content out of context
+    instead of crashing -- degraded/wrong answers rather than a crash, but
+    the same underlying defect.
+
+    Keeps only the most recent _MAX_ANALYST_NOTES_KEPT notes (older turns
+    are the least relevant to the CURRENT question, and are the ones the
+    frontend keeps re-sending unchanged turn after turn) and truncates any
+    single oversized note, marking both forms of truncation explicitly so
+    the model doesn't mistake a cut for the actual end of the record.
+    """
+    if not analyst_notes:
+        return "(no analyst notes yet)"
+
+    total = len(analyst_notes)
+    kept = analyst_notes[-_MAX_ANALYST_NOTES_KEPT:]
+    lines = []
+    if total > len(kept):
+        lines.append(f"... [{total - len(kept)} earlier notes truncated] ...")
+    for note in kept:
+        text = str(note)
+        if len(text) > _MAX_ANALYST_NOTE_LEN:
+            text = text[:_MAX_ANALYST_NOTE_LEN] + f"... [truncated, {len(text)} chars total]"
+        lines.append(f"- {text}")
+    return "\n".join(lines)
+
+
 async def answer_copilot_question(
     ioc_value: str,
     question: str,
@@ -370,7 +417,7 @@ async def answer_copilot_question(
     edges_block = "\n".join(
         f"{e.source} --{e.relationship}--> {e.target}" for e in correlation.edges[:100]
     )
-    notes_block = "\n".join(f"- {n}" for n in analyst_notes) or "(no analyst notes yet)"
+    notes_block = _prune_analyst_notes_for_prompt(analyst_notes)
     user_prompt = (
         f"Current investigation IOC: {ioc_value}\n\n"
         f"Evidence ledger:\n{_evidence_block(evidence)}\n\n"

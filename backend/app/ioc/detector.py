@@ -158,3 +158,84 @@ def detect_ioc_type(raw: str) -> IOCType:
         return IOCType.UNKNOWN
 
     return IOCType.UNKNOWN
+
+
+# IOC types with a fixed, checkable syntax -- a caller-supplied ioc_type_hint
+# claiming one of these must actually look like one, or it's silently trusted
+# with zero validation (see value_matches_ioc_type's docstring). Every other
+# IOCType (malware_family, threat_actor, campaign, file_name, process_name,
+# mutex, windows_service, file_path, user_agent, tls_certificate, hostname,
+# yara_rule, sigma_rule) is intentionally free text with no fixed shape --
+# ioc_type_hint exists specifically so callers can label exactly this kind of
+# observable (see BasketAddRequest/LookupCreateRequest's own field comments),
+# so those are only required to be non-empty, which the caller already
+# guarantees before calling this.
+_TYPE_VALIDATORS: dict[IOCType, "re.Pattern[str] | None"] = {
+    IOCType.MD5: _MD5_RE,
+    IOCType.SHA1: _SHA1_RE,
+    IOCType.SHA256: _SHA256_RE,
+    IOCType.SHA512: _SHA512_RE,
+    IOCType.JA3: _JA3_RE,
+    IOCType.JA4: _JA4_RE,
+    IOCType.CVE: _CVE_RE,
+    IOCType.CWE: _CWE_RE,
+    IOCType.CAPEC: _CAPEC_RE,
+    IOCType.MITRE_TECHNIQUE: _MITRE_TECHNIQUE_RE,
+    IOCType.EMAIL: _EMAIL_RE,
+    IOCType.DOMAIN: _DOMAIN_RE,
+    IOCType.REGISTRY_KEY: _REGISTRY_KEY_RE,
+}
+
+
+def value_matches_ioc_type(value: str, ioc_type: IOCType) -> bool:
+    """Whether `value` (assumed already stripped) is at least syntactically
+    plausible for the claimed `ioc_type`.
+
+    Exists because a caller-supplied ioc_type_hint completely bypasses
+    detect_ioc_type() -- see stream_lookup()/add_to_basket() in the API
+    routes, which call this immediately after any caller-supplied hint is
+    present, instead of trusting it outright. Without this, an empty string
+    (or any garbage value) paired with, say, ioc_type_hint=ipv4 sailed
+    straight through to persistence and a full provider fan-out with no
+    check at all -- the ioc_type==UNKNOWN rejection only ever ran against
+    the *auto-detected* type, never against a hint.
+    """
+    if not value:
+        return False
+
+    if ioc_type == IOCType.IPV4:
+        try:
+            return ipaddress.ip_address(value).version == 4
+        except ValueError:
+            return False
+    if ioc_type == IOCType.IPV6:
+        try:
+            return ipaddress.ip_address(value).version == 6
+        except ValueError:
+            return False
+    if ioc_type == IOCType.CIDR:
+        if "/" not in value:
+            return False
+        try:
+            ipaddress.ip_network(value, strict=False)
+            return True
+        except ValueError:
+            return False
+    if ioc_type == IOCType.URL:
+        return value.lower().startswith(("http://", "https://"))
+    if ioc_type == IOCType.ASN:
+        # Accept the bare-digits form too (e.g. "15169", not just "AS15169")
+        # -- app/providers/whois_rdap.py's own ASN handling already tolerates
+        # both, falling back to the raw value when no "AS"/"ASN" prefix regex
+        # match is found.
+        return bool(_ASN_RE.match(value)) or value.isdigit()
+    if ioc_type == IOCType.CRYPTO_WALLET:
+        return bool(_BTC_RE.match(value) or _ETH_RE.match(value) or _XMR_RE.match(value))
+
+    validator = _TYPE_VALIDATORS.get(ioc_type)
+    if validator is not None:
+        return bool(validator.match(value))
+
+    # No fixed syntax for this type (free-text observable) -- non-empty is
+    # already all we can require, and that's confirmed above.
+    return True

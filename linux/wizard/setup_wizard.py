@@ -32,6 +32,7 @@ Usage:
                                                     # skip docker compose up
 """
 import argparse
+import base64
 import getpass
 import json
 import os
@@ -274,6 +275,18 @@ def new_random_secret(nbytes=48):
     return secrets.token_urlsafe(nbytes)
 
 
+def new_encryption_master_key():
+    """ENCRYPTION_MASTER_KEY is fed directly into cryptography.fernet.Fernet()
+    by backend/app/core/crypto.py with no derivation step (unlike
+    JWT_SECRET_KEY, which is just an opaque string), so it MUST be exactly 32
+    raw random bytes, url-safe-base64-encoded WITH padding kept intact --
+    i.e. exactly what Fernet.generate_key() itself produces. new_random_secret()
+    would not work here: secrets.token_urlsafe()'s output length/padding
+    does not reliably base64-decode back to exactly 32 bytes, which raises
+    inside Fernet() the first time a credential is saved."""
+    return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+
+
 def convert_to_safe_env_value(value, field_name):
     """Mirrors Write-EnvFile.ps1's ConvertTo-SafeEnvValue exactly: strip
     CR/LF (never legitimately needed in a credential), and reject a value
@@ -299,6 +312,7 @@ def default_settings():
     """Mirrors Write-EnvFile.ps1's New-DefaultPlatformSettings."""
     settings = {
         "JwtSecretKey": new_random_secret(48),
+        "EncryptionMasterKey": new_encryption_master_key(),
         "PostgresPassword": new_random_secret(24),
         "Neo4jPassword": new_random_secret(24),
         "PortFrontend": 3000,
@@ -332,6 +346,7 @@ def default_settings():
 
 ENV_KEY_TO_SETTINGS_KEY = {
     "JWT_SECRET_KEY": "JwtSecretKey",
+    "ENCRYPTION_MASTER_KEY": "EncryptionMasterKey",
     "POSTGRES_PASSWORD": "PostgresPassword",
     "NEO4J_PASSWORD": "Neo4jPassword",
     "HOST_PORT_FRONTEND": "PortFrontend",
@@ -386,6 +401,10 @@ def write_platform_env_file(settings, path):
         "",
         "# --- Security ---",
         "JWT_SECRET_KEY=%s" % safe["JwtSecretKey"],
+        "# Independent key used to encrypt provider/AI credentials at rest",
+        "# (app/core/crypto.py) -- kept separate from JWT_SECRET_KEY so that",
+        "# rotating one never orphans credentials encrypted under the other.",
+        "ENCRYPTION_MASTER_KEY=%s" % safe.get("EncryptionMasterKey", ""),
         "",
         "# --- Host port mapping (changed here if the installer detected a conflict) ---",
         "HOST_PORT_FRONTEND=%s" % safe["PortFrontend"],

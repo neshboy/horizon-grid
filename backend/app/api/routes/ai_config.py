@@ -3,6 +3,7 @@ discovery. The AI-backend analog of app/api/routes/providers.py -- see
 app/ai/connection_test.py for why this exists (no AI backend had any live
 test before this).
 """
+import json
 import logging
 
 import httpx
@@ -133,7 +134,7 @@ async def ai_list_models(
             models = await groq_client.list_models(api_key)
             if models:
                 return {"backend": backend, "models": sorted(models), "source": "live", "default": groq_client.DEFAULT_MODEL}
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning("Groq live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": groq_client.FALLBACK_MODELS, "source": "fallback", "default": groq_client.DEFAULT_MODEL}
 
@@ -145,7 +146,7 @@ async def ai_list_models(
             models = await openai_client.list_models(api_key)
             if models:
                 return {"backend": backend, "models": sorted(models), "source": "live", "default": openai_client.DEFAULT_MODEL}
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning("OpenAI live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": openai_client.FALLBACK_MODELS, "source": "fallback", "default": openai_client.DEFAULT_MODEL}
 
@@ -157,7 +158,7 @@ async def ai_list_models(
             models = await kimi_client.list_models(api_key)
             if models:
                 return {"backend": backend, "models": sorted(models), "source": "live", "default": kimi_client.DEFAULT_MODEL}
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning("Kimi live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": kimi_client.FALLBACK_MODELS, "source": "fallback", "default": kimi_client.DEFAULT_MODEL}
 
@@ -169,7 +170,7 @@ async def ai_list_models(
             models = await deepseek_client.list_models(api_key)
             if models:
                 return {"backend": backend, "models": sorted(models), "source": "live", "default": deepseek_client.DEFAULT_MODEL}
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning("DeepSeek live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": deepseek_client.FALLBACK_MODELS, "source": "fallback", "default": deepseek_client.DEFAULT_MODEL}
 
@@ -181,7 +182,7 @@ async def ai_list_models(
             models = await xai_client.list_models(api_key)
             if models:
                 return {"backend": backend, "models": sorted(models), "source": "live", "default": xai_client.DEFAULT_MODEL}
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning("xAI live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": xai_client.FALLBACK_MODELS, "source": "fallback", "default": xai_client.DEFAULT_MODEL}
 
@@ -193,7 +194,7 @@ async def ai_list_models(
             models = await mistral_client.list_models(api_key)
             if models:
                 return {"backend": backend, "models": sorted(models), "source": "live", "default": mistral_client.DEFAULT_MODEL}
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning("Mistral live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": mistral_client.FALLBACK_MODELS, "source": "fallback", "default": mistral_client.DEFAULT_MODEL}
 
@@ -205,7 +206,7 @@ async def ai_list_models(
             models = await openrouter_client.list_models(api_key)
             if models:
                 return {"backend": backend, "models": sorted(models), "source": "live", "default": openrouter_client.DEFAULT_MODEL}
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning("OpenRouter live model discovery failed, falling back to static list: %r", exc)
         return {"backend": backend, "models": openrouter_client.FALLBACK_MODELS, "source": "fallback", "default": openrouter_client.DEFAULT_MODEL}
 
@@ -213,7 +214,7 @@ async def ai_list_models(
         base_url = payload.credentials.get("base_url", "").rstrip("/")
         if base_url:
             try:
-                assert_safe_outbound_url(base_url)
+                await assert_safe_outbound_url(base_url)
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.get(f"{base_url}/api/tags")
                 if r.status_code == 200:

@@ -73,6 +73,10 @@ function Write-PlatformEnvFile {
         ""
         "# --- Security ---"
         "JWT_SECRET_KEY=$($Settings.JwtSecretKey)"
+        "# Independent key used to encrypt provider/AI credentials at rest"
+        "# (app/core/crypto.py) -- kept separate from JWT_SECRET_KEY so that"
+        "# rotating one never orphans credentials encrypted under the other."
+        "ENCRYPTION_MASTER_KEY=$($Settings.EncryptionMasterKey)"
         ""
         "# --- Host port mapping (changed here if the installer detected a conflict) ---"
         "HOST_PORT_FRONTEND=$($Settings.PortFrontend)"
@@ -156,6 +160,7 @@ function New-DefaultPlatformSettings {
        edit values before anything touches disk. #>
     return @{
         JwtSecretKey             = New-RandomSecret -Bytes 48
+        EncryptionMasterKey      = New-EncryptionMasterKey
         PostgresPassword         = New-RandomSecret -Bytes 24
         Neo4jPassword            = New-RandomSecret -Bytes 24
 

@@ -26,10 +26,11 @@ from app.auth.rbac import CurrentUser, require_permission
 from app.core.cache import RateLimiter
 from app.core.config import get_settings
 from app.core.db import get_db, new_session
+from app.core import runtime_config as runtime_config_svc
 from app.correlation.engine import correlate
 from app.evidence.builder import build_evidence
 from app.evidence.loaders import correlation_from_records
-from app.ioc.detector import detect_ioc_type
+from app.ioc.detector import detect_ioc_type, value_matches_ioc_type
 from app.ioc.types import IOCType
 from app.models.evidence import EvidenceItem, EvidenceType
 from app.models.lookup import (
@@ -63,8 +64,25 @@ async def stream_lookup(
 ):
     """Streams the full lookup lifecycle as SSE events:
     `detected` -> N x `provider_result` -> N x `provider_summary` -> `correlation` -> `final_assessment` -> `done`.
-    The frontend renders provider cards incrementally as `provider_result`/`provider_summary` pairs arrive.
+    The frontend renders provider cards incrementally as `provider_result`/`provider_summary` events arrive,
+    keyed by `provider_id` in each event -- not by arrival order. Every `provider_result` for an OK provider
+    kicks off that provider's AI summarization concurrently in the background (see the comment inside
+    event_stream() below), so `provider_summary` events arrive in AI-completion order once every provider
+    result is in, not necessarily immediately after their matching `provider_result`.
     """
+    # Real P2 bug found live: an unrecognized ai_backend (typo, or a
+    # caller/attacker-chosen string -- this route only requires
+    # "lookup:create") used to sail through entirely unvalidated as
+    # backend_override into summarize_provider/generate_final_assessment,
+    # which silently ran the analysis on Ollama anyway (app/ai/service.py's
+    # _build_client fallback) while persisting the bogus string verbatim
+    # into FinalAssessmentRecord.ai_backend -- the field this platform relies
+    # on for AI-result traceability. Rejecting it here, before any provider
+    # calls/DB writes happen, matches the same AI_BACKENDS check already
+    # used for POST /runtime/ai-providers/{backend} (app/api/routes/runtime.py).
+    if payload.ai_backend is not None and payload.ai_backend not in runtime_config_svc.AI_BACKENDS:
+        raise HTTPException(status_code=400, detail=f"Unknown AI backend {payload.ai_backend!r}")
+
     settings = get_settings()
     limiter = RateLimiter(
         f"lookup_create:{user.id}",
@@ -82,9 +100,34 @@ async def stream_lookup(
         )
 
     ioc_value = payload.value.strip()
-    ioc_type = payload.ioc_type_hint or detect_ioc_type(ioc_value)
-    if ioc_type == IOCType.UNKNOWN:
-        raise HTTPException(status_code=422, detail="Could not determine IOC type; pass ioc_type_hint.")
+    # Field(min_length=1) on payload.value only runs against the RAW value,
+    # before this .strip() -- a whitespace-only string (e.g. "   ") passes
+    # that check and lands here as "". Must be rejected before ioc_type_hint
+    # is even considered, or a caller-supplied hint (checked next) would
+    # otherwise never see it as invalid: detect_ioc_type("") does return
+    # UNKNOWN, but that path is skipped entirely whenever a hint is present.
+    if not ioc_value:
+        raise HTTPException(status_code=422, detail="IOC value cannot be empty or whitespace-only.")
+
+    if payload.ioc_type_hint is not None:
+        ioc_type = payload.ioc_type_hint
+        # A caller-supplied hint used to be trusted with zero validation --
+        # detect_ioc_type()'s own UNKNOWN-rejection safety net only ever ran
+        # against the auto-detected type, never against ioc_type_hint, so
+        # ANY hint (including a garbage value/type pairing like
+        # value="totally-not-an-ip", ioc_type_hint="ipv4") bypassed it
+        # entirely. value_matches_ioc_type() re-validates the hint against
+        # the value's actual shape for every type with a fixed syntax.
+        if ioc_type == IOCType.UNKNOWN or not value_matches_ioc_type(ioc_value, ioc_type):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{ioc_value}' does not look like a valid {ioc_type.value}; "
+                "pass a different ioc_type_hint or omit it to auto-detect.",
+            )
+    else:
+        ioc_type = detect_ioc_type(ioc_value)
+        if ioc_type == IOCType.UNKNOWN:
+            raise HTTPException(status_code=422, detail="Could not determine IOC type; pass ioc_type_hint.")
 
     lookup = IOCLookup(
         ioc_value=ioc_value, ioc_type=ioc_type.value, status=LookupStatus.RUNNING, requested_by=user.id
@@ -113,6 +156,10 @@ async def stream_lookup(
                 selected = set(payload.provider_ids)
                 candidate_providers = [p for p in get_all_providers() if p.provider_id in selected]
             try:
+                # Populated below with one asyncio.Task per OK provider result
+                # (its AI summarization, dispatched concurrently rather than
+                # awaited inline -- see the comment inside the loop).
+                summary_tasks: list[asyncio.Task] = []
                 async for result in run_all_providers(ioc_value, ioc_type, candidate_providers):
                     provider_results.append(result)
                     stream_db.add(
@@ -126,6 +173,18 @@ async def stream_lookup(
                             source_url=result.source_url,
                             error_message=result.error_message,
                             latency_ms=result.latency_ms,
+                            # Preserve whether this result is a replayed Redis
+                            # cache hit (app/providers/orchestrator.py's
+                            # _run_with_policy sets ProviderResult.from_cache
+                            # when it skips the real provider call entirely).
+                            # Without this, app/core/dashboard.py's health
+                            # queries could not distinguish a genuine,
+                            # freshly-verified provider attempt from a stale
+                            # cached one replayed with a brand-new
+                            # created_at -- see that module's _NON_ATTEMPT_STATUSES
+                            # handling, which from_cache rows are now treated
+                            # identically to.
+                            from_cache=result.from_cache,
                         )
                     )
 
@@ -166,14 +225,62 @@ async def stream_lookup(
                     yield _sse("provider_result", result.to_dict())
 
                     if result.status.value == "ok":
-                        summary = await summarize_provider(
-                            ioc_value, ioc_type.value, result, backend_override=payload.ai_backend
+                        # Real P2 latency bug found live: summarize_provider()
+                        # (an AI call) used to be `await`ed right here, one
+                        # provider at a time, inside this same `async for`
+                        # loop -- so even though run_all_providers() already
+                        # fans every provider's NETWORK fetch out concurrently
+                        # via asyncio.create_task, the AI summarization step
+                        # was entirely serial: the loop could not even pull
+                        # the NEXT provider's already-finished result out of
+                        # run_all_providers() until the CURRENT provider's AI
+                        # summary finished. Total wall-clock time therefore
+                        # scaled with (number of providers that returned OK) x
+                        # (AI-call latency) rather than being bounded by the
+                        # slowest single call -- confirmed live as wildly
+                        # inconsistent total investigation time (seconds to
+                        # several minutes) for functionally similar IOCs,
+                        # purely as a function of how many providers returned
+                        # OK and how loaded the AI backend happened to be.
+                        #
+                        # Fixed by dispatching summarize_provider() as a
+                        # background task the instant this OK result arrives,
+                        # instead of awaiting it inline -- it then runs
+                        # concurrently with the NEXT provider's fetch (still
+                        # in flight in run_all_providers()) and with every
+                        # other provider's pending summary. Every task is
+                        # drained via asyncio.as_completed() once the provider
+                        # loop itself finishes below, so total AI-summarization
+                        # time is bounded by the slowest single summary call,
+                        # not their sum. Creating the task here (rather than
+                        # earlier) still happens AFTER this provider's
+                        # ProviderResultRecord add+commit+yield above, so the
+                        # disconnect-safety property documented in the long
+                        # comment above (a lost AI summary can never take an
+                        # already-fetched provider result down with it) is
+                        # unchanged.
+                        summary_tasks.append(
+                            asyncio.create_task(
+                                summarize_provider(
+                                    ioc_value, ioc_type.value, result, backend_override=payload.ai_backend
+                                )
+                            )
                         )
-                        stream_db.add(
-                            AISummaryRecord(lookup_id=lookup_id, provider_id=result.provider_id, summary=summary.model_dump())
-                        )
-                        await stream_db.commit()
-                        yield _sse("provider_summary", summary.model_dump())
+
+                # Drain every in-flight summary task concurrently rather than
+                # one at a time -- see the comment above for why these were
+                # dispatched as background tasks instead of being awaited
+                # inline. summarize_provider() itself never lets an exception
+                # escape (it catches everything internally and returns a
+                # fallback ProviderSummary), so `await summary_task` here
+                # cannot raise because of a single provider's AI failure.
+                for summary_task in asyncio.as_completed(summary_tasks):
+                    summary = await summary_task
+                    stream_db.add(
+                        AISummaryRecord(lookup_id=lookup_id, provider_id=summary.provider_id, summary=summary.model_dump())
+                    )
+                    await stream_db.commit()
+                    yield _sse("provider_summary", summary.model_dump())
 
                 correlation = correlate(ioc_value, ioc_type, provider_results)
                 for edge in correlation.edges:
@@ -406,6 +513,11 @@ async def reanalyze_lookup(
         raise HTTPException(status_code=404, detail="Lookup not found")
     if lookup.status != LookupStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Lookup must be completed before it can be re-analyzed.")
+    # Same validation as stream_lookup above -- see its comment for the full
+    # bug writeup. payload.ai_backend is required (not Optional) here, so
+    # every request must name a real backend.
+    if payload.ai_backend not in runtime_config_svc.AI_BACKENDS:
+        raise HTTPException(status_code=400, detail=f"Unknown AI backend {payload.ai_backend!r}")
 
     summary_rows = (
         await db.execute(

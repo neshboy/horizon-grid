@@ -31,6 +31,7 @@ from app.api.routes import (
     runtime,
     security_assessment,
 )
+from app.core.cache import RateLimiterUnavailable
 from app.core.config import get_settings
 from app.core.runtime_config import seed_from_env_if_empty
 
@@ -228,6 +229,30 @@ async def _database_data_error_handler(request: Request, exc: DBAPIError) -> JSO
     raise exc
 
 
+@app.exception_handler(RateLimiterUnavailable)
+async def _rate_limiter_unavailable_handler(request: Request, exc: RateLimiterUnavailable) -> JSONResponse:
+    """Real P1 found live during a Redis outage (`docker compose stop redis`):
+    app/core/cache.py's RateLimiter.allow() -- called unconditionally by
+    POST /api/v1/lookup/stream, and on the failed-credential branch of POST
+    /api/v1/auth/login and /api/v1/auth/register -- had no timeout and no
+    exception handling around its Redis calls. A Redis outage turned
+    lookup/stream into a several-second hang followed by a bare, content-free
+    Starlette 500, and turned a failed login into a hang with no response at
+    all (client timeout, no status code) -- both far worse than this app's
+    own /health/detailed docstring, which documents a Redis outage as merely
+    DEGRADED. RateLimiter.allow() now bounds every Redis call with a timeout
+    and raises RateLimiterUnavailable on any Redis error/timeout instead of
+    letting redis.exceptions.ConnectionError (or an unbounded hang) fall
+    through; this handler turns that into one clean, fast, actionable 503
+    across all three call sites instead of a route-by-route try/except.
+    """
+    logging.getLogger(__name__).warning("Rate limiting unavailable (Redis unreachable/timed out): %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Rate limiting temporarily unavailable, please retry."},
+    )
+
+
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 app.include_router(auth.router, prefix=settings.api_v1_prefix)
@@ -309,6 +334,60 @@ async def _seed_runtime_config() -> None:
 
 
 @app.on_event("startup")
+async def _load_pentest_kill_switch_state() -> None:
+    """Hydrates the in-process global pentest kill switch flag from its
+    persisted state (app/models/pentest.py's PentestGlobalKillSwitch
+    singleton row) on every backend startup.
+
+    Real P1 found live during overnight QA: without this, the platform-wide
+    pentest kill switch (app/pentest/orchestrator.py) was a bare in-memory
+    boolean with nothing anywhere reading it back at process start --
+    engaging it, then restarting the backend (a routine hot-reload, a
+    crash, `docker restart`), silently reverted it to disengaged with no
+    audit entry or warning that the safety control an admin had explicitly
+    activated was no longer in effect. load_global_kill_switch_state()
+    itself fails SAFE (engaged) on a read error rather than raising, so
+    this call is not expected to ever throw -- the try/except below is
+    defense in depth only, matching every other startup hook in this file."""
+    try:
+        from app.pentest.orchestrator import load_global_kill_switch_state, start_kill_switch_sync_loop
+
+        await load_global_kill_switch_state()
+        # Real P1 found live: this startup-only hydration is exactly correct
+        # for docker-compose.yml/the installers (a single backend process),
+        # but k8s/base/backend-deployment.yaml runs replicas=2 of this same
+        # process behind one Service -- an engage/disengage call handled by
+        # one pod never reached the other pod's own in-memory flag, which
+        # then kept serving exploit/assessment actions under stale state
+        # until it happened to restart on its own. start_kill_switch_sync_loop()
+        # starts a background task (app/pentest/orchestrator.py) that
+        # re-hydrates this same flag from the DB on a short interval for the
+        # rest of this process's lifetime, so every replica converges on
+        # whichever state was most recently persisted, not just the one
+        # that handled that specific call.
+        start_kill_switch_sync_loop()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to load persisted pentest kill switch state at startup -- continuing without it."
+        )
+
+
+@app.on_event("shutdown")
+async def _stop_pentest_kill_switch_sync() -> None:
+    """Cancels the background task _load_pentest_kill_switch_state() above
+    started, so it doesn't outlive the event loop it was scheduled on (and
+    so repeated app startup/shutdown cycles within one process, e.g. across
+    tests that do trigger real lifespan events, don't accumulate orphaned
+    tasks)."""
+    try:
+        from app.pentest.orchestrator import stop_kill_switch_sync_loop
+
+        await stop_kill_switch_sync_loop()
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to stop pentest kill switch background sync task at shutdown.")
+
+
+@app.on_event("startup")
 async def _recover_orphaned_running_lookups() -> None:
     """A SIGKILL (OOM-kill, `docker kill`, power loss) gives the process zero
     chance to run any Python cleanup -- event_stream()'s own except/finally
@@ -320,7 +399,7 @@ async def _recover_orphaned_running_lookups() -> None:
     marked RUNNING at this point cannot belong to a request this process is
     handling (no such request could exist yet) -- it's necessarily orphaned
     from a previous, no-longer-running process instance."""
-    from sqlalchemy import update
+    from sqlalchemy import select, update
 
     from app.core.db import new_session
     from app.models.lookup import IOCLookup, LookupStatus
@@ -378,6 +457,98 @@ async def _recover_orphaned_running_lookups() -> None:
             )
     except Exception:
         logging.getLogger(__name__).exception("Orphaned-security-assessment-run recovery sweep failed -- continuing without it.")
+
+    # The Pentest Suite (app/pentest/orchestrator.py) uses the exact same
+    # detached-asyncio.Task background-execution pattern as IOCLookup/
+    # SecurityAssessmentRun above (start_assessment/resume_assessment's
+    # `_assessment_tasks[assessment_id] = asyncio.create_task(...)`), tracked
+    # only in that in-process dict -- which is empty on every fresh process
+    # start, identical to `_run_tasks` before the SecurityAssessmentRun sweep
+    # was added. A hard kill while an assessment is running therefore leaves
+    # it permanently ACTIVE with no live task anywhere ever able to advance
+    # or recover it: start_assessment only accepts DRAFT/PAUSED, and
+    # resume_assessment only accepts PAUSED, so an orphaned ACTIVE row is a
+    # dead end reachable only via a manual cancel. This mirrors that same
+    # manual-cancel fallback (orchestrator.py's cancel_assessment, when it
+    # finds no live task for the assessment) by writing CANCELLED directly,
+    # then additionally cleans up what cancel_assessment itself does not:
+    # the assessment's own non-terminal targets and any exploit attempt left
+    # RUNNING.
+    #
+    # PentestTarget's DISCOVERING/ENUMERATING/ASSESSING/PENDING statuses are
+    # only ever transient while _run_assessment's own task is actively
+    # driving them -- deliberately scoped to targets of an assessment THIS
+    # sweep is finding ACTIVE-with-no-task, since PENDING is also the
+    # perfectly normal resting state for a target under a DRAFT assessment
+    # (never started) or a PAUSED one (pause_assessment/resume_assessment
+    # intentionally reset not-yet-completed targets to PENDING while
+    # awaiting a future resume) -- neither of those is orphaned.
+    #
+    # PentestExploitAttempt is different: exploit.py's run_module() drives it
+    # synchronously within the request/response cycle, not via
+    # _assessment_tasks, and is deliberately allowed regardless of the
+    # parent assessment's status (COMPLETED included -- see run_module's own
+    # comment). So a RUNNING attempt is swept unconditionally, exactly like
+    # IOCLookup above: this process just started, so no in-flight request
+    # anywhere could still own it.
+    try:
+        from app.models.pentest import (
+            PentestAssessment,
+            PentestAssessmentStatus,
+            PentestExploitAttempt,
+            PentestExploitStatus,
+            PentestTarget,
+            PentestTargetStatus,
+        )
+
+        async with new_session() as db:
+            orphaned_assessment_ids = (
+                await db.execute(
+                    select(PentestAssessment.id).where(PentestAssessment.status == PentestAssessmentStatus.ACTIVE)
+                )
+            ).scalars().all()
+
+            targets_recovered = 0
+            if orphaned_assessment_ids:
+                targets_result = await db.execute(
+                    update(PentestTarget)
+                    .where(PentestTarget.assessment_id.in_(orphaned_assessment_ids))
+                    .where(PentestTarget.status.in_([
+                        PentestTargetStatus.PENDING, PentestTargetStatus.DISCOVERING,
+                        PentestTargetStatus.ENUMERATING, PentestTargetStatus.ASSESSING,
+                    ]))
+                    .values(status=PentestTargetStatus.FAILED)
+                )
+                targets_recovered = targets_result.rowcount
+
+            exploit_result = await db.execute(
+                update(PentestExploitAttempt)
+                .where(PentestExploitAttempt.status == PentestExploitStatus.RUNNING)
+                .values(
+                    status=PentestExploitStatus.ERROR,
+                    result_transcript=PentestExploitAttempt.result_transcript
+                    + "\n[orphaned by an unclean shutdown; recovered at startup]",
+                )
+            )
+
+            assessments_recovered = 0
+            if orphaned_assessment_ids:
+                assessments_result = await db.execute(
+                    update(PentestAssessment)
+                    .where(PentestAssessment.id.in_(orphaned_assessment_ids))
+                    .where(PentestAssessment.status == PentestAssessmentStatus.ACTIVE)
+                    .values(status=PentestAssessmentStatus.CANCELLED)
+                )
+                assessments_recovered = assessments_result.rowcount
+
+            await db.commit()
+        if assessments_recovered or targets_recovered or exploit_result.rowcount:
+            logging.getLogger(__name__).warning(
+                "Recovered %d pentest assessment(s), %d target(s), %d exploit attempt(s) orphaned by an unclean shutdown",
+                assessments_recovered, targets_recovered, exploit_result.rowcount,
+            )
+    except Exception:
+        logging.getLogger(__name__).exception("Orphaned-pentest-assessment recovery sweep failed -- continuing without it.")
 
 
 _HEALTH_CHECK_TIMEOUT_SECONDS = 3.0

@@ -31,7 +31,24 @@ from app.ioc.types import IOCType
 # individual providers should not implement their own retry loop") -- the
 # bug was that the generic catch-all didn't carve out an exception for
 # these specific types to let that intended design actually work.
-RETRYABLE_EXCEPTIONS = (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout)
+#
+# This tuple must cover the FULL set of transient-connectivity exceptions
+# httpx can raise while attempting to reach a provider, not just some of
+# httpx.TimeoutException's siblings. It previously omitted
+# httpx.ConnectTimeout (the exception raised when the connection attempt
+# itself times out -- confirmed live against an unreachable host) and its
+# sibling httpx.WriteTimeout, so those two failure modes silently fell
+# through to run()'s generic `except Exception` below and were normalized
+# into an immediate, non-retried ProviderStatus.ERROR on the very first
+# attempt -- the exact same bug class this comment already describes being
+# fixed once, just reintroduced via an incomplete exception set.
+RETRYABLE_EXCEPTIONS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+)
 
 
 class ProviderCategory(str, Enum):

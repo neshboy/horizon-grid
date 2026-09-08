@@ -14,8 +14,10 @@ configured" despite the UI still showing a stale "Last test: OK."
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from app.core.crypto import encrypt_secret
-from app.core.runtime_config import _merge_credentials
+from app.core.runtime_config import IOC_PROVIDER_CREDENTIAL_FIELDS, _merge_credentials
 
 
 def _row_with_credentials(creds: dict) -> SimpleNamespace:
@@ -113,6 +115,88 @@ def test_row_to_public_dict_flags_undecryptable_credentials_and_clears_stale_tes
     assert result["last_test_ok"] is None
     assert result["last_test_at"] is None
     assert "re-enter" in result["last_test_message"]
+
+
+# --- Real bug found live: saving an IOC provider credential accepted and
+# silently persisted ANY field name in `incoming`, not just the ones the
+# provider actually declares in IOC_PROVIDER_CREDENTIAL_FIELDS. Reproduced
+# live: POSTing {"credentials": {"totally_made_up_field": "junk"}} to
+# virustotal (whose only declared field is api_key) returned 200 and
+# permanently stored `totally_made_up_field` alongside the real api_key --
+# a field the UI's ProviderConfigRow.tsx never renders (it only renders
+# `credential_fields`), so it could never again be seen or removed. Callers
+# now pass the provider's declared field list as `allowed_fields`, and an
+# incoming key outside that list is rejected (ValueError) rather than
+# silently merged in. ---
+
+
+def test_unknown_credential_field_is_rejected_not_silently_persisted():
+    row = _row_with_credentials({"api_key": "existing-key-value"})
+    with pytest.raises(ValueError, match="totally_made_up_field"):
+        _merge_credentials(row, {"totally_made_up_field": "junk"}, IOC_PROVIDER_CREDENTIAL_FIELDS["virustotal"])
+
+
+def test_unknown_credential_field_does_not_get_merged_or_partially_applied():
+    # A rejected save must not have side effects: the legitimate field in
+    # the same payload must not have been merged in before the unknown
+    # field was noticed either (all-or-nothing).
+    row = _row_with_credentials({"api_key": "existing-key-value"})
+    with pytest.raises(ValueError):
+        _merge_credentials(
+            row,
+            {"api_key": "new-value", "totally_made_up_field": "junk"},
+            IOC_PROVIDER_CREDENTIAL_FIELDS["virustotal"],
+        )
+    # The stored credentials are untouched by the failed attempt.
+    assert _merge_credentials(row, {}) == {"api_key": "existing-key-value"}
+
+
+def test_declared_credential_field_is_still_accepted_with_allow_list_enforced():
+    row = _row_with_credentials({"api_key": "old-key"})
+    merged = _merge_credentials(row, {"api_key": "new-key"}, IOC_PROVIDER_CREDENTIAL_FIELDS["virustotal"])
+    assert merged == {"api_key": "new-key"}
+
+
+def test_censys_partial_update_respects_allow_list_of_both_declared_fields():
+    row = _row_with_credentials({"personal_access_token": "old-token", "organization_id": "org-123"})
+    merged = _merge_credentials(
+        row, {"personal_access_token": "new-token"}, IOC_PROVIDER_CREDENTIAL_FIELDS["censys"]
+    )
+    assert merged == {"personal_access_token": "new-token", "organization_id": "org-123"}
+
+
+def test_empty_allow_list_rejects_any_field():
+    # A caller passing an explicit empty allow-list (a provider declared to
+    # need zero credential fields) must still reject any field, not treat
+    # an empty list as "no restriction" (that's spelled `None`, tested
+    # below).
+    row = _row_with_credentials({})
+    with pytest.raises(ValueError, match="api_key"):
+        _merge_credentials(row, {"api_key": "nope"}, [])
+
+
+def test_allow_list_not_enforced_when_caller_omits_it_ai_providers_unaffected():
+    # AI providers (upsert_ai_provider) call _merge_credentials without an
+    # `allowed_fields` argument -- this must keep behaving exactly as
+    # before the fix, since AI providers have no equivalent declared-field
+    # registry today.
+    row = _row_with_credentials({"api_key": "existing-key-value"})
+    merged = _merge_credentials(row, {"some_new_ai_field": "value"})
+    assert merged == {"api_key": "existing-key-value", "some_new_ai_field": "value"}
+
+
+def test_upsert_ioc_provider_only_enforces_allow_list_for_providers_that_declare_one():
+    # upsert_ioc_provider() computes allowed_fields via
+    # IOC_PROVIDER_CREDENTIAL_FIELDS.get(provider_id) (no default), which is
+    # None -- not [] -- for a provider_id absent from the dict (a generic/
+    # custom IOC provider, e.g. crtsh which needs no key, or a user-added
+    # one). None must mean "no restriction" so those keep accepting
+    # whatever fields they're given, exactly like before this fix and
+    # exactly like _is_fully_configured's own identical fallback.
+    row = _row_with_credentials({})
+    assert IOC_PROVIDER_CREDENTIAL_FIELDS.get("crtsh") is None
+    merged = _merge_credentials(row, {"anything": "value"}, IOC_PROVIDER_CREDENTIAL_FIELDS.get("crtsh"))
+    assert merged == {"anything": "value"}
 
 
 def test_row_to_public_dict_does_not_flag_a_genuinely_never_configured_provider():

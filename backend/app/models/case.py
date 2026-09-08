@@ -6,7 +6,7 @@ import enum
 import uuid
 from typing import Optional
 
-from sqlalchemy import Enum, ForeignKey, String, Text
+from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +46,12 @@ class Case(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class CaseIOC(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "case_iocs"
+    # Mirrors BasketItem's uq_basket_owner_ioc (app/models/basket.py):
+    # without this, concurrent identical add-IOC requests for the same case
+    # (double-click, network retry) each land their own row instead of
+    # collapsing into one. See add_case_ioc() in app/api/routes/cases.py for
+    # the matching pre-insert dedup check + IntegrityError race handling.
+    __table_args__ = (UniqueConstraint("case_id", "ioc_value", name="uq_case_ioc_case_value"),)
 
     case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False, index=True)
     ioc_value: Mapped[str] = mapped_column(String(2048), nullable=False)

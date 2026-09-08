@@ -13,12 +13,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import selectinload
 
 from app.ai.service import generate_final_assessment, summarize_provider
 from app.ai.schemas import ProviderSummary
 from app.core.audit import record_audit
+from app.core.config import get_settings
 from app.core.db import new_session
 from app.correlation.engine import correlate, merge_correlation_results
 from app.evidence.builder import build_evidence
@@ -70,7 +71,31 @@ _run_tasks: dict[uuid.UUID, asyncio.Task] = {}
 # and queued (status stays PENDING/RUNNING as normal), they just execute
 # their tools N at a time rather than all at once. 4 is a starting default
 # for a single-site deployment, not a precisely-tuned ceiling.
-_MAX_CONCURRENT_SCANS = 4
+#
+# This asyncio.Semaphore is module-level -- it only bounds concurrency
+# WITHIN THIS ONE PROCESS. docker-compose.yml/the Windows/Linux installers
+# all run exactly one backend container, so the value below IS the real
+# platform-wide ceiling for them. That is NOT true under
+# k8s/base/backend-deployment.yaml, which runs `replicas: 2` of this same
+# image with no shared state between pods for this -- each pod would
+# otherwise enforce its own independent 4-scan cap, silently doubling the
+# real platform-wide ceiling to 8 versus every other deployment path. Reading
+# this from app/core/config.py's Settings (rather than hardcoding 4) lets
+# that manifest override it down to 2-per-pod (2 pods x 2 = 4) via its own
+# container-level `env:`, matching the intended single ceiling this value
+# and docker-compose.yml's paired 4g mem_limit were tuned together for --
+# see that Settings field's own comment for the full rationale.
+def _resolve_max_concurrent_scans() -> int:
+    """Split out from the module-level assignment below purely so the "this
+    cap is sourced from Settings, not a hardcoded literal" behavior is
+    directly unit-testable (monkeypatch get_settings, call this, assert the
+    result) without needing to importlib.reload this whole module -- the
+    asyncio.Semaphore itself is still only ever built once, at import time,
+    same as before."""
+    return get_settings().security_assessment_max_concurrent_scans
+
+
+_MAX_CONCURRENT_SCANS = _resolve_max_concurrent_scans()
 _scan_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SCANS)
 
 
@@ -273,6 +298,23 @@ def _validate_scope(lookup: IOCLookup, target_confirmation: str, authorization_c
                 f"Active scanning is limited to {_MAX_CIDR_ADDRESSES} addresses (/28) or smaller "
                 f"-- this range has {network.num_addresses}."
             )
+        # A CIDR target went through this branch alone and never reached the
+        # assert_globally_routable_target call below (that only ran for the
+        # IPV4/IPV6/DOMAIN/HOSTNAME/URL branch) -- confirmed live: a lookup
+        # of '172.19.0.0/28' (this deployment's own docker-compose subnet)
+        # was accepted and really nmap-scanned, returning genuine open ports
+        # (Postgres, etc.) on this app's own sibling containers as if they
+        # were an external finding. The size cap above already guarantees
+        # at most 16 addresses, so checking every individual address here
+        # (each a plain ip_address, never a DNS lookup) is cheap.
+        from app.core.url_safety import assert_globally_routable_target
+
+        addr_ioc_type = (IOCType.IPV6 if network.version == 6 else IOCType.IPV4).value
+        for addr in network:
+            try:
+                assert_globally_routable_target(addr_ioc_type, str(addr))
+            except ValueError as exc:
+                raise UnsafeTargetError(str(exc)) from exc
     elif ioc_type in (IOCType.IPV4, IOCType.IPV6, IOCType.DOMAIN, IOCType.HOSTNAME, IOCType.URL):
         # Real gaps found live during the overnight QA pass, both via this
         # exact code path: (1) a value like "--script=vuln.example.com",
@@ -286,9 +328,10 @@ def _validate_scope(lookup: IOCLookup, target_confirmation: str, authorization_c
         # container's internal service, returning its real response as if
         # it were an external finding (SSRF) -- assert_globally_routable_
         # target closes that by resolving and rejecting anything that isn't
-        # a real, globally-routable Internet address. See url_safety.py's
-        # own docstrings for why this check does NOT apply to CIDR here nor
-        # to the separate Pentest Suite (app/pentest/orchestrator.py), which
+        # a real, globally-routable Internet address. The CIDR branch above
+        # applies the equivalent per-address check itself. See url_safety.
+        # py's own docstrings for why this check does NOT apply to the
+        # separate Pentest Suite (app/pentest/orchestrator.py), which
         # legitimately needs RFC1918 targets under its own declared scope.
         from app.core.url_safety import assert_globally_routable_target, assert_valid_hostname_syntax
 
@@ -570,8 +613,11 @@ async def _refresh_lookup_assessment(
         for row in existing_summary_rows:
             try:
                 existing_summaries.append(ProviderSummary.model_validate(row.summary))
-            except Exception:  # noqa: BLE001
-                continue
+            except Exception as exc:  # noqa: BLE001 -- one malformed row shouldn't sink the whole refresh
+                logger.warning(
+                    "Skipping unparseable persisted summary for provider %s on lookup %s: %r",
+                    row.provider_id, lookup_id, exc,
+                )
 
         existing_edges = (
             await db.execute(select(CorrelationEdgeRecord).where(CorrelationEdgeRecord.lookup_id == lookup_id))
@@ -606,6 +652,28 @@ async def _refresh_lookup_assessment(
             await db.commit()
 
     new_correlation = correlate(ioc_value, IOCType(ioc_type_str), new_results)
+    # Re-running the same tool/profile against an already-scanned target makes
+    # correlate() emit the exact same edges again (same source/target/
+    # relationship AND same provenance -- e.g. nmap re-reporting the same CVE
+    # match). Feeding those into scoring/persistence unfiltered would let pure
+    # repetition, with zero new evidence, monotonically inflate the
+    # correlation component -- app/scoring/engine.py's _correlation_fraction
+    # sums qualifying edges' confidence, so N identical reruns produce N
+    # summed duplicates -- defeating the scoring engine's own "conservative by
+    # construction" guarantee and its anti-flood _corroboration_factor
+    # defense (which only keys off *distinct* providers, and a repeat run of
+    # the same tool is still just one provider). Drop any new edge that
+    # exactly repeats one already persisted for this lookup before merging/
+    # scoring/persisting; a genuinely new or different-provider edge (even for
+    # the same relationship) is unaffected and still counts.
+    existing_edge_keys = {
+        (edge.source, edge.target, edge.relationship, edge.provenance) for edge in existing_correlation.edges
+    }
+    new_correlation.edges = [
+        edge
+        for edge in new_correlation.edges
+        if (edge.source, edge.target, edge.relationship, edge.provenance) not in existing_edge_keys
+    ]
     merged_correlation = merge_correlation_results(existing_correlation, new_correlation)
     scoring = score_investigation(all_provider_results, merged_correlation, security_finding_severities)
 
@@ -665,6 +733,35 @@ async def _refresh_lookup_assessment(
     )
 
     async with new_session() as db:
+        # Two concurrent security-assessment runs against the SAME lookup_id
+        # can each reach this point at nearly the same time (there's no
+        # restriction on starting a second run while one is already in
+        # flight), each in its own DB transaction/connection. Without
+        # something to serialize them, both transactions' UPDATE below can
+        # each see the single pre-existing is_primary=True row, both flip it
+        # to False, and then BOTH unconditionally INSERT their own new
+        # is_primary=True row regardless of how many rows their own UPDATE
+        # actually touched -- confirmed live via two concurrent asyncpg
+        # transactions replaying exactly this UPDATE-then-INSERT sequence,
+        # which left two rows both marked is_primary=True for one lookup_id,
+        # violating the documented "at most one PRIMARY assessment per
+        # lookup" invariant (FinalAssessmentRecord/IOCLookup docstrings) and
+        # showing up in the UI as two rows both labeled "Original" in
+        # AiComparisonPanel.tsx.
+        #
+        # A Postgres advisory lock keyed on lookup_id closes this: it's a
+        # cross-connection, cross-process mutex (this backend runs with
+        # multiple replicas in k8s -- see k8s/base/backend-deployment.yaml --
+        # so an in-process asyncio.Lock alone would NOT be enough) that needs
+        # no schema change. pg_advisory_xact_lock specifically is
+        # transaction-scoped, so it is automatically released when this
+        # transaction commits (or rolls back) below -- a second concurrent
+        # caller for the same lookup_id blocks here until the first one's
+        # UPDATE+INSERT+commit has fully landed, then proceeds with a fresh
+        # read that correctly sees (and flips) the first caller's row before
+        # inserting its own, leaving exactly one is_primary=True row.
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": str(lookup_id)})
+
         await db.execute(
             update(FinalAssessmentRecord)
             .where(FinalAssessmentRecord.lookup_id == lookup_id, FinalAssessmentRecord.is_primary.is_(True))

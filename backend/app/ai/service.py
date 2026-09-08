@@ -62,24 +62,71 @@ class _AIClient(Protocol):
     ) -> dict: ...
 
 
-def _build_client(backend: str, credentials: Optional[dict], model_id: Optional[str]) -> _AIClient:
+def _explicit_cred(credentials: dict, field: str) -> str:
+    """Reads `field` out of an explicit (non-None) runtime-config
+    credentials dict, normalized to "" rather than None when absent.
+
+    Every backend client's __init__ resolves its constructor argument with
+    the pattern `x if x is not None else settings.X` -- a bare `None` means
+    "no explicit override was given at all, fall back to the frozen
+    Settings/.env singleton," which is exactly the behavior `_build_client`
+    itself uses (deliberately) for its OWN `credentials is None` branch, the
+    "no runtime config seeded yet" case.
+
+    But when `credentials` here IS an explicit dict (the runtime-configured
+    path -- a real ProviderRuntimeConfig row exists), a field simply absent
+    from it (never entered via the AI Providers UI, or cleared) is
+    `dict.get(field) is None` too -- indistinguishable, once it reaches the
+    client constructor, from "no override at all." Passing that raw `None`
+    through silently re-triggers the client's OWN settings/.env fallback,
+    so a backend the runtime-config system (and the AI Providers UI) report
+    as NOT configured ends up authenticating with a stale process-
+    environment credential anyway -- defeating the entire point of this
+    function's explicit-credentials path existing separately from the
+    `credentials is None` one.
+
+    Coercing to "" keeps the value non-None (so every client's `is not None`
+    check uses it as-is instead of falling back to Settings) while staying
+    falsy (so `bool(self._api_key)` -- what every client's `is_configured`
+    property checks -- still correctly reports not-configured, matching
+    what the runtime-config/UI layer already reports for this row)."""
+    return credentials.get(field) or ""
+
+
+async def _build_client(backend: str, credentials: Optional[dict], model_id: Optional[str]) -> _AIClient:
     """Constructs a FRESH client instance from explicit credentials when
     given (the runtime-configured path -- see app/core/runtime_config.py),
     or falls back to the legacy module-level singleton (reading the frozen
     Settings singleton) when credentials is None -- the "no runtime config
     seeded yet" safety net. A fresh instance per call (rather than reusing a
     singleton) is what makes switching backends/credentials at runtime take
-    effect on the very next call, with no process restart."""
+    effect on the very next call, with no process restart.
+
+    async (not a plain function) specifically for the Ollama branch below:
+    constructing an OllamaClient requires awaiting the SSRF/DNS-resolution
+    safety check (app/core/url_safety.py's assert_safe_outbound_url, via
+    OllamaClient.create()/get_ollama_client()) rather than blocking the
+    shared event loop for the duration of that DNS lookup. Every other
+    backend branch below has nothing to await; they just return
+    immediately, same as before."""
     if backend == "bedrock":
         from app.ai.bedrock_client import BedrockClaudeClient, get_bedrock_client
 
         if credentials is None:
             return get_bedrock_client()
         return BedrockClaudeClient(
-            bedrock_api_key=credentials.get("bedrock_api_key"),
-            aws_access_key_id=credentials.get("aws_access_key_id"),
-            aws_secret_access_key=credentials.get("aws_secret_access_key"),
-            aws_region=credentials.get("aws_region"),
+            bedrock_api_key=_explicit_cred(credentials, "bedrock_api_key"),
+            aws_access_key_id=_explicit_cred(credentials, "aws_access_key_id"),
+            aws_secret_access_key=_explicit_cred(credentials, "aws_secret_access_key"),
+            # aws_region is deliberately NOT run through _explicit_cred's ""
+            # coercion: it's a region name, not a secret/credential (see
+            # runtime_config.py's _is_fully_configured bedrock special case --
+            # "aws_region is ALWAYS present, it defaults to us-east-1, not a
+            # credential"), and BedrockClaudeClient.is_configured never looks
+            # at it. `or None` here lets a row with no explicit region still
+            # fall back to Settings/.env's aws_region default rather than
+            # constructing a boto3 client with region_name="" (which errors).
+            aws_region=_explicit_cred(credentials, "aws_region") or None,
             model_id=model_id,
         )
     if backend == "gemini":
@@ -87,67 +134,78 @@ def _build_client(backend: str, credentials: Optional[dict], model_id: Optional[
 
         if credentials is None:
             return get_gemini_client()
-        return GeminiClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return GeminiClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "anthropic":
         from app.ai.anthropic_client import AnthropicClient, get_anthropic_client
 
         if credentials is None:
             return get_anthropic_client()
-        return AnthropicClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return AnthropicClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "groq":
         from app.ai.groq_client import GroqClient, get_groq_client
 
         if credentials is None:
             return get_groq_client()
-        return GroqClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return GroqClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "openai":
         from app.ai.openai_client import OpenAIClient, get_openai_client
 
         if credentials is None:
             return get_openai_client()
-        return OpenAIClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return OpenAIClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "kimi":
         from app.ai.kimi_client import KimiClient, get_kimi_client
 
         if credentials is None:
             return get_kimi_client()
-        return KimiClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return KimiClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "deepseek":
         from app.ai.deepseek_client import DeepSeekClient, get_deepseek_client
 
         if credentials is None:
             return get_deepseek_client()
-        return DeepSeekClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return DeepSeekClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "xai":
         from app.ai.xai_client import XAIClient, get_xai_client
 
         if credentials is None:
             return get_xai_client()
-        return XAIClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return XAIClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "mistral":
         from app.ai.mistral_client import MistralClient, get_mistral_client
 
         if credentials is None:
             return get_mistral_client()
-        return MistralClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return MistralClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
     if backend == "openrouter":
         from app.ai.openrouter_client import OpenRouterClient, get_openrouter_client
 
         if credentials is None:
             return get_openrouter_client()
-        return OpenRouterClient(api_key=credentials.get("api_key"), model_id=model_id)
+        return OpenRouterClient(api_key=_explicit_cred(credentials, "api_key"), model_id=model_id)
 
     from app.ai.ollama_client import OllamaClient, get_ollama_client
 
     if credentials is None:
-        return get_ollama_client()
-    # SSRF validation (app/core/url_safety.py's assert_safe_outbound_url)
-    # happens inside OllamaClient.__init__ itself -- centralized there so it
-    # covers this override path AND get_ollama_client()'s settings-only
-    # singleton path by construction. A ValueError raised here surfaces as
-    # an ordinary AI-generation failure to callers (see _get_ai_client's
-    # `except Exception` callers below), not a raw crash.
-    return OllamaClient(base_url=credentials.get("base_url"), model=model_id)
+        return await get_ollama_client()
+    # SSRF validation (app/core/url_safety.py's assert_safe_outbound_url,
+    # awaited inside OllamaClient.create()) covers this override path AND
+    # get_ollama_client()'s settings-only singleton path by construction --
+    # both go through create(), the one real choke point. A ValueError
+    # raised here surfaces as an ordinary AI-generation failure to callers
+    # (see _get_ai_client's `except Exception` callers below), not a raw
+    # crash.
+    #
+    # base_url deliberately still uses raw credentials.get() (not
+    # _explicit_cred's "" coercion): unlike the cloud backends' api_key,
+    # Ollama's base_url is not a secret this platform needs to guard against
+    # leaking a stale credential for -- it's a local/LAN server address, and
+    # OllamaClient.is_configured never diverges from the AI Providers UI's
+    # "configured" flag the way a leftover env API key would (see
+    # test_missing_base_url_in_credentials_does_not_raise in
+    # test_ai_service_ollama_ssrf.py, which pins today's "fall back to the
+    # Settings default when not explicitly overridden" as intentional).
+    return await OllamaClient.create(base_url=credentials.get("base_url"), model=model_id)
 
 
 async def _get_ai_client(backend_override: Optional[str] = None) -> tuple[_AIClient, str, Optional[str]]:
@@ -171,9 +229,30 @@ async def _get_ai_client(backend_override: Optional[str] = None) -> tuple[_AICli
     silently sending the literal string "None" as an API key and getting
     back an ordinary-looking 4xx.
     """
-    from app.core.runtime_config import get_active_ai_config, get_ai_config
+    from app.core.runtime_config import AI_BACKENDS, get_active_ai_config, get_ai_config
 
     if backend_override is not None:
+        # Real P2 security/audit-integrity bug found live: an unrecognized
+        # backend_override (e.g. a typo, or a caller/attacker-chosen string
+        # with only "lookup:create" permission) used to fall through to
+        # get_ai_config() returning None (no ProviderRuntimeConfig row for a
+        # name that isn't a real backend), which landed in the
+        # `config is None` branch below and called
+        # _build_client(backend_override, None, None) -- whose own final
+        # `else` (no matching `if backend == "..."` branch) unconditionally
+        # constructs an OllamaClient regardless of what was actually asked
+        # for. Since `backend` stays the ORIGINAL bogus string, callers ended
+        # up silently running real analysis on Ollama while persisting the
+        # bogus caller-supplied string into assessment.ai_backend /
+        # FinalAssessmentRecord.ai_backend -- exactly the field this pipeline
+        # relies on to answer "which AI produced this conclusion." Validating
+        # against the same AI_BACKENDS list set_active_ai_backend() already
+        # uses (app/core/runtime_config.py) closes this at the one real choke
+        # point every caller (summarize_provider, generate_final_assessment,
+        # and anything else that ever calls this) goes through, rather than
+        # trusting every future call site to re-validate it individually.
+        if backend_override not in AI_BACKENDS:
+            raise ValueError(f"Unknown AI backend {backend_override!r}")
         config = await get_ai_config(backend_override)
     else:
         config = await get_active_ai_config()
@@ -181,12 +260,12 @@ async def _get_ai_client(backend_override: Optional[str] = None) -> tuple[_AICli
     if config is not None:
         backend = config["backend"]
         model_id = config["model_id"] or _model_id_for_backend(backend, get_settings())
-        client = _build_client(backend, config["credentials"], config["model_id"])
+        client = await _build_client(backend, config["credentials"], config["model_id"])
     else:
         settings = get_settings()
         backend = backend_override or settings.ai_backend
         model_id = _model_id_for_backend(backend, settings)
-        client = _build_client(backend, None, None)
+        client = await _build_client(backend, None, None)
 
     if not client.is_configured:
         raise RuntimeError(

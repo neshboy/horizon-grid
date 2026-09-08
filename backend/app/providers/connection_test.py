@@ -46,6 +46,12 @@ async def _timed(coro_factory):
         return TestResult(ok=False, message="Request timed out."), int((time.monotonic() - start) * 1000)
     except httpx.HTTPError as exc:
         return TestResult(ok=False, message=f"Network error: {exc}"), int((time.monotonic() - start) * 1000)
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the UI as a message, never a raw traceback.
+        # Covers e.g. a malformed/non-JSON HTTP 200 body (a WAF/CDN outage
+        # page, etc.) tripping r.json()'s json.JSONDecodeError in
+        # _check_abusech -- that's a ValueError, not an httpx.HTTPError, so
+        # it isn't caught above. Mirrors app/ai/connection_test.py's _timed.
+        return TestResult(ok=False, message=f"Unexpected response ({exc})."), int((time.monotonic() - start) * 1000)
 
 
 async def _check_virustotal(api_key: str) -> TestResult:
@@ -199,8 +205,16 @@ async def _check_google_safe_browsing(api_key: str) -> TestResult:
         },
     }
     async with httpx.AsyncClient(timeout=10) as client:
+        # Key goes in the x-goog-api-key header, not the ?key= query string --
+        # httpx logs the full request URL at INFO level, which would
+        # otherwise put the candidate key in plain text in the logs on every
+        # Test Connection click. Mirrors the fix in
+        # app/providers/google_safe_browsing.py::fetch() and
+        # app/ai/connection_test.py's _check_gemini.
         r = await client.post(
-            "https://safebrowsing.googleapis.com/v4/threatMatches:find", params={"key": api_key}, json=body
+            "https://safebrowsing.googleapis.com/v4/threatMatches:find",
+            headers={"x-goog-api-key": api_key},
+            json=body,
         )
     if r.status_code == 200:
         return TestResult(ok=True, message="Connected. Key is valid.")

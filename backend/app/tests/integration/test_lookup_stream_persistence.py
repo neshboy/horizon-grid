@@ -34,12 +34,6 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 
-POSTGRES_HOST = "localhost"
-POSTGRES_PORT = 5433
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-
-
 def _reachable(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=1.0):
@@ -48,9 +42,40 @@ def _reachable(host: str, port: int) -> bool:
         return False
 
 
+def _resolve_infra_host_port(in_network_host, in_network_port, published_host, published_port):
+    """Prefer the real in-docker-network hostname (`postgres`/`redis`, on
+    their normal 5432/6379 ports) -- reachable when this test runs INSIDE the
+    backend container via `docker compose exec`, which is both this
+    project's documented dev workflow and its own CI's "integration-docker"
+    job. Falls back to the docker-compose HOST-published port
+    (localhost:5433/6379) for a developer invoking pytest directly on the
+    bare host, outside any container.
+
+    Bug this fixes: this module used to hardcode ONLY the host-published
+    localhost:5433/6379 pair. Inside the backend container, "localhost" is
+    the container's OWN loopback -- nothing listens there on 5433/6379 (only
+    the in-network `postgres`/`redis` hostnames route to the real
+    datastores from inside the container; confirmed live via a direct
+    socket.connect from inside the running backend container). That made
+    the skipif below always evaluate to True whenever this file was run the
+    documented way (`docker compose exec backend python -m pytest ...`), so
+    every test in it silently skipped there -- never actually executing
+    anywhere in the automated pipeline.
+    """
+    if _reachable(in_network_host, in_network_port):
+        return in_network_host, in_network_port
+    return published_host, published_port
+
+
+POSTGRES_HOST, POSTGRES_PORT = _resolve_infra_host_port("postgres", 5432, "localhost", 5433)
+REDIS_HOST, REDIS_PORT = _resolve_infra_host_port("redis", 6379, "localhost", 6379)
+
+
 pytestmark = pytest.mark.skipif(
     not (_reachable(POSTGRES_HOST, POSTGRES_PORT) and _reachable(REDIS_HOST, REDIS_PORT)),
-    reason="Postgres/Redis not reachable -- run `docker compose up -d postgres redis` first.",
+    reason="Postgres/Redis not reachable via either the in-network postgres/redis "
+    "hostnames or the docker-compose host-published localhost:5433/6379 ports -- "
+    "run `docker compose up -d postgres redis` first.",
 )
 
 
@@ -76,7 +101,15 @@ def _point_app_settings_at_host_infra():
 
     previous_db_url = os.environ.get("DATABASE_URL")
     previous_redis_url = os.environ.get("REDIS_URL")
-    os.environ["DATABASE_URL"] = f"postgresql+asyncpg://ioc:ioc@{POSTGRES_HOST}:{POSTGRES_PORT}/ioc_intel"
+    # Reads real POSTGRES_USER/PASSWORD/DB from the environment (rather than
+    # hardcoding "ioc:ioc") -- inside the backend container these are already
+    # set correctly (docker-compose's env_file: .env passes them through),
+    # and may legitimately differ from the "ioc"/"ioc" defaults if an
+    # operator rotated POSTGRES_PASSWORD away from its default.
+    _pg_user = os.environ.get("POSTGRES_USER", "ioc")
+    _pg_password = os.environ.get("POSTGRES_PASSWORD", "ioc")
+    _pg_db = os.environ.get("POSTGRES_DB", "ioc_intel")
+    os.environ["DATABASE_URL"] = f"postgresql+asyncpg://{_pg_user}:{_pg_password}@{POSTGRES_HOST}:{POSTGRES_PORT}/{_pg_db}"
     os.environ["REDIS_URL"] = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
     get_settings.cache_clear()
     cache_module._pool = None
@@ -148,10 +181,99 @@ async def db_session():
         yield session
 
 
+async def _purge_stream_persistence_test_user() -> None:
+    """Deletes any pre-existing 'stream-persistence-test@example.test' user
+    (this file's fixed, not per-test-unique, email) and everything that
+    still references it, via its own brand-new session.
+
+    This fixture uses the same fixed email across every test in the file --
+    so relying solely on a bare `delete(user); commit()` at THIS fixture's
+    OWN teardown is not enough on its own: if the test that just ran
+    failed/errored before reaching its own full cleanup (an IOCLookup's
+    _delete_lookup_and_dependents(), or test_startup_recovers_orphaned_
+    pentest_rows's own explicit child-then-parent pentest deletes), whatever
+    it created referencing this user's id survives, the teardown's delete
+    raises IntegrityError, and -- confirmed live -- the user row is left
+    behind permanently, cascading into every LATER test in the file failing
+    at setup with a UniqueViolationError on this same fixed email, unrelated
+    to whatever they actually test.
+
+    Called from test_user's own setup (not only its teardown): confirmed
+    live that at least one test in this file (test_provider_result_is_
+    committed_before_next_provider_runs) leaves its OWN event loop/session
+    in a state where a later, unrelated await in that SAME test's teardown
+    phase fails outright (a MissingGreenlet error) -- so a cleanup attempt
+    at THAT test's own teardown can itself be unreliable. Re-running this
+    same purge at the START of every subsequent test's setup instead means
+    the file self-heals from any prior test's incomplete teardown
+    regardless of why that teardown failed, rather than depending on it
+    succeeding.
+    """
+    from sqlalchemy import delete, select
+
+    from app.core.db import new_session
+    from app.models.lookup import IOCLookup
+    from app.models.pentest import PentestAssessment, PentestExploitAttempt, PentestFinding, PentestTarget
+    from app.models.user import User
+
+    async with new_session() as cleanup_db:
+        user = (
+            await cleanup_db.execute(select(User).where(User.email == "stream-persistence-test@example.test"))
+        ).scalar_one_or_none()
+        if user is None:
+            return
+
+        # Reuses _delete_lookup_and_dependents (not a bulk Core delete()) on
+        # purpose: IOCLookup.provider_results/ai_summaries/correlation_edges
+        # are all `cascade="all, delete-orphan"` ORM relationships (see
+        # app/models/lookup.py), which only fire for a session-tracked
+        # `db_session.delete(<object>)` -- a bulk `delete(IOCLookup)...`
+        # Core statement bypasses the ORM entirely and does not cascade,
+        # leaving e.g. ai_summaries rows behind to violate
+        # ai_summaries_lookup_id_fkey (confirmed live) the moment this
+        # defensive sweep tried that instead.
+        stray_lookups = (
+            (await cleanup_db.execute(select(IOCLookup).where(IOCLookup.requested_by == user.id))).scalars().all()
+        )
+        for stray_lookup in stray_lookups:
+            await _delete_lookup_and_dependents(cleanup_db, stray_lookup)
+
+        stray_assessment_ids = (
+            (await cleanup_db.execute(select(PentestAssessment.id).where(PentestAssessment.created_by == user.id)))
+            .scalars()
+            .all()
+        )
+        if stray_assessment_ids:
+            await cleanup_db.execute(
+                delete(PentestExploitAttempt).where(PentestExploitAttempt.assessment_id.in_(stray_assessment_ids))
+            )
+            await cleanup_db.execute(
+                delete(PentestFinding).where(PentestFinding.assessment_id.in_(stray_assessment_ids))
+            )
+            await cleanup_db.execute(
+                delete(PentestTarget).where(PentestTarget.assessment_id.in_(stray_assessment_ids))
+            )
+            await cleanup_db.execute(
+                delete(PentestAssessment).where(PentestAssessment.id.in_(stray_assessment_ids))
+            )
+            await cleanup_db.commit()
+        # Any exploit attempt this user requested against an assessment
+        # created by someone ELSE (not the case anywhere in this file today,
+        # but cheap to close off) would otherwise still dangle after the
+        # sweep above.
+        await cleanup_db.execute(delete(PentestExploitAttempt).where(PentestExploitAttempt.requested_by == user.id))
+        await cleanup_db.commit()
+
+        await cleanup_db.delete(user)
+        await cleanup_db.commit()
+
+
 @pytest_asyncio.fixture
 async def test_user(db_session):
     from app.auth.security import hash_password
     from app.models.user import Role, User
+
+    await _purge_stream_persistence_test_user()
 
     user = User(
         email="stream-persistence-test@example.test",
@@ -163,8 +285,25 @@ async def test_user(db_session):
     await db_session.commit()
     await db_session.refresh(user)
     yield user
-    await db_session.delete(user)
-    await db_session.commit()
+    # Best-effort here -- see _purge_stream_persistence_test_user()'s own
+    # docstring for why the NEXT test's setup, not this teardown, is this
+    # file's real safety net. Swallowing a failure here (logging it rather
+    # than letting it become an opaque "ERROR at teardown" that masks
+    # whatever this test's own body actually did) is deliberate: this
+    # fixture's contract is "this user exists for the duration of the test
+    # it's requested in," which was already satisfied by the time we get
+    # here.
+    try:
+        await db_session.delete(user)
+        await db_session.commit()
+    except Exception as exc:  # noqa: BLE001 -- see docstring above
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "test_user teardown could not delete %s directly (%r) -- "
+            "the next test's setup will purge it instead.",
+            user.email, exc,
+        )
 
 
 @pytest.fixture
@@ -178,7 +317,19 @@ def auth_headers(test_user):
 @pytest_asyncio.fixture
 async def fake_provider_and_ai(monkeypatch):
     """Replaces the real provider fan-out and AI backend so this test hits
-    neither the network nor a local Ollama server -- only Postgres is real."""
+    neither the network nor a local Ollama server -- only Postgres is real.
+
+    The stub AI response below uses final_verdict="suspicious", not
+    "malicious" -- see test_completed_lookup_persists_ai_outcome_success_on_final_assessment_record's
+    docstring (point 2) for the full explanation: a single, uncorroborated
+    provider vote deterministically scores malicious_probability=26.0
+    (app/scoring/engine.py), which generate_final_assessment() swaps in
+    before re-validating, and 26.0 is below _verdict_must_agree_with_risk's
+    threshold for "malicious". "suspicious" is outside both
+    _MALICIOUS_VERDICTS and _BENIGN_VERDICTS, so it agrees with any risk
+    score and keeps this fixture consistent with the real scoring engine
+    it runs against, instead of relying on an AI-invented probability
+    (90) that never actually reaches the persisted row."""
     from app.ai import schemas as ai_schemas
     from app.ai import service as ai_service
     from app.ioc.types import IOCType
@@ -224,7 +375,7 @@ async def fake_provider_and_ai(monkeypatch):
                     "malicious_probability": 90,
                     "analyst_confidence": "high",
                 },
-                "final_verdict": "malicious",
+                "final_verdict": "suspicious",
                 "verdict_rationale": "High detection ratio across providers.",
             }
 
@@ -268,8 +419,13 @@ async def test_completed_lookup_persists_completed_status_and_verdict(
     # stayed "running" forever despite a clean `done` event on the stream.
     assert lookup.status.value == "completed"
     assert lookup.final_verdict is not None
-    assert lookup.final_verdict.value == "malicious"
-    assert lookup.risk_score == 85
+    assert lookup.final_verdict.value == "suspicious"
+    # 26.0, not the AI stub's invented 85 -- generate_final_assessment()
+    # always swaps in the real deterministic score (app/scoring/engine.py)
+    # before persisting, regardless of what the AI's own risk.overall_risk_score
+    # claimed. See fake_provider_and_ai's docstring above for why 26.0 is the
+    # correct value for this fixture's single, uncorroborated provider vote.
+    assert lookup.risk_score == 26.0
 
     await _delete_lookup_and_dependents(db_session, lookup)
 
@@ -632,6 +788,152 @@ async def test_provider_result_is_committed_before_next_provider_runs(
     await _delete_lookup_and_dependents(db_session, lookup)
 
 
+_AI_CALL_DELAY_SECONDS = 1.5
+
+
+@pytest_asyncio.fixture
+async def concurrent_summary_providers_and_slow_ai(monkeypatch):
+    """Three providers that all return OK essentially instantly (unlike
+    slow_multi_provider_and_ai above, there is deliberately NO delay between
+    provider results themselves -- the delay this fixture injects is entirely
+    inside the AI summarization call), paired with an AI stub whose
+    call_claude_json() sleeps _AI_CALL_DELAY_SECONDS before returning
+    whenever it's asked for a per-provider summary (tool_name ==
+    "emit_provider_summary") -- simulating real per-call AI latency (e.g. an
+    Ollama backend queuing concurrent requests) without depending on any real
+    AI backend being up.
+    """
+    from app.ai import service as ai_service
+    from app.providers.base import ProviderCategory, ProviderResult, ProviderStatus
+
+    async def fake_run_all_providers(ioc_value, ioc_type, candidate_providers=None):
+        for i in range(1, 4):
+            yield ProviderResult(
+                provider_id=f"fake_concurrent_provider_{i}",
+                provider_name=f"Fake Concurrent Provider {i}",
+                category=ProviderCategory.THREAT_INTEL,
+                status=ProviderStatus.OK,
+                ioc_value=ioc_value,
+                ioc_type=ioc_type,
+                data={"verdict": "clean"},
+            )
+
+    monkeypatch.setattr("app.api.routes.lookup.run_all_providers", fake_run_all_providers)
+
+    class _SlowStubAIClient:
+        is_configured = True
+
+        async def call_claude_json(self, system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None):
+            if tool_name == "emit_provider_summary":
+                await asyncio.sleep(_AI_CALL_DELAY_SECONDS)
+                return {
+                    # Overwritten by summarize_provider() with the real
+                    # result.provider_id before validation either way -- see
+                    # app/ai/service.py -- so the exact value here is
+                    # irrelevant, matching every other stub in this file.
+                    "provider_id": "irrelevant-overwritten-by-caller",
+                    "what_it_knows": "Clean.",
+                    "reputation": "clean",
+                    "detection_status": "ok",
+                    "threat_level": "low",
+                    "confidence": "high",
+                    "interesting_findings": [],
+                }
+            return {
+                "executive_summary": "Test.",
+                "technical_summary": "Test.",
+                "threat_assessment": "Test.",
+                "relationships_summary": "None.",
+                "risk": {
+                    "overall_risk_score": 0,
+                    "confidence_score": 100,
+                    "severity": "none",
+                    "reputation": "clean",
+                    "malicious_probability": 0,
+                    "analyst_confidence": "high",
+                },
+                "final_verdict": "benign",
+                "verdict_rationale": "Clean.",
+            }
+
+    async def _stub_get_ai_client(backend_override=None):
+        return _SlowStubAIClient(), "ollama", "stub-model"
+
+    monkeypatch.setattr(ai_service, "_get_ai_client", _stub_get_ai_client)
+    yield
+
+
+@pytest.mark.asyncio
+async def test_provider_summaries_are_generated_concurrently_not_serially(
+    concurrent_summary_providers_and_slow_ai, auth_headers, db_session
+):
+    """Regression test for a real P2 latency bug found via live testing:
+    summarize_provider() (an AI call) used to be `await`ed synchronously, one
+    provider at a time, INSIDE the `async for result in run_all_providers(...)`
+    loop in event_stream() (app/api/routes/lookup.py) -- so even though
+    run_all_providers() already fans every provider's network fetch out
+    concurrently, total investigation time scaled with
+    (number of OK providers) x (AI-call latency) instead of being bounded by
+    the slowest single call. Confirmed live: a lookup with several OK
+    providers took minutes even though every individual provider fetch
+    completed in ~1s, purely because each provider's AI summary had to finish
+    before the next provider's summary could even start.
+
+    This test uses 3 providers that all return OK essentially instantly, each
+    paired with an AI stub whose call_claude_json() sleeps
+    _AI_CALL_DELAY_SECONDS before returning a provider summary. Serial
+    summarization (the bug) would take at least
+    3 x _AI_CALL_DELAY_SECONDS just for the summarization phase; concurrent
+    dispatch (the fix) completes the whole stream in well under
+    2 x _AI_CALL_DELAY_SECONDS regardless of how many providers returned OK.
+    """
+    import time
+
+    from app.main import app
+    from app.models.lookup import IOCLookup
+
+    transport = httpx.ASGITransport(app=app)
+    started = time.monotonic()
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with client.stream(
+            "POST",
+            "/api/v1/lookup/stream",
+            json={"value": "203.0.113.109"},
+            headers=auth_headers,
+            timeout=30.0,
+        ) as response:
+            assert response.status_code == 200
+            events = []
+            async for line in response.aiter_lines():
+                if line.startswith("event: "):
+                    events.append(line.removeprefix("event: "))
+    elapsed = time.monotonic() - started
+
+    assert "done" in events
+    assert "error" not in events
+    assert events.count("provider_result") == 3
+    assert events.count("provider_summary") == 3
+
+    # This is the exact assertion that would fail before the fix: 3 serial
+    # AI calls at _AI_CALL_DELAY_SECONDS each take >= 3 x that long just for
+    # the summarization phase. A generous multiplier (2x one call's delay,
+    # not 3x) keeps this robust against ordinary test-runner/event-loop
+    # jitter while still failing hard against a serial regression.
+    assert elapsed < _AI_CALL_DELAY_SECONDS * 2, (
+        f"stream took {elapsed:.2f}s for 3 OK providers each with a "
+        f"{_AI_CALL_DELAY_SECONDS}s AI summary call -- looks like provider "
+        "summarization regressed to running serially instead of concurrently"
+    )
+
+    lookup = (
+        await db_session.execute(select(IOCLookup).where(IOCLookup.ioc_value == "203.0.113.109"))
+    ).scalar_one_or_none()
+    assert lookup is not None, "lookup row was never created"
+    assert lookup.status.value == "completed"
+
+    await _delete_lookup_and_dependents(db_session, lookup)
+
+
 @pytest_asyncio.fixture
 async def oversized_source_url_provider_and_ai(monkeypatch):
     """A provider that builds source_url the same unsafe way several real
@@ -971,3 +1273,129 @@ async def test_startup_recovers_orphaned_security_assessment_runs(db_session):
         await verify_db.commit()
 
     await _delete_lookup_and_dependents(db_session, lookup)
+
+
+@pytest.mark.asyncio
+async def test_startup_recovers_orphaned_pentest_rows(db_session, test_user):
+    """Regression test for the same orphan-recovery gap as the two tests
+    above, for the Pentest Suite: app/pentest/orchestrator.py's
+    start_assessment/resume_assessment spawn a detached asyncio.Task tracked
+    only in the in-process `_assessment_tasks` dict -- empty on every fresh
+    process start, identical to the pattern already fixed for IOCLookup and
+    SecurityAssessmentRun. A hard kill while an assessment is ACTIVE used to
+    leave it (and any mid-phase target, and any in-flight exploit attempt)
+    stuck forever: start_assessment only accepts DRAFT/PAUSED and
+    resume_assessment only accepts PAUSED, so an orphaned ACTIVE row was a
+    dead end with no automatic recovery anywhere.
+
+    Also proves the sweep is properly SCOPED, not a blanket status sweep:
+    - A target left PENDING under a PAUSED assessment is a perfectly normal
+      resting state (pause_assessment/resume_assessment intentionally reset
+      not-yet-completed targets to PENDING while awaiting a future resume)
+      and must be left untouched.
+    - A RUNNING exploit attempt is swept regardless of its parent
+      assessment's status, since exploit.py's run_module() drives it
+      synchronously per-request (never via `_assessment_tasks`) and is
+      deliberately allowed even against a COMPLETED assessment.
+    """
+    from app.core.db import new_session
+    from app.main import _recover_orphaned_running_lookups
+    from app.models.pentest import (
+        PentestAssessment,
+        PentestAssessmentStatus,
+        PentestExploitAttempt,
+        PentestExploitMode,
+        PentestExploitStatus,
+        PentestFinding,
+        PentestFindingConfidence,
+        PentestFindingStatus,
+        PentestProfile,
+        PentestTarget,
+        PentestTargetStatus,
+    )
+
+    active_assessment = PentestAssessment(
+        name="orphan-recovery active", profile=PentestProfile.PASSIVE,
+        scope_definition={"cidrs": ["203.0.113.0/24"]}, status=PentestAssessmentStatus.ACTIVE,
+        created_by=test_user.id,
+    )
+    paused_assessment = PentestAssessment(
+        name="orphan-recovery paused", profile=PentestProfile.PASSIVE,
+        scope_definition={"cidrs": ["203.0.113.0/24"]}, status=PentestAssessmentStatus.PAUSED,
+        created_by=test_user.id,
+    )
+    db_session.add_all([active_assessment, paused_assessment])
+    await db_session.commit()
+    await db_session.refresh(active_assessment)
+    await db_session.refresh(paused_assessment)
+    active_id, paused_id = active_assessment.id, paused_assessment.id
+
+    stuck_target = PentestTarget(
+        assessment_id=active_id, target_type="ipv4", value="203.0.113.106",
+        status=PentestTargetStatus.ENUMERATING,
+    )
+    pending_target_under_active = PentestTarget(
+        assessment_id=active_id, target_type="ipv4", value="203.0.113.107",
+        status=PentestTargetStatus.PENDING,
+    )
+    legitimately_pending_target = PentestTarget(
+        assessment_id=paused_id, target_type="ipv4", value="203.0.113.108",
+        status=PentestTargetStatus.PENDING,
+    )
+    db_session.add_all([stuck_target, pending_target_under_active, legitimately_pending_target])
+    await db_session.commit()
+    await db_session.refresh(stuck_target)
+    await db_session.refresh(pending_target_under_active)
+    await db_session.refresh(legitimately_pending_target)
+
+    finding = PentestFinding(
+        assessment_id=active_id, target_id=stuck_target.id, tool_id="nmap", finding_type="open_port",
+        severity="high", confidence=PentestFindingConfidence.LIKELY, title="test finding",
+        status=PentestFindingStatus.OPEN,
+    )
+    db_session.add(finding)
+    await db_session.commit()
+    await db_session.refresh(finding)
+
+    stuck_exploit_attempt = PentestExploitAttempt(
+        assessment_id=active_id, finding_id=finding.id, target_id=stuck_target.id,
+        module_fullname="auxiliary/scanner/smb/smb_ms17_010", mode=PentestExploitMode.CHECK,
+        status=PentestExploitStatus.RUNNING, requested_by=test_user.id,
+    )
+    db_session.add(stuck_exploit_attempt)
+    await db_session.commit()
+    await db_session.refresh(stuck_exploit_attempt)
+    exploit_attempt_id = stuck_exploit_attempt.id
+
+    await _recover_orphaned_running_lookups()
+
+    # Fresh session -- same identity-map caveat as the tests above.
+    async with new_session() as verify_db:
+        recovered_active_assessment = await verify_db.get(PentestAssessment, active_id)
+        recovered_paused_assessment = await verify_db.get(PentestAssessment, paused_id)
+        recovered_stuck_target = await verify_db.get(PentestTarget, stuck_target.id)
+        recovered_pending_under_active = await verify_db.get(PentestTarget, pending_target_under_active.id)
+        recovered_legit_pending = await verify_db.get(PentestTarget, legitimately_pending_target.id)
+        recovered_exploit_attempt = await verify_db.get(PentestExploitAttempt, exploit_attempt_id)
+
+        assert recovered_active_assessment.status == PentestAssessmentStatus.CANCELLED
+        assert recovered_stuck_target.status == PentestTargetStatus.FAILED
+        assert recovered_pending_under_active.status == PentestTargetStatus.FAILED
+        assert recovered_exploit_attempt.status == PentestExploitStatus.ERROR
+
+        # Untouched: a PAUSED assessment and its normally-PENDING target are
+        # not orphaned and must survive the sweep unchanged.
+        assert recovered_paused_assessment.status == PentestAssessmentStatus.PAUSED
+        assert recovered_legit_pending.status == PentestTargetStatus.PENDING
+
+        # Explicit child-then-parent deletes rather than relying on the ORM
+        # relationship cascade, matching this file's own established
+        # pattern (see _delete_lookup_and_dependents above).
+        from sqlalchemy import delete
+
+        both_ids = [active_id, paused_id]
+        await verify_db.execute(delete(PentestExploitAttempt).where(PentestExploitAttempt.assessment_id.in_(both_ids)))
+        await verify_db.execute(delete(PentestFinding).where(PentestFinding.assessment_id.in_(both_ids)))
+        await verify_db.execute(delete(PentestTarget).where(PentestTarget.assessment_id.in_(both_ids)))
+        await verify_db.execute(delete(PentestAssessment).where(PentestAssessment.id.in_(both_ids)))
+        await verify_db.commit()

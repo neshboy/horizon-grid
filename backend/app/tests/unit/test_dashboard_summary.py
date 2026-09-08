@@ -10,6 +10,9 @@ extends to the dashboard).
 Mirrors app/tests/unit/test_ai_service.py's monkeypatch-the-module-level-name
 pattern (there is no shared conftest.py in this repo).
 """
+import asyncio
+import time
+
 import pytest
 from pydantic import ValidationError
 
@@ -155,6 +158,57 @@ async def test_validation_failure_recovers_on_retry(monkeypatch):
     assert result["source"] == "ai"
     assert result["summary"] == "SOC leadership narrative grounded in the given KPIs."
     assert result["kpis"] == _SAMPLE_KPIS
+
+
+@pytest.mark.asyncio
+async def test_slow_ai_backend_times_out_and_falls_back_to_template_instead_of_hanging(monkeypatch):
+    """Real P3 bug found via live testing: generate_executive_summary() had
+    no request-scoped timeout of its own, so a slow/busy shared AI backend
+    (e.g. Ollama under concurrent load, or paying a cold model-reload cost --
+    see app/ai/ollama_client.py's own 300s timeout) could hang this
+    at-a-glance dashboard endpoint for as long as the underlying client's
+    own timeout, with no response at all -- confirmed live: a single,
+    uncontended call with Ollama active did not return within 60s.
+
+    This pins the fix: the AI call is now bounded by
+    settings.dashboard_summary_ai_timeout_seconds via asyncio.wait_for, and
+    a backend that is merely slow (never actually erroring) must still
+    resolve to the fast, deterministic template_fallback well within that
+    bound -- not hang, and not be retried (mirrors the existing "a generic
+    failure like a rate limit or outage is not retried" convention: an
+    immediate retry against a backend that is merely slow/busy can't help,
+    it would just double the wait)."""
+    call_count = {"value": 0}
+
+    class _HangingAIClient:
+        is_configured = True
+
+        async def call_claude_json(self, **kwargs):
+            call_count["value"] += 1
+            # Much longer than the patched timeout below -- asyncio.wait_for
+            # must cancel this, not actually wait it out.
+            await asyncio.sleep(10)
+            return {"narrative": "should never be reached"}
+
+    async def _stub_get_ai_client(backend_override=None):
+        return _HangingAIClient(), "ollama", "stub-model"
+
+    class _FastTimeoutSettings:
+        dashboard_summary_ai_timeout_seconds = 0.05
+
+    monkeypatch.setattr("app.ai.dashboard_summary.get_kpis", _stub_get_kpis)
+    monkeypatch.setattr("app.ai.dashboard_summary._get_ai_client", _stub_get_ai_client)
+    monkeypatch.setattr("app.ai.dashboard_summary.get_settings", lambda: _FastTimeoutSettings())
+
+    started = time.monotonic()
+    result = await generate_executive_summary()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5, "a slow/hanging AI backend must not be waited out past the configured timeout"
+    assert call_count["value"] == 1, "a timeout must not be retried (same convention as a generic AI failure)"
+    assert result["source"] == "template_fallback"
+    assert result["kpis"] == _SAMPLE_KPIS
+    assert str(_SAMPLE_KPIS["open_cases"]) in result["summary"]
 
 
 # --- generate_executive_summary: success path -------------------------------

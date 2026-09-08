@@ -5,7 +5,13 @@ app/providers/abuseipdb.py for the reference connector style this follows
 (a simple key-based reputation check, one request, no polling).
 
 API reference: https://developers.google.com/safe-browsing/v4/lookup-api --
-POST https://safebrowsing.googleapis.com/v4/threatMatches:find?key=<API_KEY>.
+POST https://safebrowsing.googleapis.com/v4/threatMatches:find. The API
+docs show the key as a ?key=<API_KEY> query parameter, but this connector
+sends it via the equivalent `x-goog-api-key` header instead (Google's
+API-key auth infra accepts either) -- httpx logs the full request URL,
+including query strings, at INFO level, so a query-param key would leak
+into the application's logs on every request. See _check_gemini in
+app/ai/connection_test.py for the same rationale applied elsewhere.
 
 CRITICAL invariant, enforced throughout this module: an empty/missing
 `matches` field on a genuine HTTP 200 response is the ONLY input that may
@@ -22,7 +28,13 @@ import httpx
 from app.core.config import get_settings
 from app.core.runtime_context import get_credential
 from app.ioc.types import IOCType
-from app.providers.base import BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
+from app.providers.base import (
+    RETRYABLE_EXCEPTIONS,
+    BaseProvider,
+    ProviderCategory,
+    ProviderResult,
+    ProviderStatus,
+)
 
 _THREAT_TYPES = ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"]
 
@@ -79,9 +91,29 @@ class GoogleSafeBrowsingProvider(BaseProvider):
         }
 
         try:
+            # Key goes in the x-goog-api-key header, not the ?key= query
+            # string -- httpx logs the full request URL (including any query
+            # string) at INFO level, which would otherwise put the API key in
+            # plain text in the application logs on every request. Google's
+            # API-key auth infrastructure (shared across googleapis.com
+            # endpoints) accepts the key via this header as an alternative to
+            # the query param; see app/ai/connection_test.py's _check_gemini
+            # for the same fix applied to the Gemini connector.
+            # `api_key or ""` mirrors the old params={"key": api_key}
+            # behavior for a missing/None key (httpx's query-param encoder
+            # silently turned None into ""); httpx header values, unlike
+            # query params, reject None outright with an AttributeError, so
+            # this coalesces explicitly to preserve that same tolerance.
             response = await client.post(
-                f"{self.base_url}/threatMatches:find", params={"key": api_key}, json=body
+                f"{self.base_url}/threatMatches:find", headers={"x-goog-api-key": api_key or ""}, json=body
             )
+        except RETRYABLE_EXCEPTIONS:
+            # Deliberately NOT normalized here -- these must propagate up to
+            # BaseProvider.run()'s dedicated re-raise branch so the
+            # orchestrator's tenacity retry loop can retry a transient
+            # connection blip, per base.py's own documented design. See
+            # app/providers/base.py's RETRYABLE_EXCEPTIONS comment.
+            raise
         except httpx.TimeoutException as exc:
             return self._error(ioc_value, ioc_type, ProviderStatus.TIMEOUT, f"Google Safe Browsing request timed out: {exc}")
         except httpx.HTTPError as exc:

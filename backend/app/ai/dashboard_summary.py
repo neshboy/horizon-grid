@@ -20,12 +20,14 @@ stochastic model's next sample is not the same sample), never on a generic
 exception (e.g. a rate limit or an unreachable backend, where an immediate
 retry can't help and would just double the cost of a real outage).
 """
+import asyncio
 import logging
 from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.ai.service import _get_ai_client
+from app.core.config import get_settings
 from app.core.dashboard import get_kpis
 
 logger = logging.getLogger(__name__)
@@ -104,15 +106,52 @@ def _template_fallback_narrative(kpis: dict) -> str:
     )
 
 
+async def _call_ai_backend(user_prompt: str) -> dict:
+    """The one AI call this module makes, factored out so the caller can
+    bound its ENTIRE duration (client resolution + the actual generation
+    call) in a single asyncio.wait_for -- see generate_executive_summary()'s
+    dashboard_summary_ai_timeout_seconds wrapping below for why."""
+    client, _backend, _model = await _get_ai_client()
+    return await client.call_claude_json(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        json_schema=_ExecutiveSummaryNarrative.model_json_schema(),
+        tool_name="emit_executive_summary",
+    )
+
+
 async def generate_executive_summary() -> dict:
     """1. get_kpis() is the ONLY source of truth for numbers here -- never
        computed or restated any other way, by this function or its fallback.
     2. Hands the AI those exact 7 KPI values as GIVEN FACTS and asks for a
        2-4 sentence SOC-leadership narrative, retrying once on a
        ValidationError only (see module docstring).
-    3. On any failure that survives the retry (AI unreachable, or validation
-       never succeeds), falls back to a deterministic, template-generated,
-       number-accurate sentence -- never an error, never a silent blank.
+    3. On any failure that survives the retry (AI unreachable, validation
+       never succeeds, or the call runs past
+       settings.dashboard_summary_ai_timeout_seconds), falls back to a
+       deterministic, template-generated, number-accurate sentence -- never
+       an error, never a silent blank.
+
+       The timeout is real P3 bug fix: this call used to have no
+       request-scoped timeout of its own at all, so it inherited whichever
+       underlying AI client's own timeout was active (e.g. Ollama's 300s,
+       sized for a cold CPU-only model reload -- see
+       app/ai/ollama_client.py's _TIMEOUT_SECONDS comment). That backend is
+       shared platform-wide with every other AI-calling feature (lookups,
+       pentest, security assessments), so a busy/slow backend could leave
+       this at-a-glance dashboard endpoint hanging for anywhere up to that
+       same 300s with no response at all -- confirmed live: a single,
+       uncontended call with Ollama active and a cold-unloaded model did not
+       return within 60s. Unlike those other AI-calling features, this
+       endpoint already has a documented, number-accurate, deterministic
+       fallback ready to go the instant the AI call is deemed too slow, so
+       there is no reason to ever wait that long here. asyncio.wait_for
+       bounds each attempt to dashboard_summary_ai_timeout_seconds (default
+       20s, comfortably shorter than any underlying client's own timeout)
+       and a timeout is treated the same as "AI unreachable" -- fall
+       straight to the template, do not retry (an immediate retry against a
+       backend that is merely slow/busy cannot help, and would just double
+       the wait).
     4. Returns {"summary", "source", "kpis"}: "source" ("ai" or
        "template_fallback") honestly reflects which path produced the text,
        the same "never let a fallback silently look like a real success"
@@ -127,22 +166,26 @@ async def generate_executive_summary() -> dict:
         "Write a 2-4 sentence executive narrative for SOC leadership based only on these KPIs."
     )
 
+    timeout_seconds = get_settings().dashboard_summary_ai_timeout_seconds
     last_exc: Optional[Exception] = None
     for attempt in range(2):
         try:
-            client, _backend, _model = await _get_ai_client()
-            payload = await client.call_claude_json(
-                system_prompt=_SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                json_schema=_ExecutiveSummaryNarrative.model_json_schema(),
-                tool_name="emit_executive_summary",
-            )
+            payload = await asyncio.wait_for(_call_ai_backend(user_prompt), timeout=timeout_seconds)
             narrative = _ExecutiveSummaryNarrative.model_validate(payload)
             return {"summary": narrative.narrative, "source": "ai", "kpis": kpis}
         except ValidationError as exc:
             last_exc = exc
             if attempt == 0:
                 logger.info("Executive summary attempt 1 failed validation: %r -- retrying once", exc)
+        except asyncio.TimeoutError as exc:
+            last_exc = exc
+            logger.warning(
+                "Executive summary AI call exceeded the %ss dashboard timeout (shared AI backend "
+                "busy/slow) -- falling back to template instead of waiting for the underlying "
+                "AI client's own, much longer timeout",
+                timeout_seconds,
+            )
+            break
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             break

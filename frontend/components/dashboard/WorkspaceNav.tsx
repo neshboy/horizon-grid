@@ -11,12 +11,15 @@
  *   OPERATIONS     -> Provider Health (/dashboard/provider-health) -- a
  *                     distinct route from Dashboard; the two must not be
  *                     conflated into one link or one active-state match.
- *   ADMINISTRATION -> Providers (/providers) + Administration (/admin, still
- *                     gated on isAdmin exactly as before). When both links
- *                     are visible this group renders as an expandable menu
- *                     so they don't have to compete for space under one
- *                     caption; when only Providers is visible (non-admin) it
- *                     renders the same way as the other single-item groups.
+ *   ADMINISTRATION -> Providers (/providers) + Administration (/admin), both
+ *                     gated on isAdmin. Every /providers data call
+ *                     (listAIProviders/listIOCProviders/getAuditLog) is
+ *                     server-side gated on admin-only permissions
+ *                     (provider:manage / audit:read), so the whole group is
+ *                     hidden rather than showing a link a non-admin would
+ *                     land on with a silently empty page. This group renders
+ *                     as an expandable menu so the two links don't have to
+ *                     compete for space under one caption.
  *
  * Most groups have exactly one real destination, so they render as a small
  * uppercase caption above a single pill link rather than a dropdown --
@@ -37,7 +40,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
   Briefcase,
@@ -45,11 +48,13 @@ import {
   Crosshair,
   FolderKanban,
   LayoutDashboard,
+  LogOut,
   Settings2,
   ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getCurrentUser, isLoggedIn, listBasket } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { getCurrentUser, isLoggedIn, listBasket, logout } from "@/lib/api";
 
 type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
 
@@ -122,6 +127,7 @@ function NavLink({
 
 export function WorkspaceNav() {
   const pathname = usePathname();
+  const router = useRouter();
   const [basketCount, setBasketCount] = React.useState<number | null>(null);
   const [isAdmin, setIsAdmin] = React.useState(false);
   const [adminMenuOpen, setAdminMenuOpen] = React.useState(false);
@@ -159,6 +165,19 @@ export function WorkspaceNav() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [adminMenuOpen]);
+
+  // Real bug found live during overnight QA: no page in the app except '/'
+  // had any sign-out control at all -- WorkspaceNav (rendered on every
+  // workspace page via BrandHeader) had zero logout affordance, so the only
+  // way to sign out from /dashboard, /basket, /cases, /pentest, /providers,
+  // /admin, or /dashboard/provider-health was to manually navigate to '/'
+  // first. router.push (not router.replace) so the browser back button
+  // still behaves normally; logout() itself already revokes the token
+  // server-side and clears localStorage.
+  const handleSignOut = React.useCallback(() => {
+    logout();
+    router.push("/login");
+  }, [router]);
 
   const activeHref = resolveActiveHref(pathname);
   const dashboardActive = activeHref === "/dashboard";
@@ -208,7 +227,7 @@ export function WorkspaceNav() {
         </NavLink>
       </NavGroup>
 
-      {isAdmin ? (
+      {isAdmin && (
         <div ref={adminMenuRef} className="relative flex flex-col items-start gap-1">
           <span className={captionClass(administrationActive)}>Administration</span>
           <button
@@ -248,13 +267,18 @@ export function WorkspaceNav() {
             </div>
           )}
         </div>
-      ) : (
-        <NavGroup label="Administration" active={providersActive}>
-          <NavLink href="/providers" active={providersActive} icon={Settings2}>
-            Providers
-          </NavLink>
-        </NavGroup>
       )}
+
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={handleSignOut}
+        className="ml-auto self-center"
+      >
+        <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+        Sign out
+      </Button>
     </nav>
   );
 }

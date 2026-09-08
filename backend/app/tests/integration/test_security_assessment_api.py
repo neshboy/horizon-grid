@@ -161,6 +161,24 @@ class _FakeTool(SecurityAssessmentTool):
         )
 
 
+class _FakeCVETool(SecurityAssessmentTool):
+    """Deterministically produces the exact same 'exploits' correlation edge
+    (a single CVE match) on every run -- the fixed-shape stand-in for
+    nmap_tool.py's real CVE-match findings used by the correlation-
+    deduplication regression test below."""
+
+    tool_id = "fake_cve_tool"
+    tool_name = "Fake CVE Test Tool"
+    supported_types = {IOCType.IPV4}
+    profiles = _FAKE_PROFILES
+
+    async def run(self, target, ioc_type, profile_id):
+        return ToolRunResult(
+            provider_result=self._result(target, ioc_type, ProviderStatus.OK, data={"cves": ["CVE-2021-44228"]}),
+            findings=[],
+        )
+
+
 class _SlowFakeTool(SecurityAssessmentTool):
     """Deliberately awaits something long enough to cancel mid-flight,
     exercising the real asyncio.CancelledError path through
@@ -228,6 +246,36 @@ async def _stub_ai_and_background(monkeypatch):
         }.get(tool_id),
     )
     yield
+
+
+@pytest_asyncio.fixture
+async def _stub_ai_and_capture_scoring(monkeypatch):
+    """Like _stub_ai_and_background, but wires up _FakeCVETool (instead of
+    _FakeTool) and the generate_final_assessment stub also records the real
+    `scoring` ScoringResult it was called with on every invocation. The AI
+    stub's own RETURNED numbers (_fallback_final_assessment) don't reflect
+    the deterministic engine's output -- inspecting what _refresh_lookup_
+    assessment() actually PASSED to the AI is what lets the regression test
+    below observe the real, deterministically-computed correlation-derived
+    score without needing a real AI backend."""
+    captured_scoring: list = []
+
+    async def _fake_summarize(ioc_value, ioc_type, result, backend_override=None):
+        return ProviderSummary(
+            provider_id=result.provider_id, what_it_knows="test", reputation="unknown",
+            detection_status="test", threat_level="none", confidence="low",
+        )
+
+    async def _fake_generate(
+        ioc_value, ioc_type, summaries, correlation, scoring, backend_override=None, unavailable_providers=None
+    ):
+        captured_scoring.append(scoring)
+        return _fallback_final_assessment(ioc_value, ioc_type)
+
+    monkeypatch.setattr(sa_service, "summarize_provider", _fake_summarize)
+    monkeypatch.setattr(sa_service, "generate_final_assessment", _fake_generate)
+    monkeypatch.setattr(sa_service, "get_tool", lambda tool_id: {"fake_cve_tool": _FakeCVETool()}.get(tool_id))
+    yield captured_scoring
 
 
 # --- RBAC ----------------------------------------------------------------
@@ -428,6 +476,140 @@ async def test_completed_run_persists_findings_and_updates_the_lookup(client, _s
             lookup = await db.get(IOCLookup, lookup_id)
             assert lookup.final_verdict is not None
             assert lookup.final_assessment is not None
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_refresh_logs_a_warning_for_an_unparseable_persisted_summary(client, _stub_ai_and_background, caplog):
+    """Regression test for a confirmed P4: _refresh_lookup_assessment()'s
+    loop over existing_summary_rows swallowed a ProviderSummary.model_validate()
+    failure with a bare `except Exception: continue` and zero logging --
+    unlike the functionally identical block in app/api/routes/lookup.py
+    (which logs a warning naming the provider id and lookup id) and every
+    other exception handler in this same file. A malformed/legacy
+    AISummaryRecord.summary blob must still let the refresh proceed (never
+    sink the whole post-scan risk-score recompute over one bad row), but it
+    must now also log a warning identifying which provider/lookup was
+    skipped, so a silently-lower risk score is debuggable instead of
+    untraceable."""
+    import logging
+
+    from app.core.db import new_session
+    from app.models.lookup import AISummaryRecord
+
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-badsummary")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        # A persisted summary row that fails ProviderSummary.model_validate()
+        # (missing every required field) -- e.g. what an older schema
+        # version could have left behind.
+        async with new_session() as db:
+            db.add(
+                AISummaryRecord(
+                    lookup_id=lookup_id,
+                    provider_id="legacy_provider",
+                    summary={"not": "a valid ProviderSummary payload"},
+                )
+            )
+            await db.commit()
+
+        with caplog.at_level(logging.WARNING, logger="app.core.security_assessment"):
+            result = await sa_service.start_run(
+                lookup_id, ["fake_tool"], "quick", "127.0.0.1", True, analyst_id, "analyst@qa.test"
+            )
+            uuid.UUID(result["run_id"])
+            await sa_service.wait_for_background_runs()
+
+        warnings = [
+            r for r in caplog.records
+            if r.name == "app.core.security_assessment" and r.levelno == logging.WARNING
+        ]
+        assert any(
+            "legacy_provider" in r.getMessage() and str(lookup_id) in r.getMessage()
+            for r in warnings
+        ), (
+            "expected a warning naming the skipped provider id and lookup id, got: "
+            f"{[r.getMessage() for r in warnings]}"
+        )
+
+        # The malformed row must not sink the whole refresh -- the run
+        # itself still completes normally, using the rest of the evidence.
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        async with new_session() as db:
+            run = (
+                await db.execute(
+                    select(SecurityAssessmentRun)
+                    .where(SecurityAssessmentRun.lookup_id == lookup_id)
+                    .options(selectinload(SecurityAssessmentRun.findings))
+                )
+            ).scalar_one()
+            assert run.status == SecurityAssessmentRunStatus.COMPLETED
+    finally:
+        await _cleanup_lookup(lookup_id)
+        await _delete_user(analyst_id)
+
+
+@pytest.mark.asyncio
+async def test_rerunning_the_same_tool_with_an_identical_finding_does_not_inflate_the_score(
+    client, _stub_ai_and_capture_scoring
+):
+    """Regression test for a confirmed P1: _refresh_lookup_assessment()
+    unconditionally persisted every edge new_correlation.edges produced as a
+    brand-new CorrelationEdgeRecord row, with no check for an edge with the
+    same (source, target, relationship, provenance) already persisted for
+    this lookup. Since app/scoring/engine.py::_correlation_fraction sums
+    every qualifying edge's confidence, re-running the exact same tool/
+    profile against the exact same target and getting the identical finding
+    again (e.g. the same nmap CVE match) silently inflated
+    malicious_probability/overall_risk_score/confidence_score purely from
+    repetition, with zero new evidence. Confirmed live before this fix:
+    3 identical runs of _FakeCVETool produced 3 duplicate CorrelationEdgeRecord
+    rows and a strictly-increasing correlation_component/malicious_probability
+    each run, despite the finding never changing."""
+    captured_scoring = _stub_ai_and_capture_scoring
+    analyst_id, _, analyst_token = await _make_user(Role.ANALYST, "qa-sec-dedup")
+    lookup_id = await _make_lookup("127.0.0.1", "ipv4")
+    try:
+        for _ in range(3):
+            result = await sa_service.start_run(
+                lookup_id, ["fake_cve_tool"], "quick", "127.0.0.1", True, analyst_id, "analyst@qa.test"
+            )
+            uuid.UUID(result["run_id"])
+            await sa_service.wait_for_background_runs()
+
+        assert len(captured_scoring) == 3, "each of the 3 runs must have refreshed the lookup's final assessment"
+        first, second, third = captured_scoring
+
+        # The whole point: an identical repeated finding is not new evidence,
+        # so none of these may grow between runs.
+        assert second.malicious_probability == first.malicious_probability, (
+            "a 2nd identical scan must not raise malicious_probability over the 1st"
+        )
+        assert third.malicious_probability == first.malicious_probability, (
+            "a 3rd identical scan must not raise malicious_probability over the 1st"
+        )
+        assert second.breakdown["correlation_component"] == first.breakdown["correlation_component"]
+        assert third.breakdown["correlation_component"] == first.breakdown["correlation_component"]
+
+        # And the underlying persisted edges must not have piled up
+        # duplicate rows either -- 3 identical scans should still leave
+        # exactly the 1 real (source, target, relationship, provenance) edge.
+        from sqlalchemy import select
+
+        from app.core.db import new_session
+        from app.models.lookup import CorrelationEdgeRecord
+
+        async with new_session() as db:
+            edges = (
+                await db.execute(select(CorrelationEdgeRecord).where(CorrelationEdgeRecord.lookup_id == lookup_id))
+            ).scalars().all()
+        assert len(edges) == 1, (
+            f"expected exactly 1 deduplicated correlation edge after 3 identical scans, got {len(edges)}"
+        )
     finally:
         await _cleanup_lookup(lookup_id)
         await _delete_user(analyst_id)

@@ -35,10 +35,39 @@ data:
   DISABLE_SECURITY_PLUGIN: "true"
   OPENSEARCH_DISCOVERY_TYPE: "single-node"
 
+  # --- AI backend selection (backend/app/core/config.py `ai_backend`, one of
+  # "ollama", "anthropic", "gemini", "bedrock", "groq", "openai", "kimi",
+  # "deepseek", "xai", "mistral", "openrouter") -- non-secret settings only,
+  # API keys for the non-Ollama backends are in the Secret.
+  #
+  # NOTE: the default OLLAMA_BASE_URL below (host.docker.internal) resolves
+  # to the host machine under docker-compose.yml, which sets a matching
+  # `extra_hosts: host.docker.internal:host-gateway` on the backend/celery
+  # services -- nothing in k8s/base/*.yaml configures an equivalent
+  # hostAliases mapping, so this default will NOT resolve from inside a pod.
+  # Point OLLAMA_BASE_URL at a real reachable Ollama host/IP, add a matching
+  # hostAliases entry yourself, or set AI_BACKEND to one of the API-key-based
+  # backends above (and fill in its key in the Secret) before deploying.
+  AI_BACKEND: "ollama"
+  OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+  OLLAMA_MODEL: "llama3.2:3b"
+
   # --- AWS Bedrock (Claude) -- non-secret settings only, credentials are in the Secret ---
   AWS_REGION: "us-east-1"
   BEDROCK_MODEL_ID: "anthropic.claude-sonnet-4-5-20250929-v1:0"
   BEDROCK_MAX_TOKENS: "4096"
+
+  # --- Other alternative AI backends -- model IDs only (non-secret), API
+  # keys for whichever one AI_BACKEND selects are in the Secret ---
+  GEMINI_MODEL_ID: "gemini-2.0-flash"
+  ANTHROPIC_MODEL_ID: "claude-sonnet-4-5-20250929"
+  GROQ_MODEL_ID: "llama-3.3-70b-versatile"
+  OPENAI_MODEL_ID: "gpt-4o-mini"
+  KIMI_MODEL_ID: "kimi-k2.5"
+  DEEPSEEK_MODEL_ID: "deepseek-v4-flash"
+  XAI_MODEL_ID: "grok-4.6"
+  MISTRAL_MODEL_ID: "mistral-small-2506"
+  OPENROUTER_MODEL_ID: "openai/gpt-4o"
 
   # --- App (field names from backend/app/core/config.py Settings, which
   # pydantic-settings matches case-insensitively against env var names) ---

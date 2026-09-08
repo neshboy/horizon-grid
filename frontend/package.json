@@ -1,6 +1,6 @@
 {
   "name": "ioc-intel-platform-frontend",
-  "version": "0.3.0",
+  "version": "0.3.9",
   "private": true,
   "scripts": {
     "dev": "next dev",

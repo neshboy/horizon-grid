@@ -125,6 +125,21 @@ function New-RandomSecret {
     return [Convert]::ToBase64String($buffer) -replace '[+/=]', '' # URL/shell-safe
 }
 
+function New-EncryptionMasterKey {
+    <# ENCRYPTION_MASTER_KEY is fed directly into cryptography.fernet.Fernet()
+       by backend/app/core/crypto.py with no derivation step (unlike
+       JWT_SECRET_KEY, which is just an opaque string), so it MUST be exactly
+       32 raw random bytes, url-safe-base64-encoded WITH padding kept intact
+       -- i.e. exactly what Python's Fernet.generate_key() produces. Reusing
+       New-RandomSecret here would not work: it accepts an arbitrary byte
+       count and strips '+/=' outright, so its output does not reliably
+       base64-decode back to exactly 32 bytes, which raises inside Fernet()
+       the first time a credential is saved. #>
+    $buffer = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buffer)
+    return ([Convert]::ToBase64String($buffer) -replace '\+', '-' -replace '/', '_')
+}
+
 function Test-PortFree {
     param([int]$Port)
     $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue

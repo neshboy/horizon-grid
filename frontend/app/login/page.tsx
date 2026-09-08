@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { login } from "@/lib/api";
+import { login, getLoginErrorMessage } from "@/lib/api";
 import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,12 @@ function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") ?? "/";
+  // Set by lib/api.ts's handleUnrecoverableAuth() when an authedFetch call
+  // hit a dead session (a 401 that survived a refresh attempt, or a 403
+  // "Account disabled") and hard-redirected here rather than leaving the
+  // user parked on a broken-looking protected page -- tells them why they
+  // landed on the sign-in screen instead of just looking like a fresh visit.
+  const sessionExpired = searchParams.get("sessionExpired") === "1";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,8 +30,14 @@ function LoginPageInner() {
     try {
       await login(email, password);
       router.push(next);
-    } catch {
-      setError("Invalid email or password.");
+    } catch (err) {
+      // Distinguish a genuine bad-credential rejection (which should stay
+      // vague, as before) from a 429 rate limit, a 5xx server error, a
+      // disabled account (403), or a network-level failure that never even
+      // reached the backend -- none of those mean the password is wrong, so
+      // telling the user that is actively misleading. See
+      // getLoginErrorMessage() in lib/api.ts for the full mapping.
+      setError(getLoginErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -58,6 +70,11 @@ function LoginPageInner() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {sessionExpired && (
+            <p className="mb-3 text-xs text-muted-foreground">
+              Your session ended. Please sign in again.
+            </p>
+          )}
           <form onSubmit={handleSubmit} className="flex flex-col gap-3">
             <input
               type="email"

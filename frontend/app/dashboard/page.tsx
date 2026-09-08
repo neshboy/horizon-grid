@@ -33,15 +33,17 @@ import { ProviderHealthStatusBadge } from "@/components/dashboard/ProviderHealth
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getExecutiveSummary, getKpis, getProviderHealth, isLoggedIn } from "@/lib/api";
+import { summaryLoadingHint } from "@/lib/dashboardSummary";
 import type { DashboardKpis, ExecutiveSummary, ProviderHealthEntry, ProviderHealthStatus } from "@/lib/types";
 import { cn, riskScoreColor } from "@/lib/utils";
 
-function SummarySkeleton() {
+function SummarySkeleton({ hint }: { hint?: string }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="h-4 w-full animate-pulse rounded bg-muted" />
       <div className="h-4 w-11/12 animate-pulse rounded bg-muted" />
       <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+      {hint && <p className="pt-1 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -58,6 +60,11 @@ export default function DashboardPage() {
   const [summary, setSummary] = useState<ExecutiveSummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  // How long the current getExecutiveSummary() call has been in flight --
+  // drives the "still generating" hint below the skeleton once the AI
+  // backend takes a while (see lib/dashboardSummary.ts for why that's
+  // expected behavior, not a hang).
+  const [summaryElapsedMs, setSummaryElapsedMs] = useState(0);
 
   const [providers, setProviders] = useState<ProviderHealthEntry[] | null>(null);
   const [providersError, setProvidersError] = useState<string | null>(null);
@@ -81,6 +88,11 @@ export default function DashboardPage() {
       .finally(() => setKpisLoading(false));
 
     setSummaryLoading(true);
+    setSummaryElapsedMs(0);
+    const summaryStartedAt = Date.now();
+    const summaryTimer = setInterval(() => {
+      setSummaryElapsedMs(Date.now() - summaryStartedAt);
+    }, 1000);
     getExecutiveSummary()
       .then((data) => {
         setSummary(data);
@@ -92,7 +104,10 @@ export default function DashboardPage() {
         // than surface a raw error.
         setSummaryError("Executive summary unavailable");
       })
-      .finally(() => setSummaryLoading(false));
+      .finally(() => {
+        clearInterval(summaryTimer);
+        setSummaryLoading(false);
+      });
 
     setProvidersLoading(true);
     getProviderHealth()
@@ -104,6 +119,8 @@ export default function DashboardPage() {
         setProvidersError(err instanceof Error ? err.message : "Failed to load provider health");
       })
       .finally(() => setProvidersLoading(false));
+
+    return () => clearInterval(summaryTimer);
   }, [router]);
 
   const healthCounts: Record<ProviderHealthStatus, number> = {
@@ -211,7 +228,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               {summaryLoading ? (
-                <SummarySkeleton />
+                <SummarySkeleton hint={summaryLoadingHint(summaryElapsedMs)} />
               ) : summary ? (
                 <p className="whitespace-pre-wrap text-sm leading-relaxed">{summary.summary}</p>
               ) : (

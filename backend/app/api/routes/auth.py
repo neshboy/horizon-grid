@@ -19,6 +19,11 @@ from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, Toke
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Precomputed once at import time so login() below always has a valid bcrypt
+# hash to compare against when no matching user row was found. See its use
+# in login() for why this exists (a timing side-channel fix).
+_DUMMY_PASSWORD_HASH = hash_password("dummy-password-for-constant-time-login-checks")
+
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> UserResponse:
@@ -88,27 +93,28 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     # Real gap fixed: failed logins were logged/audited but never throttled
     # at all -- nothing previously stopped an unlimited-speed brute-force
-    # attempt against any known email. Checked before the password is even
-    # verified, keyed on the ATTEMPTED email (case-normalized the same way
-    # registration/login lookups already are) rather than source IP, since
-    # this app has no reverse-proxy-aware trusted-IP configuration to safely
-    # extract a real client IP from -- an attacker-controlled IP is
-    # trivially fake at either FastAPI or a naive X-Forwarded-For read, so
-    # a per-account limit is the honest, exploit-resistant choice available
-    # right now. A fixed-window limit, not a hard lockout, so this can
-    # never itself become a way to lock a real admin out.
+    # attempt against any known email. Keyed on the ATTEMPTED email
+    # (case-normalized the same way registration/login lookups already
+    # are) rather than source IP, since this app has no reverse-proxy-aware
+    # trusted-IP configuration to safely extract a real client IP from --
+    # an attacker-controlled IP is trivially fake at either FastAPI or a
+    # naive X-Forwarded-For read, so a per-account limit is the honest,
+    # exploit-resistant choice available right now.
+    #
+    # Real bug found live during overnight QA: this limiter used to be
+    # checked BEFORE the password was verified, so the 429 fired for
+    # *anyone* hitting that email -- including a caller supplying the
+    # genuinely correct password. That let an unauthenticated attacker who
+    # only knows the victim's email (no valid credential at all) trip the
+    # limiter with wrong-password noise and keep the real owner's own
+    # correct-password logins failing with 429 for as long as they kept
+    # sending traffic, directly contradicting the "can never itself become
+    # a way to lock a real admin out" intent below. Verifying the
+    # credential first and only consulting/incrementing the limiter on the
+    # failure path means a correct password always succeeds regardless of
+    # how many bad attempts preceded it -- only a *string of wrong*
+    # passwords/unknown emails against one address can ever be throttled.
     settings = get_settings()
-    login_limiter = RateLimiter(
-        f"login:{payload.email.lower()}",
-        max_calls=settings.login_rate_limit_max_attempts,
-        window_seconds=settings.login_rate_limit_window_seconds,
-    )
-    if not await login_limiter.allow():
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many login attempts for this account. Try again in under "
-            f"{settings.login_rate_limit_window_seconds} seconds.",
-        )
 
     # See register()'s comment above -- this lookup was never actually
     # case-normalized despite this function's own pre-existing comment
@@ -117,10 +123,63 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     # lines up was ever lowercased.
     result = await db.execute(select(User).where(User.email == payload.email.lower()))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(payload.password, user.hashed_password):
+    # Real timing side-channel fixed here, confirmed live against the running
+    # stack: `not user or not verify_password(...)` used Python's `or`
+    # short-circuiting, so verify_password() (bcrypt, deliberately slow) only
+    # ever ran when a matching row was found. A nonexistent email returned
+    # right after the SELECT (~350-390ms), while an existing email with a
+    # wrong password paid the full bcrypt cost too (~750-910ms) -- an
+    # unauthenticated caller could enumerate real account emails purely by
+    # timing a handful of requests per address, no credentials or rate-limit
+    # bypass needed. Always calling verify_password -- against the
+    # precomputed dummy hash above when no user was found -- means every
+    # wrong-credential response pays the same bcrypt cost either way. This
+    # can never itself authenticate a nonexistent user: `not user` alone
+    # already forces the failure branch below regardless of what
+    # verify_password returns in that case.
+    password_ok = verify_password(payload.password, user.hashed_password if user else _DUMMY_PASSWORD_HASH)
+    # Shared across every branch below that cannot end in a usable session
+    # (wrong password/unknown email, AND a disabled account -- even with the
+    # correct password, since a disabled account can never successfully log
+    # in regardless of request rate). Only the genuine success path at the
+    # bottom of this function never touches this limiter, preserving the
+    # "a correct password against an active account is never itself
+    # throttled" guarantee described above.
+    #
+    # Real bug found live during overnight QA: the disabled-account check
+    # used to live entirely outside this limiter (no RateLimiter reference
+    # at all on that branch), so a caller holding a valid password for a
+    # disabled account -- e.g. a leaked credential for a just-offboarded or
+    # suspected-compromised employee, precisely the accounts most likely to
+    # be disabled -- could hit this endpoint at unlimited speed, forcing a
+    # full bcrypt verify_password() (~750-900ms of CPU per the timing
+    # comment above) on every single request forever. Live-verified: 15
+    # correct-password requests against a disabled account in under 60s
+    # all returned 403 with no 429 ever appearing, while the same request
+    # rate with a wrong password against the same disabled account was
+    # throttled with a 429 after the configured max attempts, confirming
+    # this branch alone was exempt.
+    login_limiter = RateLimiter(
+        f"login:{payload.email.lower()}",
+        max_calls=settings.login_rate_limit_max_attempts,
+        window_seconds=settings.login_rate_limit_window_seconds,
+    )
+    if not user or not password_ok:
+        if not await login_limiter.allow():
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many login attempts for this account. Try again in under "
+                f"{settings.login_rate_limit_window_seconds} seconds.",
+            )
         await user_svc.record_login_failure(payload.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
+        if not await login_limiter.allow():
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many login attempts for this account. Try again in under "
+                f"{settings.login_rate_limit_window_seconds} seconds.",
+            )
         raise HTTPException(status_code=403, detail="Account disabled")
     await user_svc.record_login_success(user.id, user.email)
     return TokenResponse(
