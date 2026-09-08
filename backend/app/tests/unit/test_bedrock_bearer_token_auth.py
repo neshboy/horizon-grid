@@ -119,16 +119,18 @@ def test_bedrock_access_key_auth_still_works_unaffected(unroutable_bedrock_endpo
     )
 
 
-def test_bedrock_bearer_token_env_var_is_set_from_credential(monkeypatch):
-    """Narrow unit check on the exact mechanism in bedrock_client.py: passing
-    bedrock_api_key must populate AWS_BEARER_TOKEN_BEDROCK in the process
-    environment (the variable botocore's bearer-token credential provider
-    reads), and must not require an access key/secret to be considered
-    configured."""
-    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "https://127.0.0.1:1")
-
+def test_bedrock_bearer_token_credential_alone_is_considered_configured(unroutable_bedrock_endpoint):
+    """A bearer token alone (no access key/secret) must be considered
+    configured. Superseded coverage note: an earlier version of this test
+    asserted AWS_BEARER_TOKEN_BEDROCK was set in os.environ immediately on
+    construction -- that was true before a later fix (env-var mutation is
+    now scoped to only exist for the duration of a real call, with
+    save/restore, so a live connection test and a real call can't clobber
+    each other's credentials; see bedrock_client.py's own docstring on
+    _call_sync). This test's actual regression coverage (bearer-token-only
+    construction resolving as real credentials past the network layer) is
+    already fully exercised by test_bedrock_bearer_token_is_actually_recognized_as_credentials
+    above."""
     client = BedrockClaudeClient(bedrock_api_key="my-bearer-token", aws_region="us-east-1")
 
-    assert os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == "my-bearer-token"
     assert client.is_configured is True

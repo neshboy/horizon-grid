@@ -1,0 +1,1262 @@
+{
+  "byBatch": [
+    {
+      "batchId": "AI-CLIENTS-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/anthropic_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/bedrock_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/gemini_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/groq_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/kimi_client.py"
+      ]
+    },
+    {
+      "batchId": "AI-CLIENTS-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/mistral_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/openai_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/openrouter_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/xai_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/deepseek_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/ollama_client.py"
+      ]
+    },
+    {
+      "batchId": "AI-CORE-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/analysis_schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/schema_utils.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/schemas.py"
+      ]
+    },
+    {
+      "batchId": "AI-CORE-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/analysis_service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/dashboard_summary.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/hunting_service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/evidence.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/analysis_schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/ollama_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/builder.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/loaders.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/hunting.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/analysis.py"
+      ]
+    },
+    {
+      "batchId": "AI-CORE-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/connection_test.py"
+      ]
+    },
+    {
+      "batchId": "AI-SERVICE",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/anthropic_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/ollama_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/scoring/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py"
+      ]
+    },
+    {
+      "batchId": "API-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/admin.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/ai_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/analysis.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/auth.py"
+      ]
+    },
+    {
+      "batchId": "API-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/basket.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/cases.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/hunting.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pivot.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/providers.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/case.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/basket.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/basket.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/case.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/lookup.py (partial, cross-reference)",
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/rbac.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/db.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/connection_test.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/loaders.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/pivot.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/hunting_service.py (partial, cross-reference)",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py (partial, cross-reference)",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py (partial, exception-handler section)"
+      ]
+    },
+    {
+      "batchId": "API-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/scoring/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/loaders.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/lookup.py"
+      ]
+    },
+    {
+      "batchId": "API-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest_exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/ai_analyst.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/pentest.py"
+      ]
+    },
+    {
+      "batchId": "API-5",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/runtime.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/security_assessment.py"
+      ]
+    },
+    {
+      "batchId": "AUTH-CORE",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/rbac.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/security.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/admin.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/auth.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/auth.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/admin.py"
+      ]
+    },
+    {
+      "batchId": "CORE-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/core/audit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/cache.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/crypto.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/db.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/provenance.py"
+      ]
+    },
+    {
+      "batchId": "CORE-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/core/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_context.py"
+      ]
+    },
+    {
+      "batchId": "CORE-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/crypto.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/db.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/audit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/runtime.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/providers.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/connection_test.py"
+      ]
+    },
+    {
+      "batchId": "CORE-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/core/security_assessment.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/url_safety.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/registry.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/hash_tool.py"
+      ]
+    },
+    {
+      "batchId": "CORE-5",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/core/url_safety.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/users.py"
+      ]
+    },
+    {
+      "batchId": "CORR-EVID",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/builder.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/loaders.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/pivot.py"
+      ]
+    },
+    {
+      "batchId": "CRAWLER",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/__init__.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/collector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/__init__.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/errors.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/github.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/pastebin_search.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/rate_limit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/reddit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/rss_news.py"
+      ]
+    },
+    {
+      "batchId": "IOC-MODELS-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/detector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/types.py (trivial: pure enum + two frozenset constants, no logic to break)",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/base.py (trivial: DeclarativeBase + two mixins, no logic)",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/basket.py (trivial data model, no business logic; verified FK/relationship wiring)",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/evidence.py (trivial data model, no business logic; verified the IOCLookup.evidence_items <-> EvidenceItem.lookup back_populates pair actually matches in app/models/lookup.py)"
+      ]
+    },
+    {
+      "batchId": "MODELS-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/models/case.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/__init__.py"
+      ]
+    },
+    {
+      "batchId": "MODELS-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/models/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/security_assessment.py"
+      ]
+    },
+    {
+      "batchId": "MAIN",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py"
+      ]
+    },
+    {
+      "batchId": "PENTEST-SUPPORT",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/__init__.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/ai_analyst.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/msf_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/schemas.py"
+      ]
+    },
+    {
+      "batchId": "PENTEST-ORCH",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/hash_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/nmap_tool.py"
+      ]
+    },
+    {
+      "batchId": "PROV-A",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/abusech.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/abuseipdb.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/cisa_kev.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/connection_test.py"
+      ]
+    },
+    {
+      "batchId": "PROV-B",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/crtsh.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/google_safe_browsing.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/malwarebazaar.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/mitre_attack.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/nvd.py"
+      ]
+    },
+    {
+      "batchId": "PROV-C",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/otx.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/registry.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/threatfox.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/urlhaus.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/abusech.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/cache.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/types.py"
+      ]
+    },
+    {
+      "batchId": "PROV-D",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/urlscan_io.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/virustotal.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/whois_rdap.py"
+      ]
+    },
+    {
+      "batchId": "PROV-STUBS",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/stubs/censys.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/stubs/hybrid_analysis.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/stubs/phishtank.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/stubs/spamhaus.py"
+      ]
+    },
+    {
+      "batchId": "SCHEMAS-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/basket.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/case.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/security_assessment.py"
+      ]
+    },
+    {
+      "batchId": "SCORING",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/scoring/__init__.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/scoring/engine.py"
+      ]
+    },
+    {
+      "batchId": "SEC-TOOLS-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/__init__.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/dns_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/hash_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/http_headers_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/registry.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/tls_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/vuln_intel.py"
+      ]
+    },
+    {
+      "batchId": "SEC-NMAP",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/nmap_tool.py"
+      ]
+    },
+    {
+      "batchId": "WORKERS",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/workers/celery_app.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/workers/tasks.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/collector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/types.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/cache.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/db.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/base.py"
+      ]
+    },
+    {
+      "batchId": "INT-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_admin_rbac_api.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_admin_users.py"
+      ]
+    },
+    {
+      "batchId": "INT-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_api_health.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_auth_login_rate_limit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_auth_logout.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_auth_registration.py"
+      ]
+    },
+    {
+      "batchId": "INT-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_dashboard_api.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_runtime_config_persistence.py"
+      ]
+    },
+    {
+      "batchId": "INT-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_dashboard_service_db.py"
+      ]
+    },
+    {
+      "batchId": "INT-5",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_deterministic_scoring.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_lookup_export_permissions.py"
+      ]
+    },
+    {
+      "batchId": "INT-6",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_lookup_flow.py"
+      ]
+    },
+    {
+      "batchId": "INT-7",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_lookup_stream_persistence.py"
+      ]
+    },
+    {
+      "batchId": "INT-8",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_pentest_api.py"
+      ]
+    },
+    {
+      "batchId": "INT-9",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_pentest_exploit_api.py"
+      ]
+    },
+    {
+      "batchId": "INT-10",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_security_assessment_api.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/security_assessment.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/security_assessment.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/security_assessment.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/base.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_abusech.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_ai_config_ollama_models.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_msf_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_ollama_num_ctx.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_nmap_tool_argv_safety.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_startup_hooks.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/abusech.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/msf_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/nmap_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/ai_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/ollama_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_ai_connection_test.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/connection_test.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/url_safety.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_ai_schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_ai_service_ollama_ssrf.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/ollama_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/url_safety.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_config.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_ai_service.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-5",
+      "files": [
+        "backend/app/tests/unit/test_analysis_service.py",
+        "backend/app/tests/unit/test_app_version.py",
+        "backend/app/tests/unit/test_body_size_limit_middleware.py",
+        "backend/app/tests/unit/test_cache_redis_client_lifecycle.py",
+        "backend/app/core/cache.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-6",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_connection_test.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_correlation_engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/connection_test.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/types.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-7",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_crawler_collector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_crawler_rate_limit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_crypto.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_dashboard_service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/collector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/errors.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/crawler/sources/rate_limit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/crypto.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_config.py (partial, for decrypt_secret call sites)",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/runtime_config.py (partial, for encrypted_credentials column type)"
+      ]
+    },
+    {
+      "batchId": "UNIT-8",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_dashboard_summary.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_evidence_builder.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_pivot.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/dashboard_summary.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/builder.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/pivot.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/types.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-9",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_google_safe_browsing.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_urlscan_io.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/google_safe_browsing.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/urlscan_io.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-10",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_ioc_detector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_url_safety_investigation_target.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_users_service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_whois_rdap.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/detector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/url_safety.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/users.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/whois_rdap.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/types.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-11",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_lookup_export.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-12",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_orchestrator_retry.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_provider_base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_runtime_context.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-13",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_pentest_exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_pentest_orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_security_assessment_service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/security_assessment.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/url_safety.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/types.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/http_headers_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/nmap_tool.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-14",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_scoring_engine.py"
+      ]
+    },
+    {
+      "batchId": "UNIT-15",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_security_assessment_tools.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_spamhaus_provider.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/nmap_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/hash_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/http_headers_tool.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/security_assessment/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/stubs/spamhaus.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py"
+      ]
+    },
+    {
+      "batchId": "ALEMBIC-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/alembic/env.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/660d2aa3bc20_initial_schema.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/0f2dc283823e_add_provider_runtime_config_and_audit_.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/2652d888a33f_add_final_assessment_records.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/3b9e7a2c1d4f_add_user_token_version.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/5c8e1f3a9b2d_add_security_assessment_tables.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/6716ed40b9f2_add_final_assessment_ai_outcome.py"
+      ]
+    },
+    {
+      "batchId": "ALEMBIC-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/6d2f4b8e1a7c_add_provenance_category.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/7a1c2f9d4e6b_add_user_last_login_at.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/8f4a1c2d9e6b_add_cancelled_security_assessment_status.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/9123b075e962_add_pentest_exploit_attempts_table.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/9273d7b21c79_add_pentest_suite_tables.py",
+        "C:/Users/User/ioc-intel-platform/backend/alembic/versions/a6d3ad2bb63c_add_evidence_basket_and_case_management_.py"
+      ]
+    },
+    {
+      "batchId": "FE-APP-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/about/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/login/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/register/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/layout.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/components/StatusBadge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/CreditFooter.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/BrandHeader.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/Logo.tsx",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/auth.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/auth.py"
+      ]
+    },
+    {
+      "batchId": "FE-APP-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/admin/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/UsersManagementPanel.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-APP-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/basket/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/cases/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/cases/[id]/page.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-APP-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/dashboard/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/dashboard/provider-health/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/KpiCard.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderHealthStatusBadge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/StatusBadge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/badge.tsx",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/dashboard.py"
+      ]
+    },
+    {
+      "batchId": "FE-APP-5",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/lookup/[id]/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/lookup/new/page.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-APP-6",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/providers/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/pentest/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderConfigRow.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/badge.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-APP-7",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/pentest/[id]/page.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/CreditFooter.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/Logo.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/StatusBadge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/badge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/button.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/card.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/dialog.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/input.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/AiComparisonPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/AiQuickSwitch.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/AskAiPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/BrandHeader.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/DetectionRulesPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/EvidencePanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ExportMenu.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ShowReceiptsLink.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/FinalAssessmentPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/HuntingCenterPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/hunting_service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/hunting.py",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/utils.ts"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-5",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/InvestigationActions.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/InvestigationCopilot.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/KpiCard.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/MitreMatrix.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-6",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/NetworkAccessPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/PivotPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderCardGrid.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderHealthStatusBadge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ShowReceiptsLink.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/TopSearchBar.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-7",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderCard.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderCardGrid.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-8",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderConfigRow.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderProgressTracker.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/providers/page.tsx (context: caller/usage)",
+        "C:/Users/User/ioc-intel-platform/frontend/app/lookup/new/page.tsx (context: caller/usage)",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts (context: type definitions)"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-9",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/RecommendedActionsPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ThreatScoreGauge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/VerdictAnalysisPanel.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-10A",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/RelationshipGraph.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-10B",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/SecurityAssessmentPanel.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-11",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/UsersManagementPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/dialog.tsx (context)",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/badge.tsx (context)",
+        "C:/Users/User/ioc-intel-platform/frontend/components/ui/button.tsx (context)",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts (context, listUsers/createUser/updateUser/setUserActive/resetUserPassword/authedFetch/logout)",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts (context, User/CurrentUser/Role)",
+        "C:/Users/User/ioc-intel-platform/frontend/app/admin/page.tsx (context, caller)",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/admin.py (context)",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/users.py (context, set_user_active/update_user)"
+      ]
+    },
+    {
+      "batchId": "FE-COMP-12",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/WorkspaceNav.tsx"
+      ]
+    },
+    {
+      "batchId": "FE-LIB-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/lib/aiPrompt.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/utils.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/next-env.d.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/tailwind.config.ts"
+      ]
+    },
+    {
+      "batchId": "FE-LIB-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts"
+      ]
+    },
+    {
+      "batchId": "FE-LIB-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts"
+      ]
+    },
+    {
+      "batchId": "WIN-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/windows/installer.iss"
+      ]
+    },
+    {
+      "batchId": "WIN-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/windows/wizard/Setup-Wizard.ps1"
+      ]
+    },
+    {
+      "batchId": "WIN-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Common.ps1"
+      ]
+    },
+    {
+      "batchId": "WIN-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Backup-Database.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Restore-Database.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Watchdog.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Common.ps1"
+      ]
+    },
+    {
+      "batchId": "WIN-5",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Check-Prerequisites.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Diagnostics.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Open-Platform.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Common.ps1 (context only, not a review target)",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Write-EnvFile.ps1 (context only, not a review target)",
+        "C:/Users/User/ioc-intel-platform/windows/installer.iss (context only, partial read for invocation context)"
+      ]
+    },
+    {
+      "batchId": "WIN-6",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Service-Restart.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Service-Start.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Service-Status.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Service-Stop.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Write-EnvFile.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Common.ps1 (read for context only, not part of this batch's findings)"
+      ]
+    },
+    {
+      "batchId": "LNX-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/linux/build-deb.sh",
+        "C:/Users/User/ioc-intel-platform/linux/debian/control"
+      ]
+    },
+    {
+      "batchId": "LNX-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/linux/scripts/common.sh"
+      ]
+    },
+    {
+      "batchId": "LNX-3",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/linux/scripts/check-prerequisites.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/diagnostics.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/watchdog.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/common.sh",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Watchdog.ps1"
+      ]
+    },
+    {
+      "batchId": "LNX-4",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/linux/scripts/backup-database.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/restore-database.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/open-platform.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/common.sh (read in full for context: hg_assert_root, hg_read_env_var, hg_test_backend_health/hg_test_frontend_health, hg_invoke_docker_compose, hg_init_data_directories, hg_sync_compose_env_file)",
+        "C:/Users/User/ioc-intel-platform/linux/horizon-grid.desktop (read in full for context: caller of open-platform.sh)",
+        "C:/Users/User/ioc-intel-platform/linux/bin/horizon-grid (read in full for context: CLI dispatcher that execs all three reviewed scripts)"
+      ]
+    },
+    {
+      "batchId": "LNX-5",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/linux/scripts/service-restart.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/service-start.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/service-status.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/service-stop.sh",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/common.sh"
+      ]
+    },
+    {
+      "batchId": "LNX-6",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/linux/wizard/setup_wizard.py"
+      ]
+    },
+    {
+      "batchId": "LNX-7",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/linux/scripts/test_host_gateway_detection.sh",
+        "C:/Users/User/ioc-intel-platform/linux/wizard/test_host_gateway_detection.py",
+        "C:/Users/User/ioc-intel-platform/linux/test/e2e-test.sh",
+        "C:/Users/User/ioc-intel-platform/linux/test/isolated-purge-test.sh"
+      ]
+    },
+    {
+      "batchId": "MISC-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/docker-compose.yml",
+        "C:/Users/User/ioc-intel-platform/docker-compose.prod.yml"
+      ]
+    },
+    {
+      "batchId": "MISC-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/test-provider-pipeline.sh"
+      ]
+    },
+    {
+      "batchId": "K8S-1",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/k8s/base/backend-deployment.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/celery-beat-deployment.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/celery-worker-deployment.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/configmap.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/ingress.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/kustomization.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/namespace.yaml"
+      ]
+    },
+    {
+      "batchId": "K8S-2",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/k8s/base/neo4j-statefulset.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/opensearch-statefulset.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/postgres-statefulset.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/redis-deployment.yaml",
+        "C:/Users/User/ioc-intel-platform/k8s/base/secret.example.yaml"
+      ]
+    }
+  ],
+  "byFlow": [
+    {
+      "flowId": "FLOW-IOC-LOOKUP",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/lookup/new/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/lookup/[id]/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/TopSearchBar.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderCardGrid.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderCard.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderProgressTracker.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ThreatScoreGauge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/FinalAssessmentPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/RelationshipGraph.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/MitreMatrix.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/DetectionRulesPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/scoring/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/correlation/engine.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/builder.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/evidence/loaders.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ioc/detector.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/cache.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_context.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/providers.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py",
+        "C:/Users/User/ioc-intel-platform/backend/.venv_test/Lib/site-packages/starlette/responses.py"
+      ]
+    },
+    {
+      "flowId": "FLOW-PROVIDER-CONFIG",
+      "files": [
+        "frontend/app/providers/page.tsx",
+        "frontend/components/dashboard/ProviderConfigRow.tsx",
+        "frontend/lib/api.ts",
+        "frontend/lib/types.ts",
+        "backend/app/api/routes/runtime.py",
+        "backend/app/core/runtime_config.py",
+        "backend/app/core/crypto.py",
+        "backend/app/core/runtime_context.py",
+        "backend/app/providers/base.py",
+        "backend/app/providers/orchestrator.py",
+        "backend/app/providers/registry.py",
+        "backend/app/providers/virustotal.py",
+        "backend/app/providers/stubs/censys.py",
+        "backend/app/api/routes/lookup.py",
+        "backend/app/ai/service.py",
+        "backend/app/api/routes/ai_config.py",
+        "backend/app/ai/connection_test.py",
+        "backend/app/providers/connection_test.py",
+        "backend/app/models/runtime_config.py",
+        "backend/app/workers/tasks.py",
+        "backend/app/api/routes/providers.py",
+        "BUG_AND_REPAIR_HISTORY.md"
+      ]
+    },
+    {
+      "flowId": "FLOW-AI-SWITCHING",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/AiQuickSwitch.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/admin/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/runtime.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/ai_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/connection_test.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/ollama_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/anthropic_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/bedrock_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/gemini_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/groq_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/openai_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/kimi_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/deepseek_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/xai_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/mistral_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/openrouter_client.py",
+        "C:/Users/User/ioc-intel-platform/frontend/app/providers/page.tsx",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/audit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderConfigRow.tsx"
+      ]
+    },
+    {
+      "flowId": "FLOW-AUTH-RBAC",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/login/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/register/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/admin/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/providers/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/UsersManagementPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/WorkspaceNav.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/SecurityAssessmentPanel.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/pentest/[id]/page.tsx",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/auth.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/admin.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/ai_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/basket.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/cases.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest_exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/security_assessment.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/security.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/rbac.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/users.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/cache.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/audit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/auth.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/admin.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py"
+      ]
+    },
+    {
+      "flowId": "FLOW-DASHBOARD-KPI",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/dashboard/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/KpiCard.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/dashboard/provider-health/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ProviderHealthStatusBadge.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/utils.ts",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/providers.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/cases.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/dashboard.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/dashboard_summary.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/rbac.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/case.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/base.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/providers/registry.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_dashboard_service_db.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_dashboard_api.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_dashboard_service.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_dashboard_summary.py"
+      ]
+    },
+    {
+      "flowId": "FLOW-SECURITY-ASSESSMENT",
+      "files": [
+        "backend/app/main.py",
+        "backend/app/api/routes/security_assessment.py",
+        "backend/app/api/routes/lookup.py",
+        "backend/app/core/security_assessment.py",
+        "backend/app/core/url_safety.py",
+        "backend/app/core/db.py",
+        "backend/app/security_assessment/registry.py",
+        "backend/app/security_assessment/base.py",
+        "backend/app/security_assessment/nmap_tool.py",
+        "backend/app/security_assessment/dns_tool.py",
+        "backend/app/security_assessment/tls_tool.py",
+        "backend/app/security_assessment/http_headers_tool.py",
+        "backend/app/security_assessment/hash_tool.py",
+        "backend/app/security_assessment/vuln_intel.py",
+        "backend/app/models/security_assessment.py",
+        "backend/app/models/user.py",
+        "backend/app/scoring/engine.py",
+        "backend/app/schemas/security_assessment.py",
+        "backend/app/auth/rbac.py",
+        "backend/app/ioc/types.py",
+        "backend/app/correlation/engine.py",
+        "backend/app/ai/service.py",
+        "backend/app/tests/unit/test_security_assessment_service.py",
+        "backend/app/tests/integration/test_security_assessment_api.py",
+        "frontend/components/dashboard/SecurityAssessmentPanel.tsx",
+        "frontend/lib/api.ts",
+        "frontend/lib/types.ts"
+      ]
+    },
+    {
+      "flowId": "FLOW-PENTEST-SUITE",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/pentest/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/pentest/[id]/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/types.ts",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest_exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/ai_analyst.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/msf_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/url_safety.py"
+      ]
+    },
+    {
+      "flowId": "FLOW-EXPLOIT-VALIDATION",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/app/pentest/[id]/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest_exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/msf_client.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/orchestrator.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/rbac.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/unit/test_pentest_exploit.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/tests/integration/test_pentest_exploit_api.py"
+      ]
+    },
+    {
+      "flowId": "FLOW-EXPORT-REPORTING",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/frontend/components/dashboard/ExportMenu.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/lib/api.ts",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/lookup.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/api/routes/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/ai/schemas.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/pentest/ai_analyst.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/schemas/pentest.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/models/user.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/auth/rbac.py",
+        "C:/Users/User/ioc-intel-platform/frontend/app/lookup/[id]/page.tsx",
+        "C:/Users/User/ioc-intel-platform/frontend/app/pentest/[id]/page.tsx"
+      ]
+    },
+    {
+      "flowId": "FLOW-INSTALLER-CONFIG",
+      "files": [
+        "C:/Users/User/ioc-intel-platform/backend/app/core/config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/crypto.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/core/runtime_config.py",
+        "C:/Users/User/ioc-intel-platform/backend/app/main.py",
+        "C:/Users/User/ioc-intel-platform/docker-compose.yml",
+        "C:/Users/User/ioc-intel-platform/docker-compose.prod.yml",
+        "C:/Users/User/ioc-intel-platform/.env.example",
+        "C:/Users/User/ioc-intel-platform/windows/installer.iss",
+        "C:/Users/User/ioc-intel-platform/windows/wizard/Setup-Wizard.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Write-EnvFile.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Common.ps1",
+        "C:/Users/User/ioc-intel-platform/windows/scripts/Restore-Database.ps1",
+        "C:/Users/User/ioc-intel-platform/linux/wizard/setup_wizard.py",
+        "C:/Users/User/ioc-intel-platform/linux/build-deb.sh",
+        "C:/Users/User/ioc-intel-platform/linux/debian/postinst",
+        "C:/Users/User/ioc-intel-platform/linux/bin/horizon-grid",
+        "C:/Users/User/ioc-intel-platform/linux/scripts/common.sh"
+      ]
+    }
+  ]
+}

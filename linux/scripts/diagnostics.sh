@@ -60,8 +60,24 @@ fi
 } >"$OUT_DIR/system-info.txt"
 
 ARCHIVE="/tmp/horizon-grid-diagnostics-$(date '+%Y%m%d-%H%M%S').tar.gz"
-tar -czf "$ARCHIVE" -C "$(dirname "$OUT_DIR")" "$(basename "$OUT_DIR")"
-rm -rf "$OUT_DIR"
-
-echo "Diagnostics archive written to: $ARCHIVE"
-echo "This can be shared for support -- it contains no real credential values."
+# Real gap found live during overnight QA: tar's own exit code was never
+# checked -- the source data ($OUT_DIR) was deleted and a "written to"
+# success message printed UNCONDITIONALLY, so a tar failure (disk full in
+# /tmp, a permission issue) both destroyed the only copy of the collected
+# diagnostics AND told the user it had succeeded, exactly during an
+# incident where this tool failing silently is worst.
+if tar -czf "$ARCHIVE" -C "$(dirname "$OUT_DIR")" "$(basename "$OUT_DIR")" && [ -s "$ARCHIVE" ]; then
+    rm -rf "$OUT_DIR"
+    # Real gap found live during overnight QA: this archive can contain
+    # real operational data (docker logs, setup logs -- .env itself is
+    # redacted, but a log line can still echo a real value) and was
+    # written world-readable to /tmp with no permission hardening, unlike
+    # the root-only 0700/0600 model used everywhere else in this
+    # toolchain (this script already runs as root -- hg_assert_root above).
+    chmod 600 "$ARCHIVE"
+    echo "Diagnostics archive written to: $ARCHIVE"
+    echo "This can be shared for support -- it contains no real credential values."
+else
+    echo "Failed to create the diagnostics archive at $ARCHIVE -- the raw collected files are still available at $OUT_DIR" >&2
+    exit 1
+fi

@@ -56,11 +56,33 @@ function Update-Status($ui, [string]$text) {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
+function Get-ConfiguredFrontendPort {
+    # Real gap found live during overnight QA: both Start-Process calls in
+    # this script hardcoded "http://localhost:3000", ignoring a HOST_PORT_
+    # FRONTEND the setup wizard's own port-conflict page can (and does)
+    # remap a real install to (see Check-Prerequisites.ps1's own comment on
+    # that page) -- a customized install's shortcut always opened whatever
+    # happened to be on port 3000 (a connection-refused page, or worse, an
+    # unrelated service) instead of the platform's real frontend port.
+    # Wrapped in try/catch: on the pre-elevation fast path below, the
+    # ACL-locked config file may throw access-denied for a non-elevated
+    # caller (see this script's own existing comment further down) --
+    # falling back to the documented default (3000) rather than forcing an
+    # elevation prompt just to open a browser tab for the common case.
+    try {
+        if (Test-Path $script:EnvFilePath) {
+            $line = Get-Content $script:EnvFilePath -ErrorAction Stop | Where-Object { $_ -match '^\s*HOST_PORT_FRONTEND\s*=\s*(\d+)' }
+            if ($line -and $Matches[1]) { return [int]$Matches[1] }
+        }
+    } catch {}
+    return 3000
+}
+
 # Already up? Skip every startup step and go straight to the browser --
 # this is the common case (platform already running) and shouldn't pay for
 # a UAC prompt or a status window it doesn't need.
 if ((Test-BackendHealth) -and (Test-FrontendHealth)) {
-    Start-Process "http://localhost:3000"
+    Start-Process "http://localhost:$(Get-ConfiguredFrontendPort)"
     exit 0
 }
 
@@ -109,7 +131,37 @@ if (-not $dockerRunning) {
 # doesn't see a UAC prompt just for clicking the desktop icon -- but
 # everything from here on on this path needs to run elevated to even ask
 # the ACL-locked filesystem an honest question.
-Assert-Elevated
+#
+# Real gaps found live during overnight QA, both around this exact
+# relaunch: (1) Assert-Elevated (Common.ps1) has no idea this script has a
+# visible WinForms dialog open ($ui) -- it just exits the current process,
+# leaving that dialog to be torn down by raw process termination rather
+# than a clean Form.Close(), which can leave a stale/frozen window image on
+# screen for a moment. (2) Assert-Elevated's own Start-Process -Verb RunAs
+# call has no -WindowStyle Hidden, so the relaunched elevated PowerShell
+# process shows a plain console window alongside this GUI-only tool's own
+# status dialog -- jarring on exactly the cold-start path a user is most
+# likely to hit right after a reboot. Assert-Elevated is shared by several
+# other, genuinely console-based scripts (Restore-Database.ps1 etc.) that
+# DO want a visible console, so this does its own scoped relaunch here
+# instead of changing that shared helper for everyone.
+$isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator
+)
+if (-not $isElevated) {
+    $ui.Form.Close()
+    $scriptPath = $MyInvocation.PSCommandPath
+    try {
+        Start-Process -FilePath "powershell.exe" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", "`"$scriptPath`"") `
+            -WindowStyle Hidden -Verb RunAs | Out-Null
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Administrator privileges are required and the elevation prompt was declined or failed. Try this shortcut again.",
+            "HORIZON GRID", "OK", "Warning") | Out-Null
+    }
+    exit 0
+}
 
 if (-not (Test-Path $script:EnvFilePath)) {
     $ui.Form.Close()
@@ -146,4 +198,4 @@ if (-not $healthy) {
     exit 1
 }
 
-Start-Process "http://localhost:3000"
+Start-Process "http://localhost:$(Get-ConfiguredFrontendPort)"

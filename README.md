@@ -7,7 +7,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)
-![Version](https://img.shields.io/badge/version-0.3.8-brightgreen)
+![Version](https://img.shields.io/badge/version-0.3.10-brightgreen)
 ![Python](https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white)
 ![Next.js](https://img.shields.io/badge/frontend-Next.js-000000?logo=next.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)
@@ -37,6 +37,7 @@
   - [Reliability](#-reliability-and-mission-critical-deployment)
 - [Platform support](#-platform-support)
 - [Architecture](#️-architecture)
+- [Prerequisites](#-prerequisites)
 - [Installation / quick start](#-installation--quick-start)
 - [Documentation](#-documentation)
 - [Security](#-security)
@@ -274,7 +275,7 @@ afterward (full detail in the Mission-Critical Operations Manual):
 | Code/package signing | Not code-signed — SmartScreen will warn; click "Run anyway" | Not signed (standard for `.deb` packages) |
 | Uninstall (keep data) | "Remove Application" — stops containers, no volume deletion | `apt remove horizon-grid` — stops containers, no volume deletion |
 | Uninstall (delete everything) | "Remove Everything" — requires typing `DELETE`; deletes volumes and all config/data | `apt purge horizon-grid` — force-removes containers/volumes and deletes all config/data |
-| Current version | `0.3.8` | `0.3.8` |
+| Current version | `0.3.10` | `0.3.10` |
 
 ## 🏗️ Architecture
 
@@ -287,6 +288,32 @@ afterward (full detail in the Mission-Critical Operations Manual):
   refresh jobs.
 - **Orchestration**: Docker Compose (`docker-compose.yml` for development,
   `docker-compose.prod.yml` for production).
+
+## 📦 Prerequisites
+
+- **Docker + Docker Compose** — required, no exceptions. The entire stack
+  (backend, frontend, Postgres, Redis, Neo4j, OpenSearch, Celery worker/beat)
+  runs as Compose services; there is no supported way to run HORIZON GRID
+  directly on bare metal. The Windows installer and Linux `.deb` package both
+  install onto an existing Docker install rather than bundling their own.
+- **Ollama** — required only if you use the default local AI backend
+  (`ai_backend: "ollama"` in `backend/app/core/config.py`, no API key/quota
+  needed). Ollama itself must be reachable from the backend container — either
+  running natively on the host with the platform's Docker networking pointed
+  at it, or run as its own container — and needs at least one model pulled
+  (e.g. `ollama pull llama3.2:3b`) before an AI analysis call will succeed.
+  If you configure any of the ten cloud AI backends instead (Anthropic,
+  Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, Grok, Mistral, OpenRouter —
+  see [AI analysis](#-ai-analysis) above) and switch `ai_backend` to one of
+  those, Ollama is not needed at all.
+
+> [!WARNING]
+> Ollama's own default context window can quietly balloon RAM usage on
+> resource-constrained hosts — HORIZON GRID caps this itself
+> (`backend/app/ai/ollama_client.py`'s `_estimate_num_ctx`, clamped to
+> 2048–8192 tokens) rather than accepting Ollama's default, but that only
+> helps once you're on a version that includes the fix; make sure Ollama
+> itself is a reasonably current release.
 
 ## 🚀 Installation / quick start
 
@@ -322,8 +349,8 @@ administrator privileges; 64-bit Windows only.
 ### 🐧 Linux package
 
 Built via `linux/build-deb.sh` (requires a Debian/Ubuntu host; produces
-`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.3.8_amd64.deb`).
-Install with `sudo dpkg -i horizon-grid_0.3.8_amd64.deb`, then run the
+`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.3.10_amd64.deb`).
+Install with `sudo dpkg -i horizon-grid_0.3.10_amd64.deb`, then run the
 terminal setup wizard as root to configure the admin account, AI backend,
 providers, and ports; the platform is then managed via the `horizon-grid`
 systemd-backed CLI (`start` / `stop` / `restart`).

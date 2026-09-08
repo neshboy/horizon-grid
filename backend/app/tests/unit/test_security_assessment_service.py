@@ -51,16 +51,37 @@ def test_accepts_a_small_cidr_at_exactly_the_cap():
     # routable 8.8.8.0/24 block (same address family this suite already
     # uses elsewhere, e.g. test_accepts_a_real_globally_routable_ipv4_target,
     # as the established "known-public" test range). Must NOT be an RFC1918
-    # range here: see test_rejects_a_private_rfc1918_cidr_target below for
-    # why that matters.
+    # range here: a private range would now (correctly) be rejected by the
+    # routability check added below -- see
+    # test_rejects_a_private_rfc1918_cidr_target for that; this test's own
+    # intent is only the SIZE boundary, so it uses a public range to isolate
+    # that.
     lookup = _lookup("8.8.8.0/28", "cidr")
     assert _validate_scope(lookup, "8.8.8.0/28", True) == IOCType.CIDR
 
 
 def test_rejects_a_cidr_larger_than_the_cap():
-    lookup = _lookup("10.0.0.0/27", "cidr")  # 32 addresses -- over the /28 cap
+    lookup = _lookup("8.8.8.0/27", "cidr")  # 32 addresses -- over the /28 cap
     with pytest.raises(CIDRTooLargeError):
-        _validate_scope(lookup, "10.0.0.0/27", True)
+        _validate_scope(lookup, "8.8.8.0/27", True)
+
+
+def test_rejects_a_private_rfc1918_cidr_target():
+    """Real gap found live during overnight QA: every OTHER scannable type
+    (IPv4/IPv6/domain/hostname/URL) was already checked for global
+    routability -- CIDR was not, so a CIDR-typed lookup could target this
+    platform's own docker-compose network (e.g. a real "172.19.0.0/28")
+    and nmap would genuinely scan other containers on it."""
+    lookup = _lookup("10.0.0.0/28", "cidr")  # exactly 16 addresses, but RFC1918
+    with pytest.raises(UnsafeTargetError):
+        _validate_scope(lookup, "10.0.0.0/28", True)
+
+
+def test_accepts_a_loopback_cidr_target():
+    """Loopback is exempt from the CIDR routability check too, mirroring
+    the same exemption already established for single IPv4/IPv6 targets."""
+    lookup = _lookup("127.0.0.0/28", "cidr")
+    assert _validate_scope(lookup, "127.0.0.0/28", True) == IOCType.CIDR
 
 
 def test_authorization_is_checked_before_target_mismatch():

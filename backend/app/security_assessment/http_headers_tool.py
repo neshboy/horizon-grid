@@ -28,6 +28,8 @@ from app.security_assessment.base import Finding, ScanProfile, SecurityAssessmen
 from app.providers.base import ProviderStatus
 
 _TIMEOUT_SECONDS = 15
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUS_CODES = (301, 302, 303, 307, 308)
 
 PROFILES: dict[str, ScanProfile] = {
     "standard": ScanProfile(
@@ -139,22 +141,42 @@ class HTTPHeadersTool(SecurityAssessmentTool):
             return self._error(target, ioc_type, ProviderStatus.ERROR, f"Refusing to connect to {url}: {exc}")
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=_TIMEOUT_SECONDS) as client:
-                response = await client.get(pinned_url, headers={"Host": host_header}, extensions={"sni_hostname": sni_host})
+            # Every hop (including this first one) is followed via
+            # _get_with_validated_redirects, which re-validates AND re-pins
+            # each redirect target exactly the same way this initial
+            # pinned_url/sni_host/host_header were just produced -- see that
+            # method's own docstring for the two distinct gaps (SSRF-via-
+            # redirect, and this same DNS-rebinding TOCTOU on later hops)
+            # this closes together.
+            response, url, sni_host, host_header = await self._get_with_validated_redirects(
+                pinned_url, url, sni_host, host_header, allow_private
+            )
         except httpx.ConnectError:
             if url.startswith("https://"):
                 try:
                     fallback_url = f"http://{target}:{port}" if (is_bare_host and port is not None) else f"http://{target}"
                     pinned_fallback, sni_host, host_header = await asyncio.to_thread(_pin_to_resolved_address, fallback_url, allow_private)
-                    async with httpx.AsyncClient(follow_redirects=True, timeout=_TIMEOUT_SECONDS) as client:
-                        response = await client.get(pinned_fallback, headers={"Host": host_header}, extensions={"sni_hostname": sni_host})
-                        url = fallback_url
-                except (httpx.HTTPError, ValueError) as exc:
+                    response, url, sni_host, host_header = await self._get_with_validated_redirects(
+                        pinned_fallback, fallback_url, sni_host, host_header, allow_private
+                    )
+                except httpx.HTTPError as exc:
                     return self._error(target, ioc_type, ProviderStatus.ERROR, f"Could not reach {target} over HTTP or HTTPS: {exc}")
+                except ValueError as exc:
+                    return self._error(target, ioc_type, ProviderStatus.ERROR, f"Refusing to follow a redirect for {target}: {exc}")
             else:
                 return self._error(target, ioc_type, ProviderStatus.ERROR, f"Could not reach {target}.")
         except httpx.TimeoutException:
             return self._error(target, ioc_type, ProviderStatus.TIMEOUT, f"Request to {url} timed out.")
+        except ValueError as exc:
+            # Real SSRF-via-redirect gap found live during overnight QA:
+            # follow_redirects=True used to follow a redirect chain with
+            # zero re-validation of each hop against the globally-routable-
+            # target check the caller already ran against the ORIGINAL
+            # target -- a target that redirected to e.g. a cloud metadata
+            # address or another docker-compose service's real internal IP
+            # would be fetched for real. Every hop is now checked the same
+            # way the original target was (see _get_with_validated_redirects).
+            return self._error(target, ioc_type, ProviderStatus.ERROR, f"Refusing to follow a redirect for {target}: {exc}")
         except httpx.HTTPError as exc:
             return self._error(target, ioc_type, ProviderStatus.ERROR, f"Request to {url} failed: {exc}")
 
@@ -193,6 +215,56 @@ class HTTPHeadersTool(SecurityAssessmentTool):
             data={"http_status": response.status_code, "checked_url": url, "headers_present": sorted(headers.keys())},
         )
         return ToolRunResult(provider_result=provider_result, findings=findings)
+
+    async def _get_with_validated_redirects(
+        self, pinned_url: str, url: str, sni_host: str, host_header: str, allow_private: bool
+    ) -> tuple[httpx.Response, str, str, str]:
+        """Manually follows redirects, re-validating AND re-pinning every
+        hop -- httpx's own follow_redirects=True does neither. Two real gaps
+        found live during overnight QA, closed here together:
+
+        (1) SSRF-via-redirect: with follow_redirects=True, a target that
+        redirected to a cloud metadata address or another docker-compose
+        service's real internal IP would be fetched for real, completely
+        bypassing the globally-routable-target check the caller already ran
+        against the ORIGINAL target before this tool was ever invoked. Every
+        hop gets that exact same check now, not just the first one.
+
+        (2) The same DNS-rebinding TOCTOU _pin_to_resolved_address exists to
+        close for the first hop (see its own docstring) applies equally to
+        every redirect hop -- a `location` header names a hostname the
+        target itself controls, exactly the "caller controls this
+        hostname's DNS" shape that check exists for. Handing httpx a bare
+        redirect URL would let it perform its own later, independent
+        resolution of that hostname, defeating the check the same way an
+        unpinned first request would.
+
+        `pinned_url`/`sni_host`/`host_header` are the caller's own already-
+        resolved-and-validated first hop (from _pin_to_resolved_address),
+        passed in rather than re-resolved here so the caller's own initial
+        ValueError handling (a distinct "refusing to connect" for the first
+        hop vs this loop's "refusing to follow a redirect" for later ones)
+        stays intact. `url` is the corresponding not-yet-pinned hostname
+        URL, threaded through purely so the RETURNED url (used for
+        `checked_url` and HSTS/CSP messages) is the human-readable hostname
+        form, never a raw pinned IP literal."""
+        async with httpx.AsyncClient(follow_redirects=False, timeout=_TIMEOUT_SECONDS) as client:
+            for _ in range(_MAX_REDIRECTS + 1):
+                response = await client.get(pinned_url, headers={"Host": host_header}, extensions={"sni_hostname": sni_host})
+                if response.status_code not in _REDIRECT_STATUS_CODES or "location" not in response.headers:
+                    return response, url, sni_host, host_header
+                url = str(httpx.URL(url).join(response.headers["location"]))
+                # _pin_to_resolved_address (via resolve_safe_address) does a
+                # real (blocking) DNS lookup -- off-loaded to a thread so
+                # this redirect-validation call doesn't introduce the same
+                # event-loop-blocking class of bug just fixed in
+                # app/pentest/orchestrator.py's _is_in_scope. allow_private
+                # is threaded through so a redirect hop is held to the exact
+                # same policy (strict for the per-lookup Security Assessment
+                # Toolkit, RFC1918-permitting for an already scope-
+                # authorized Pentest Suite target) as the original request.
+                pinned_url, sni_host, host_header = await asyncio.to_thread(_pin_to_resolved_address, url, allow_private)
+        raise httpx.TooManyRedirects(f"Exceeded {_MAX_REDIRECTS} redirects while fetching {url}")
 
     def _finding(self, finding_type: str, severity: str, title: str, description: str, evidence_extra: dict | None = None) -> Finding:
         return Finding(

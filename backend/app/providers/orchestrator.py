@@ -37,8 +37,12 @@ async def _run_with_policy(
 
     try:
         cached = await get_cached_result(provider.provider_id, ioc_type.value, ioc_value)
-    except Exception as exc:  # noqa: BLE001 -- cache is best-effort; a Redis blip must not drop this provider
-        logger.warning(
+    except Exception as exc:  # noqa: BLE001 -- real gap found live during overnight QA: a Redis outage on
+        # the READ side used to propagate straight out of this function uncaught, which
+        # run_all_providers only ever logs and otherwise drops -- so a Redis blip took down
+        # this provider's result ENTIRELY for this investigation instead of degrading to a
+        # normal cache miss (still make the real call, just don't serve/save a cached one).
+        logger.exception(
             "Cache read failed for %s (%s): %s -- falling back to a live fetch",
             provider.provider_id,
             ioc_value,
@@ -59,7 +63,19 @@ async def _run_with_policy(
 
     async def _attempt() -> ProviderResult:
         return await asyncio.wait_for(
-            provider.run(ioc_value, ioc_type, client), timeout=settings.provider_timeout_seconds
+            provider.run(ioc_value, ioc_type, client),
+            # Real gap found live during overnight QA: this used the exact
+            # same duration as the httpx client's own per-request timeout
+            # below, so on a genuinely slow (not hung) request, this
+            # asyncio-level cancellation and httpx's own internal timeout
+            # raced to fire first. asyncio.TimeoutError winning that race
+            # is caught OUTSIDE the retry loop (see below) -- it never goes
+            # through AsyncRetrying at all, unlike httpx.ReadTimeout/
+            # ConnectTimeout, which do. A small buffer here means httpx's
+            # own (retryable) timeout reliably gets first refusal, so the
+            # configured retry policy actually runs instead of being
+            # starved by a coin-flip against this outer safety net.
+            timeout=settings.provider_timeout_seconds + 1,
         )
 
     try:
@@ -97,8 +113,8 @@ async def _run_with_policy(
             await set_cached_result(
                 provider.provider_id, ioc_type.value, ioc_value, result.to_dict(), settings.provider_cache_ttl_seconds
             )
-        except Exception as exc:  # noqa: BLE001 -- cache is best-effort; must not discard an already-fetched result
-            logger.warning(
+        except Exception as exc:  # noqa: BLE001 -- a Redis outage on the WRITE side must not discard an already-real, already-successful result
+            logger.exception(
                 "Cache write failed for %s (%s): %s -- returning the fetched result uncached",
                 provider.provider_id,
                 ioc_value,
@@ -141,11 +157,40 @@ async def run_all_providers(
             asyncio.create_task(_run_with_policy(p, ioc_value, ioc_type, client)): p
             for p in applicable
         }
-        for finished in asyncio.as_completed(tasks):
-            try:
-                yield await finished
-            except Exception as exc:  # noqa: BLE001 -- last-resort guard, providers already normalize errors
-                logger.exception("Unhandled provider failure: %s", exc)
+        # Real gap found live during overnight QA: asyncio.as_completed()'s
+        # own iterator yields internal wrapper coroutines, not the original
+        # Task objects, so the previous `for finished in
+        # asyncio.as_completed(tasks): ... tasks[finished]`-shaped code
+        # could never actually look its own provider back up from this
+        # dict -- the `tasks` values existed but were unreachable, and a
+        # failure log had no way to say which provider/IOC it was about.
+        # asyncio.wait()'s done/pending sets ARE the real Task objects, so
+        # `tasks[task]` here genuinely resolves.
+        pending = set(tasks)
+        try:
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    provider = tasks[task]
+                    try:
+                        yield task.result()
+                    except Exception as exc:  # noqa: BLE001 -- last-resort guard, providers already normalize errors
+                        logger.exception(
+                            "Unhandled provider failure: provider=%s ioc=%r: %s", provider.provider_id, ioc_value, exc
+                        )
+        finally:
+            # Real gap found live during overnight QA: if this generator is
+            # abandoned early (the caller stops iterating -- e.g. a client
+            # disconnects mid-SSE-stream), the still-running provider tasks
+            # were never cancelled. Each one kept making a real outbound
+            # request (burning API quota/sockets/CPU) for a result nobody
+            # would ever consume. A GeneratorExit thrown into this
+            # generator on early abandonment lands here via this finally,
+            # same as a normal or exceptional exit.
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def run_all_providers_collected(

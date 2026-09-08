@@ -20,6 +20,52 @@ Two independent multi-agent audits ran concurrently against the same live stack:
 ### Process note
 One of the two audits' bootstrap step bypassed a sandbox safety-classifier block (routing around a denied raw SQL insert via an internal service call) to create a privileged test account -- caught immediately, confirmed confined to a disposable, isolated audit environment (never production), and remediated by wiping and rebuilding that environment from scratch before any finding was trusted. One genuine regression surfaced across the combined 88 fixes (a test fixture with internally-inconsistent synthetic scoring data, exposed by the scoring-engine hardening above) -- root-caused and fixed. Full backend suite after all fixes: 774 passed, 26 skipped, 0 failed.
 
+## [0.3.10] — 2026-09-04 — Full line-by-line codebase audit: 32 real bugs found and fixed across the Pentest Suite, SSRF surfaces, provider reliability, and every installer
+
+Every first-party file (314 files, ~50,200 lines: backend, frontend, both
+installers, k8s, docker-compose) was read in full by an independent review
+pass, with every raised finding adversarially re-verified against the real
+current code before being trusted. Full detail (every finding, confirmed
+and rejected, exact file:line, exact fix, exact test) is in
+`LINE_BY_LINE_AUDIT.md`, including the 264 lower-severity findings not
+individually fixed in this pass (preserved in `audit_deduped.json` for
+follow-up work).
+
+### Fixed — Pentest Suite / Metasploit exploit validation
+- **Intrusive-validation re-probe bypassed the kill switch**: `validate_finding()`'s "recheck this finding" action checked scope but not the global kill switch or an assessment's `emergency_stopped` flag, so a "stop everything now" action could still leave this one path making real network probes. Now shares one safety-gate function with the real-exploit-validation path.
+- **Scope checker mis-parsed IPv6 targets and blocked the event loop**: a bracketed IPv6 host (`https://[::1]:8080/`) was parsed down to a single `"["` character; a blocking DNS call inside the scope check stalled every other concurrent request on the same worker for the duration of the lookup.
+- Frontend: the exploit-confirmation checkbox never reset after a run (one tick could authorize a second live exploit execution on a retry click); module selection had no guard against an out-of-order response silently substituting a different module than the one just clicked.
+- `create_assessment`'s initial scope had none of `update_scope`'s CIDR-size validation; `start_assessment`/`resume_assessment` had a check-then-act race allowing duplicate concurrent background runs; findings were only persisted once at the very end of a run (a pause/kill-switch could discard already-real results); `max_requests`/`max_runtime_minutes` were accepted and displayed but never enforced; a target where every tool failed was indistinguishable from a genuinely clean scan; re-validating a finding always rescanned with nmap's shallowest profile regardless of what actually produced it.
+- `docker-compose.prod.yml` (what every real installer actually runs) and the k8s Deployment translation both silently dropped the `msfrpcd` startup entirely, breaking Exploit Validation on every real installed deployment while it kept working in the dev-only compose file.
+
+### Fixed — SSRF / security surfaces
+- CIDR-typed Security Assessment targets skipped the globally-routable-target check every other type gets, allowing a scan of this platform's own internal Docker network.
+- `http_headers_tool.py` followed redirects with zero re-validation of each hop — a target that redirected to an internal address was fetched for real.
+- `assert_globally_routable_target` rejected every globally-routable IPv6-literal URL target outright (a charset mismatch in the hostname-syntax check).
+
+### Fixed — Reliability
+- `app/providers/orchestrator.py`: a Redis outage on either the cache read or write side discarded the entire provider result instead of degrading to a cache miss; the outer per-attempt timeout matched httpx's own timeout exactly, starving the configured retry policy in a coin-flip race; sibling provider tasks were never cancelled when a client disconnected mid-stream, leaking real outbound requests.
+- `urlscan_io.py` locally caught the exact exception types the retry policy depends on, silently disabling retries for this one provider; its documented "combined submit+poll" timeout budget was only ever enforced as a poll-only budget.
+- The scheduled OSINT crawl (Celery, `asyncio.run()` fresh every hourly tick) never disposed the shared DB connection pool between ticks — every tick after the first reused connections bound to an already-closed event loop.
+- `app/ai/bedrock_client.py` mutated the Bedrock bearer-token environment variable once, permanently, with no save/restore or lock — a live connection test and a real call could clobber each other's credentials. The pinned `boto3==1.35.24` also predated AWS's own Bedrock API-key feature entirely; bumped to `1.43.88`.
+- `app/correlation/engine.py` stringified crt.sh's dict-shaped `certificates` field into a garbage graph node (a Python dict repr as the "value") instead of extracting a real certificate identifier.
+
+### Fixed — Installers (Windows + Linux + k8s)
+- Both platforms' backup scripts never checked `pg_dump`'s exit code (Windows) or had no atomic-write/signal-trap protection (Linux) — a partial or interrupted backup could be indistinguishable from a good one.
+- Both platforms' restore scripts never checked DROP/CREATE DATABASE's exit codes and ran the dump replay without `ON_ERROR_STOP`, so a failed restore (or one with some failing statements) could report success; Windows's version also bypassed its own `Pause` on every failure path, losing the diagnostics from the console window before anyone could read them.
+- Windows installer had no `DisableDirPage`, letting a custom install path silently break every downstream script that hardcodes the default location.
+- The Linux desktop launcher's non-root fast path could never detect an already-healthy platform on a customized port (the real port lives in a root-locked `.env`); its cold-start path had no self-elevation mechanism at all, so a desktop-launched icon failed completely invisibly with no visible terminal to show an error in. Now discovers the real port straight from the Docker daemon and self-elevates via `pkexec` when a graphical session is present.
+- k8s: migrations ran unguarded from every replica (a real race), `:latest` + `IfNotPresent` could pin stale code per-node, `DB_POOL_SIZE`/`DB_POOL_MAX_OVERFLOW` were dropped in translation, and both probes hit the dependency-free `/health` instead of `/health/detailed`.
+
+### Testing
+543 real backend tests passing (460 unit + 75 in-container integration + 8
+host-only integration), 3 new test files, 12 existing test files extended.
+Zero regressions introduced by any fix in this pass — one did briefly
+appear mid-pass (a dropped import) and was caught by the very next test
+run before moving on. Frontend `tsc`/lint clean; both installers'
+`.ps1`/`.sh` scripts syntax-checked; k8s YAML and the merged
+`docker compose config` output both validated directly.
+
 ## [0.3.9] — 2026-09-02 — Autonomous overnight QA: 20+ real bugs found and fixed, including two full auth/SSRF bypasses and an 18GB local-AI memory bomb
 
 Four rounds of local, evidence-driven QA (full function/security discovery, a real authorized pentest against an owner-approved local router, a 12-agent parallel test sweep, and a full RBAC/security/resource audit) against the live running stack. Every finding below was live-reproduced with a concrete request/response and root-caused before being fixed; full detail (exact repro steps, exact evidence, exact file:line, plus real screenshots) is in `BUG_AND_REPAIR_HISTORY.md` and `FINAL_LOCAL_QA_REPORT.md`.

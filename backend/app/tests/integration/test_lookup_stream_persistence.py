@@ -26,6 +26,7 @@ thing that was silently broken.
 import asyncio
 import os
 import socket
+import uuid
 
 import httpx
 import pytest
@@ -273,10 +274,26 @@ async def test_user(db_session):
     from app.auth.security import hash_password
     from app.models.user import Role, User
 
+    # Legacy safety net: this file used to share one hardcoded email
+    # across every test. Kept as a one-time purge of any row still left
+    # over from before the switch to the unique-per-test email below --
+    # it no-ops (returns immediately) once no row with that old fixed
+    # email exists, which is already the steady-state today.
     await _purge_stream_persistence_test_user()
 
+    # Real gap found live during overnight QA: this used one hardcoded
+    # email shared by every test in this file. If any single test's
+    # fixture teardown below (db_session.delete(user)) ever failed --
+    # e.g. an un-cascaded FK from some OTHER row a failing test created
+    # that still references this user -- the row was never actually
+    # deleted, and EVERY subsequent test in this file hit a unique-
+    # constraint violation trying to INSERT its own "test_user" with the
+    # same email, turning one real failure into many unrelated-looking
+    # ones. A unique email per test invocation (the same pattern already
+    # established in test_pentest_api.py's _unique_email) means one test's
+    # cleanup failure can never block any other test's own fixture.
     user = User(
-        email="stream-persistence-test@example.test",
+        email=f"stream-persistence-test-{uuid.uuid4().hex[:10]}@example.test",
         hashed_password=hash_password("irrelevant"),
         full_name="Stream Persistence Test",
         role=Role.ANALYST,
@@ -285,23 +302,70 @@ async def test_user(db_session):
     await db_session.commit()
     await db_session.refresh(user)
     yield user
-    # Best-effort here -- see _purge_stream_persistence_test_user()'s own
-    # docstring for why the NEXT test's setup, not this teardown, is this
-    # file's real safety net. Swallowing a failure here (logging it rather
-    # than letting it become an opaque "ERROR at teardown" that masks
-    # whatever this test's own body actually did) is deliberate: this
-    # fixture's contract is "this user exists for the duration of the test
-    # it's requested in," which was already satisfied by the time we get
-    # here.
+    # Real gap found live during overnight QA, reproduced live: every test
+    # in this file that uses this fixture creates a real IOCLookup with
+    # requested_by=user.id, and ioc_lookups_requested_by_fkey has no ON
+    # DELETE CASCADE (correctly so for real production data -- a user's
+    # past investigations should survive their account being deleted, not
+    # vanish with it) -- so deleting the user here raised a genuine
+    # ForeignKeyViolationError, turning this fixture's own teardown into a
+    # test ERROR. Test-only cleanup: delete this test's own lookups (reusing
+    # _delete_lookup_and_dependents(), same as _purge_stream_persistence_
+    # test_user()'s own sweep) and, for test_startup_recovers_orphaned_
+    # pentest_rows, its pentest rows, before deleting the user itself.
+    #
+    # Still wrapped in try/except -- see _purge_stream_persistence_test_
+    # user()'s own docstring for why a self-healing purge, not a guaranteed
+    # clean teardown, is this file's real safety net. Swallowing a failure
+    # here (logging it rather than letting it become an opaque "ERROR at
+    # teardown" that masks whatever this test's own body actually did) is
+    # deliberate: this fixture's contract is "this user exists for the
+    # duration of the test it's requested in," which was already satisfied
+    # by the time we get here. Unlike the old shared-email world, a failure
+    # here now only leaks this one user's own row under its own unique
+    # email -- it can never block any OTHER test's setup.
+    from app.models.lookup import IOCLookup
+    from app.models.pentest import PentestAssessment, PentestExploitAttempt, PentestFinding, PentestTarget
+    from sqlalchemy import delete as sa_delete
+
     try:
+        lookups = (
+            await db_session.execute(select(IOCLookup).where(IOCLookup.requested_by == user.id))
+        ).scalars().all()
+        for lookup in lookups:
+            await _delete_lookup_and_dependents(db_session, lookup)
+
+        assessment_ids = (
+            await db_session.execute(select(PentestAssessment.id).where(PentestAssessment.created_by == user.id))
+        ).scalars().all()
+        if assessment_ids:
+            await db_session.execute(
+                sa_delete(PentestExploitAttempt).where(PentestExploitAttempt.assessment_id.in_(assessment_ids))
+            )
+            await db_session.execute(
+                sa_delete(PentestFinding).where(PentestFinding.assessment_id.in_(assessment_ids))
+            )
+            await db_session.execute(
+                sa_delete(PentestTarget).where(PentestTarget.assessment_id.in_(assessment_ids))
+            )
+            await db_session.execute(
+                sa_delete(PentestAssessment).where(PentestAssessment.id.in_(assessment_ids))
+            )
+            await db_session.commit()
+        await db_session.execute(
+            sa_delete(PentestExploitAttempt).where(PentestExploitAttempt.requested_by == user.id)
+        )
+        await db_session.commit()
+
         await db_session.delete(user)
         await db_session.commit()
     except Exception as exc:  # noqa: BLE001 -- see docstring above
         import logging
 
         logging.getLogger(__name__).warning(
-            "test_user teardown could not delete %s directly (%r) -- "
-            "the next test's setup will purge it instead.",
+            "test_user teardown could not fully clean up %s (%r) -- "
+            "leaving an orphaned row under its own unique email; it will "
+            "not block any other test.",
             user.email, exc,
         )
 
@@ -388,10 +452,103 @@ async def fake_provider_and_ai(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_completed_lookup_persists_completed_status_and_verdict(
-    fake_provider_and_ai, auth_headers, db_session
+    fake_provider_and_ai, auth_headers, db_session, monkeypatch
 ):
     from app.main import app
     from app.models.lookup import IOCLookup
+
+    # Real gap found live during overnight QA, reproduced live: fake_provider_
+    # and_ai's stub AI hardcodes final_verdict="malicious" with malicious_
+    # probability=90, but generate_final_assessment() swaps in the REAL
+    # deterministic score before persisting -- and a SINGLE, uncorroborated
+    # provider vote (which is all that shared fixture yields) deterministically
+    # caps at 26.0 (app/scoring/engine.py's _corroboration_factor(n=1)=0.40),
+    # below the 30.0 floor FinalAssessment._verdict_must_agree_with_risk
+    # requires for a "malicious" verdict -- so this test's own scenario could
+    # never legitimately produce what it asserted, and silently fell through
+    # to the ai_outcome="failed" fallback (final_verdict="unknown") instead.
+    # This exact mismatch (and the precise 26.0 figure) was already
+    # independently diagnosed by test_completed_lookup_persists_ai_outcome_
+    # success_on_final_assessment_record's own comment below, which sidesteps
+    # it by not reusing this fixture at all -- this test instead adds a
+    # second, independently-corroborating provider (corroboration_factor(2)
+    # =0.55 -> 35.75, comfortably clearing the 30.0 floor) so the ORIGINAL
+    # scenario this test is meant to verify -- a genuinely, deterministically
+    # malicious investigation persists its real verdict -- is actually
+    # realizable, rather than weakening what's asserted.
+    from app.ioc.types import IOCType
+    from app.providers.base import ProviderCategory, ProviderResult, ProviderStatus
+
+    async def fake_run_all_providers_corroborated(ioc_value, ioc_type, candidate_providers=None):
+        yield ProviderResult(
+            provider_id="fake_stream_test",
+            provider_name="Fake Stream Test Provider",
+            category=ProviderCategory.THREAT_INTEL,
+            status=ProviderStatus.OK,
+            ioc_value=ioc_value,
+            ioc_type=ioc_type,
+            data={"verdict": "malicious", "detection_ratio": "10/70"},
+        )
+        yield ProviderResult(
+            provider_id="fake_stream_test_2",
+            provider_name="Fake Stream Test Provider 2",
+            category=ProviderCategory.THREAT_INTEL,
+            status=ProviderStatus.OK,
+            ioc_value=ioc_value,
+            ioc_type=ioc_type,
+            data={"verdict": "malicious"},
+        )
+
+    monkeypatch.setattr("app.api.routes.lookup.run_all_providers", fake_run_all_providers_corroborated)
+
+    # fake_provider_and_ai's own AI stub now returns final_verdict="suspicious"
+    # (fixed elsewhere to stop it self-contradicting the real deterministic
+    # score for its single-provider scenario -- see that fixture's docstring).
+    # "suspicious" sits outside both _MALICIOUS_VERDICTS and _BENIGN_VERDICTS,
+    # so it always passes _verdict_must_agree_with_risk regardless of score --
+    # which means reusing it here would make this test pass without ever
+    # actually exercising the corroborated-malicious-survives-validation case
+    # its own comment above describes. Override the AI stub too, so the AI's
+    # verdict is genuinely "malicious" and the real 35.8 score from the two
+    # corroborating providers above is what has to (and does) clear the
+    # validator's floor for this test to mean anything.
+    from app.ai import service as ai_service
+
+    class _StubAIClientMalicious:
+        is_configured = True
+
+        async def call_claude_json(self, system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None):
+            if tool_name == "emit_provider_summary":
+                return {
+                    "provider_id": "fake_stream_test",
+                    "what_it_knows": "Flagged as malicious.",
+                    "reputation": "malicious",
+                    "detection_status": "10/70",
+                    "threat_level": "high",
+                    "confidence": "high",
+                    "interesting_findings": ["High detection ratio"],
+                }
+            return {
+                "executive_summary": "Test executive summary.",
+                "technical_summary": "Test technical summary.",
+                "threat_assessment": "Test threat assessment.",
+                "relationships_summary": "No relationships discovered.",
+                "risk": {
+                    "overall_risk_score": 85,
+                    "confidence_score": 80,
+                    "severity": "high",
+                    "reputation": "malicious",
+                    "malicious_probability": 90,
+                    "analyst_confidence": "high",
+                },
+                "final_verdict": "malicious",
+                "verdict_rationale": "High detection ratio across two corroborating providers.",
+            }
+
+    async def _stub_get_ai_client_malicious(backend_override=None):
+        return _StubAIClientMalicious(), "ollama", "stub-model"
+
+    monkeypatch.setattr(ai_service, "_get_ai_client", _stub_get_ai_client_malicious)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -419,13 +576,17 @@ async def test_completed_lookup_persists_completed_status_and_verdict(
     # stayed "running" forever despite a clean `done` event on the stream.
     assert lookup.status.value == "completed"
     assert lookup.final_verdict is not None
-    assert lookup.final_verdict.value == "suspicious"
-    # 26.0, not the AI stub's invented 85 -- generate_final_assessment()
-    # always swaps in the real deterministic score (app/scoring/engine.py)
-    # before persisting, regardless of what the AI's own risk.overall_risk_score
-    # claimed. See fake_provider_and_ai's docstring above for why 26.0 is the
-    # correct value for this fixture's single, uncorroborated provider vote.
-    assert lookup.risk_score == 26.0
+    assert lookup.final_verdict.value == "malicious"
+    # Confirmed directly (matching the sibling comment above): the real,
+    # deterministic score for 2 corroborating "malicious" votes with no
+    # correlation edges -- NOT the stub AI's own invented 85 -- is 35.8
+    # (65 * _corroboration_factor(2)=0.55 * vote=1.0, rounded). This test
+    # deliberately overrides fake_provider_and_ai's own single-provider
+    # setup with the corroborated 2-provider one above, so 35.8/"malicious"
+    # (not fake_provider_and_ai's own 26.0/"suspicious", asserted by tests
+    # that use that fixture's plain single-provider setup unmodified) is
+    # the correct expectation here.
+    assert lookup.risk_score == 35.8
 
     await _delete_lookup_and_dependents(db_session, lookup)
 

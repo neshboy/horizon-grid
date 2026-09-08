@@ -22,8 +22,17 @@ services:
       # affecting the plain `docker-compose.yml`-only dev workflow, where
       # the interactive docs stay available.
       ENVIRONMENT: production
+    # Real gap found live during overnight QA: this override replaced the
+    # base docker-compose.yml's ENTIRE backend command, dropping the
+    # `msfrpcd -f -P ... &` prefix that starts the real Metasploit RPC
+    # daemon -- this file is exactly what every real Windows/Linux
+    # installer's compose invocation actually uses (see this file's own
+    # header comment), so the Exploit Validation feature was silently
+    # broken on every real installed deployment despite working fine in
+    # the dev-only `docker-compose.yml`-alone setup.
     command: >
-      sh -c "alembic upgrade head &&
+      sh -c "msfrpcd -f -P \"$$MSF_RPC_PASSWORD\" -S -a 127.0.0.1 -p 55553 -U msf &
+             alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   celery_worker:

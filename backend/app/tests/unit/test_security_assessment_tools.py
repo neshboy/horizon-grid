@@ -665,3 +665,64 @@ async def test_nmap_allow_private_lets_a_domain_resolving_privately_reach_the_re
     argv = mock_exec.call_args.args
     assert argv[-1] == monkeypatch_addr
     assert result.provider_result.status != ProviderStatus.ERROR
+
+
+# --- HTTP headers tool: SSRF-via-redirect (confirmed, distinct from the
+# DNS-rebinding-TOCTOU section above) ---------------------------------------
+#
+# Real gap found live during overnight QA: this tool's httpx client used to
+# use follow_redirects=True and re-validate/re-pin nothing on any hop past
+# the first, so a target that redirected to an internal/private address (or
+# a cloud metadata endpoint) would be fetched for real, completely
+# bypassing the globally-routable-target check the caller already ran
+# against the ORIGINAL target. Fixed by _get_with_validated_redirects,
+# which manually follows redirects and re-runs the exact same
+# resolve+validate+pin step (_pin_to_resolved_address) on every hop,
+# including the first -- so these tests mock DNS via the same
+# _mock_dns_resolves_to helper (and respx routes on the RESOLVED address,
+# never the hostname) as the DNS-rebinding-TOCTOU tests above, since the
+# real outbound connection for every hop now targets that pinned address.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_headers_refuses_to_follow_a_redirect_to_a_private_address(monkeypatch):
+    """Only the FIRST hop is mocked here on purpose: if a regression makes
+    the tool actually follow the malicious redirect, respx has no route
+    registered for it and this test fails loudly instead of silently
+    succeeding. The redirect target (169.254.169.254) is an IP literal, so
+    no second DNS mock is needed for it -- resolve_safe_address rejects it
+    directly, and link-local stays blocked even though it is technically
+    within Python's broader `is_private` classification (see
+    resolve_safe_address's own docstring)."""
+    _mock_dns_resolves_to(monkeypatch, "8.8.8.8")
+    respx.get("https://8.8.8.8/").mock(
+        return_value=httpx.Response(302, headers={"location": "http://169.254.169.254/latest/meta-data/"})
+    )
+    result = await http_headers_tool.run("example.test", IOCType.DOMAIN, "standard")
+    assert result.provider_result.status == ProviderStatus.ERROR
+    assert "refusing to follow" in (result.provider_result.error_message or "").lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_headers_follows_a_redirect_to_a_globally_routable_address(monkeypatch):
+    """The fix must not break the ordinary, legitimate case -- a redirect to
+    a real, globally-routable host is still followed, re-validated, and
+    re-pinned exactly like the first hop, and inspected normally. Both hops
+    resolve to the same fixed address here (this test is about redirect-
+    following correctness, not DNS-rebinding -- see the dedicated TOCTOU
+    section above for that); respx routes are therefore registered against
+    that resolved address, not the "example.test" hostname, mirroring
+    test_http_headers_pins_the_connection_to_the_resolved_address_despite_a_later_dns_rebind
+    above."""
+    _mock_dns_resolves_to(monkeypatch, "93.184.216.34")
+    respx.get("https://93.184.216.34/").mock(
+        return_value=httpx.Response(302, headers={"location": "https://example.test/final"})
+    )
+    respx.get("https://93.184.216.34/final").mock(
+        return_value=httpx.Response(200, headers={"Strict-Transport-Security": "max-age=63072000"})
+    )
+    result = await http_headers_tool.run("example.test", IOCType.DOMAIN, "standard")
+    assert result.provider_result.status == ProviderStatus.OK
+    assert result.provider_result.data["checked_url"] == "https://example.test/final"

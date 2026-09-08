@@ -52,8 +52,17 @@ Get-Content $script:EnvFilePath | ForEach-Object {
 
 Write-Status "Backing up database to $dumpPath ..."
 & docker.exe exec $containerName pg_dump -U $pgUser $pgDb 2>$null | Out-File -FilePath $dumpPath -Encoding utf8
+# Real gap found live during overnight QA: pg_dump's own exit code was
+# never checked -- only "does a non-empty file exist" was, which a dump
+# that failed PARTWAY through (lost connection, a permission error on one
+# table) can still satisfy, producing a truncated/corrupt-but-non-empty
+# file silently reported as "Backup complete." $LASTEXITCODE still
+# reflects docker.exe's (and pg_dump's, which docker exec forwards) real
+# exit status even after piping through Out-File -- checked once, from a
+# single pg_dump invocation (not run twice just to inspect its exit code).
+$pgDumpFailed = $LASTEXITCODE -ne 0
 
-if ((Test-Path $dumpPath) -and (Get-Item $dumpPath).Length -gt 0) {
+if ((-not $pgDumpFailed) -and (Test-Path $dumpPath) -and (Get-Item $dumpPath).Length -gt 0) {
     Write-SetupLog "Database backup written to $dumpPath"
     Write-Status "Backup complete: $dumpPath" "Green"
 

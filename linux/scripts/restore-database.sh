@@ -87,11 +87,35 @@ docker exec "$CONTAINER_ID" psql -U "$PG_USER" -d postgres -c \
     >/dev/null 2>&1 || true
 
 echo "Dropping and recreating '$PG_DB'..."
-docker exec "$CONTAINER_ID" psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS $PG_DB;" >/dev/null 2>&1
-docker exec "$CONTAINER_ID" psql -U "$PG_USER" -d postgres -c "CREATE DATABASE $PG_DB OWNER $PG_USER;" >/dev/null 2>&1
+# Real gap found live during overnight QA (mirrors windows/scripts/Restore-
+# Database.ps1's identical fix): neither of these two commands' exit codes
+# was checked -- a DROP that fails (e.g. "database is being accessed by
+# other users", a real, common race if the connection-termination step
+# above didn't win in time) or a CREATE that fails left the script
+# barrelling ahead into the dump-replay step regardless, against whatever
+# half-broken DB state resulted.
+DROP_OUTPUT=$(docker exec "$CONTAINER_ID" psql -U "$PG_USER" -d postgres -c "DROP DATABASE IF EXISTS $PG_DB;" 2>&1)
+DROP_EXIT=$?
+CREATE_OUTPUT=$(docker exec "$CONTAINER_ID" psql -U "$PG_USER" -d postgres -c "CREATE DATABASE $PG_DB OWNER $PG_USER;" 2>&1)
+CREATE_EXIT=$?
+if [ "$DROP_EXIT" -ne 0 ] || [ "$CREATE_EXIT" -ne 0 ]; then
+    hg_log "Database restore FAILED: could not drop/recreate '$PG_DB' -- drop output: $DROP_OUTPUT | create output: $CREATE_OUTPUT" "ERROR"
+    echo "Failed to drop/recreate '$PG_DB':"
+    echo "$DROP_OUTPUT"
+    echo "$CREATE_OUTPUT"
+    echo "Restarting backend/celery anyway so the platform isn't left fully down..."
+    hg_invoke_docker_compose start backend celery_worker celery_beat
+    exit 1
+fi
 
 echo "Restoring $BACKUP_FILE ..."
-RESTORE_OUTPUT=$(docker exec -i "$CONTAINER_ID" psql -U "$PG_USER" -d "$PG_DB" <"$BACKUP_FILE" 2>&1)
+# Real gap found live during overnight QA: without -v ON_ERROR_STOP=1,
+# psql's default behavior is to log an individual statement error to
+# stderr and KEEP GOING, then still exit 0 as long as no connection-level
+# FATAL error occurred -- so a dump replay with some failing statements
+# could silently leave the restored database missing data/schema while
+# the exit-code check below saw nothing wrong and reported success.
+RESTORE_OUTPUT=$(docker exec -i "$CONTAINER_ID" psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" <"$BACKUP_FILE" 2>&1)
 RESTORE_EXIT=$?
 
 if [ "$RESTORE_EXIT" -ne 0 ]; then

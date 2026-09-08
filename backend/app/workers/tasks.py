@@ -21,9 +21,10 @@ import logging
 import httpx
 from sqlalchemy import select
 
+import app.core.db as db_module
 from app.core.cache import set_cached_result
 from app.core.config import get_settings
-from app.core.db import _engine, new_session
+from app.core.db import new_session
 from app.crawler.collector import internet_intelligence_provider
 from app.ioc.types import IOCType
 from app.models.lookup import IOCLookup
@@ -85,7 +86,10 @@ async def _recent_crawlable_iocs() -> list[tuple[str, str]]:
     return deduped
 
 
-async def _crawl_one(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClient) -> None:
+async def _crawl_one(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClient) -> bool:
+    """Returns whether this IOC's cache entry was actually refreshed -- the
+    caller uses this to report a real success count, not just an attempt
+    count (see _run_osint_crawl_async's own comment)."""
     settings = get_settings()
     ioc_type = IOCType(ioc_type_str)
     result = await internet_intelligence_provider.run(ioc_value, ioc_type, client)
@@ -97,6 +101,8 @@ async def _crawl_one(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClien
             result.to_dict(),
             settings.provider_cache_ttl_seconds,
         )
+        return True
+    return False
 
 
 async def _run_osint_crawl_async() -> int:
@@ -106,31 +112,43 @@ async def _run_osint_crawl_async() -> int:
             logger.info("Scheduled OSINT crawl: no recently-investigated crawlable IOCs, nothing to do")
             return 0
 
+        # Real gap found live during overnight QA: this used to report
+        # len(targets) -- the number of IOCs ATTEMPTED, not the number
+        # actually cached. A provider outage or a run of individually-
+        # failing targets would still log/return "refreshed cache for N
+        # IOC(s)", silently overstating how much real work happened.
+        refreshed = 0
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             for ioc_value, ioc_type_str in targets:
                 try:
-                    await _crawl_one(ioc_value, ioc_type_str, client)
+                    if await _crawl_one(ioc_value, ioc_type_str, client):
+                        refreshed += 1
                 except Exception:  # noqa: BLE001 -- one bad target must not abort the whole run
                     logger.warning("Scheduled OSINT crawl failed for %r (%s)", ioc_value, ioc_type_str, exc_info=True)
 
-        logger.info("Scheduled OSINT crawl: refreshed cache for %d IOC(s)", len(targets))
-        return len(targets)
+        logger.info(
+            "Scheduled OSINT crawl: refreshed cache for %d of %d attempted IOC(s)", refreshed, len(targets)
+        )
+        return refreshed
     finally:
         # Real bug found live (reproduced deterministically by calling this
         # coroutine via asyncio.run() twice in the same process): run_osint_crawl()
-        # below wraps this in a *fresh* asyncio.run() every invocation, but
+        # (below) wraps this in a *fresh* asyncio.run() every invocation -- each
+        # hourly Celery Beat tick gets a BRAND NEW event loop -- but
         # app/core/db.py's `_engine` (and its connection pool) is a process-wide
-        # singleton reused across every one of those invocations. asyncpg binds
-        # each pooled connection to the event loop that created it, so once
-        # asyncio.run() closes this run's loop, any connection left sitting idle
-        # in the pool is now attached to a dead loop. The *next* run's pre-ping
-        # check (or any use of that connection) then blows up with exactly
-        # "RuntimeError: Event loop is closed" / "Future ... attached to a
-        # different loop" instead of completing or failing cleanly.
-        # dispose() only drains/closes the pool's connections -- `_engine` itself
-        # is untouched and reused fine next run, opening fresh connections under
-        # whatever loop that run's asyncio.run() creates.
-        await _engine.dispose()
+        # singleton reused across every one of those invocations, bound to
+        # whichever loop first actually used it. asyncpg binds each pooled
+        # connection to the event loop that created it, so once asyncio.run()
+        # closes this run's loop, any connection left sitting idle in the pool is
+        # now attached to a dead loop. The *next* run's pre-ping check (or any use
+        # of that connection) then blows up with exactly "RuntimeError: Event loop
+        # is closed" / "Future ... attached to a different loop" instead of
+        # completing or failing cleanly. Disposing it here, while its OWN loop is
+        # still open (on every exit path -- an early return, a normal return, or
+        # an exception), closes every pooled connection cleanly -- `_engine`
+        # itself is untouched and reused fine next run, opening brand new
+        # connections under whatever loop that run's asyncio.run() creates.
+        await db_module._engine.dispose()
 
 
 @celery_app.task(name="app.workers.tasks.run_osint_crawl")

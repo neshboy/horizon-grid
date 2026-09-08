@@ -280,7 +280,20 @@ def assert_globally_routable_target(ioc_type_value: str, target: str) -> None:
     else:
         parsed = urlparse(target if "://" in target else f"//{target}")
         host = parsed.hostname or target
-        assert_valid_hostname_syntax(host)
+        # Real bug found live during overnight QA: a URL/domain-typed
+        # target whose host is actually an IPv6 literal (e.g.
+        # "http://[2001:db8::1]/") was rejected outright here -- urlparse's
+        # own .hostname unwraps the brackets to a bare address like
+        # "2001:db8::1", which _HOSTNAME_RE's [A-Za-z0-9.-] charset can
+        # never match (it contains ':'), so assert_valid_hostname_syntax
+        # raised for EVERY globally-routable IPv6-literal URL target, not
+        # just the malicious flag-shaped strings this check exists to catch.
+        # Only run the hostname-syntax check when the host genuinely isn't
+        # already a valid IP literal.
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            assert_valid_hostname_syntax(host)
 
     try:
         ipaddress.ip_address(host)

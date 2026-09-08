@@ -30,13 +30,7 @@ import httpx
 from app.core.config import get_settings
 from app.core.runtime_context import get_credential
 from app.ioc.types import IOCType
-from app.providers.base import (
-    RETRYABLE_EXCEPTIONS,
-    BaseProvider,
-    ProviderCategory,
-    ProviderResult,
-    ProviderStatus,
-)
+from app.providers.base import RETRYABLE_EXCEPTIONS, BaseProvider, ProviderCategory, ProviderResult, ProviderStatus
 
 _TIMEOUT_SECONDS = 60  # wall-clock cap for submit + poll-until-ready
 _POLL_INTERVAL_SECONDS = 3
@@ -79,6 +73,14 @@ class UrlscanProvider(BaseProvider):
         api_key = get_credential("urlscan", "api_key", settings.urlscan_api_key) or ""
         headers = {"API-Key": api_key, "Content-Type": "application/json"}
         target = self._target_url(ioc_value, ioc_type)
+        # Real gap found live during overnight QA: this deadline is
+        # documented ("wall-clock cap for submit + poll-until-ready") as
+        # covering submission AND polling combined, but used to be computed
+        # fresh inside _poll_for_result -- called only AFTER submission had
+        # already completed -- so the real behavior was "however long
+        # submission takes, PLUS a full fresh _TIMEOUT_SECONDS for polling
+        # on top," not the documented combined budget.
+        deadline = time.monotonic() + _TIMEOUT_SECONDS
 
         try:
             submit_response = await client.post(
@@ -92,6 +94,16 @@ class UrlscanProvider(BaseProvider):
             # orchestrator's tenacity retry loop can retry a transient
             # connection blip, per base.py's own documented design. See
             # app/providers/base.py's RETRYABLE_EXCEPTIONS comment.
+            #
+            # Real gap found live during overnight QA: the broader
+            # httpx.TimeoutException/httpx.HTTPError catches below both
+            # already match every one of RETRYABLE_EXCEPTIONS (ConnectError,
+            # ReadTimeout, PoolTimeout all inherit from HTTPError) -- this
+            # connector was normalizing them into an ordinary ProviderResult
+            # itself, so the orchestrator's tenacity retry loop (which only
+            # ever fires on an exception it actually sees propagate out of
+            # BaseProvider.run()) never got a chance to retry a transient
+            # blip for this provider at all, unlike every other connector.
             raise
         except httpx.TimeoutException as exc:
             return self._error(ioc_value, ioc_type, ProviderStatus.TIMEOUT, f"urlscan.io submission timed out: {exc}")
@@ -121,7 +133,7 @@ class UrlscanProvider(BaseProvider):
             )
         uuid = submission["uuid"]
 
-        payload = await self._poll_for_result(ioc_value, ioc_type, uuid, headers, client)
+        payload = await self._poll_for_result(ioc_value, ioc_type, uuid, headers, client, deadline)
         if isinstance(payload, ProviderResult):
             return payload
 
@@ -139,15 +151,15 @@ class UrlscanProvider(BaseProvider):
         )
 
     async def _poll_for_result(
-        self, ioc_value: str, ioc_type: IOCType, uuid: str, headers: dict, client: httpx.AsyncClient
+        self, ioc_value: str, ioc_type: IOCType, uuid: str, headers: dict, client: httpx.AsyncClient, deadline: float
     ):
         """Polls GET /api/v1/result/{uuid}/ until ready, erroring, or the
-        `_TIMEOUT_SECONDS` wall-clock budget runs out. Returns the parsed
-        result payload (dict) on success, or a ProviderResult directly for
-        any error/timeout path -- never fabricates a result for an
-        incomplete scan."""
+        `deadline` (a combined submit+poll wall-clock budget, started by the
+        caller before submission) runs out. Returns the parsed result
+        payload (dict) on success, or a ProviderResult directly for any
+        error/timeout path -- never fabricates a result for an incomplete
+        scan."""
         result_url = f"{self.base_url}/result/{uuid}/"
-        deadline = time.monotonic() + _TIMEOUT_SECONDS
 
         while time.monotonic() < deadline:
             try:
