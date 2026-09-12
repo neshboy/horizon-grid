@@ -45,6 +45,19 @@ logger = logging.getLogger(__name__)
 # duration of one real call, then restored, exactly like the test path.
 BEARER_TOKEN_ENV_LOCK = threading.Lock()
 
+# Real bug found live: botocore's default read_timeout is 60s, same ballpark
+# as every other AI client here (see anthropic_client.py/openai_client.py's
+# own 60s httpx timeouts) -- fine for a short prompt, but a Final Assessment
+# call generates up to settings.bedrock_max_tokens (4096 by default) of
+# structured JSON covering the executive summary, technical summary, threat
+# assessment, relationships, and risk/verdict sections all at once, and
+# routing through a cross-region "global." inference profile adds further
+# latency on top. Confirmed live: real investigations against a genuinely
+# valid, working Bedrock credential failed with "Read timeout" while the
+# tiny 8-token connection-test call (app/ai/connection_test.py, which
+# intentionally keeps its own short default) succeeded every time.
+_READ_TIMEOUT_SECONDS = 120
+
 
 class BedrockClaudeClient:
     def __init__(
@@ -87,7 +100,7 @@ class BedrockClaudeClient:
                 session_kwargs["aws_secret_access_key"] = secret_key
             self._client = boto3.client(
                 "bedrock-runtime",
-                config=BotoConfig(retries={"max_attempts": 3, "mode": "adaptive"}),
+                config=BotoConfig(retries={"max_attempts": 3, "mode": "adaptive"}, read_timeout=_READ_TIMEOUT_SECONDS, connect_timeout=10),
                 **session_kwargs,
             )
 
@@ -146,7 +159,7 @@ class BedrockClaudeClient:
                     client = boto3.client(
                         "bedrock-runtime",
                         region_name=self._region,
-                        config=BotoConfig(retries={"max_attempts": 3, "mode": "adaptive"}),
+                        config=BotoConfig(retries={"max_attempts": 3, "mode": "adaptive"}, read_timeout=_READ_TIMEOUT_SECONDS, connect_timeout=10),
                     )
                     response = self._converse(client, system_prompt, user_prompt, tool_config, max_tokens)
                 finally:
