@@ -7,12 +7,14 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)
-![Version](https://img.shields.io/badge/version-0.3.10-brightgreen)
+[![Latest release](https://img.shields.io/github/v/release/neshboy/horizon-grid?label=latest%20release&color=brightgreen)](https://github.com/neshboy/horizon-grid/releases/latest)
 ![Python](https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white)
 ![Next.js](https://img.shields.io/badge/frontend-Next.js-000000?logo=next.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)
 ![Postgres](https://img.shields.io/badge/store-PostgreSQL-4169E1?logo=postgresql&logoColor=white)
 ![AI](https://img.shields.io/badge/AI-11%20backends%20incl.%20local%20Ollama-6E56CF)
+
+### [⬇️ Download the latest installer (Windows `.exe` / Linux `.deb`)](https://github.com/neshboy/horizon-grid/releases/latest)
 
 **[Quick Start](#-installation--quick-start)** · **[Features](#-features)** · **[Providers](#-provider-intelligence)** · **[Docs](#-documentation)** · **[Security](#-security)**
 
@@ -339,6 +341,8 @@ Backend API docs: http://localhost:8000/docs
 
 ### 🪟 Windows installer
 
+**[⬇️ Download the latest `.exe` from Releases](https://github.com/neshboy/horizon-grid/releases/latest)**
+
 Built from `windows/installer.iss` (Inno Setup). The compiled installer
 copies the application (backend, frontend, Docker Compose files) under
 Program Files, then launches `windows/wizard/Setup-Wizard.ps1` to configure
@@ -346,14 +350,21 @@ the admin account, AI backend, providers, and network ports, testing each
 credential against the running backend before it's saved. Requires
 administrator privileges; 64-bit Windows only.
 
+To build it yourself instead of downloading: see `windows/installer.iss`,
+compiled with Inno Setup's `ISCC.exe`.
+
 ### 🐧 Linux package
 
-Built via `linux/build-deb.sh` (requires a Debian/Ubuntu host; produces
-`horizon-grid_<version>_amd64.deb`, e.g. `release/horizon-grid_0.3.10_amd64.deb`).
-Install with `sudo dpkg -i horizon-grid_0.3.10_amd64.deb`, then run the
+**[⬇️ Download the latest `.deb` from Releases](https://github.com/neshboy/horizon-grid/releases/latest)**
+
+Install with `sudo dpkg -i horizon-grid_<version>_amd64.deb`, then run the
 terminal setup wizard as root to configure the admin account, AI backend,
 providers, and ports; the platform is then managed via the `horizon-grid`
 systemd-backed CLI (`start` / `stop` / `restart`).
+
+To build it yourself instead of downloading: `linux/build-deb.sh` (requires
+a Debian/Ubuntu host, e.g. `docker run --rm -v "$PWD":/src -w /src debian:12
+bash linux/build-deb.sh`).
 
 ## 📚 Documentation
 
