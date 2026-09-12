@@ -2,7 +2,16 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
-## [0.3.11] — 2026-09-08 — Two parallel full-codebase audits (static + live): 88 real bugs found and fixed
+## [0.3.12] — 2026-09-12 — Provider credential save/masking bug, Bedrock empty-model-id bug
+
+Found live while configuring AWS Bedrock end-to-end through the running app (Providers UI → Save → Test Connection → Set Active → real investigation).
+
+### Fixed
+- **Provider credential save wiped the just-entered secret**: `ProviderConfigRow`'s `handleSave()` reset the form's credential fields back to empty immediately after every successful save (on the theory that only non-secret fields like Ollama's `base_url` needed to survive a save). But `/ai/test` and `/ai/{backend}/models` always test the *candidate* value from the request body, never the already-saved one server-side — so clicking Test Connection right after Save (the obvious next action) silently sent blank credentials and failed with "Provide either a Bedrock API key or an AWS access key + secret," no matter how many times the same correct key was re-typed and re-saved. Reproduced live with a headless-browser run against the dev stack, confirmed via the actual `/ai/test` request payload (`credentials: {}` before the fix, correctly populated after).
+- **All provider credential fields (including AWS Region, which isn't a secret) were password-masked with no show/hide toggle**, making it impossible to verify what was actually typed before saving/testing. Switched to plain text inputs — this is a single-operator local admin tool, not a multi-user shoulder-surfing threat model.
+- **Bedrock real calls could silently receive an empty `modelId`**: `BedrockClaudeClient.__init__` only fell back to `settings.bedrock_model_id` when `model_id is None`, but the runtime-config UI's Model field defaults to `""` and saves that unless a model is explicitly picked from the dropdown — the common case, not an edge case. An empty string sailed through the `is not None` check and reached `boto3`'s `converse(modelId="")`, which hard-errors. Now falls back on any falsy value, not just `None`.
+
+
 
 Two independent multi-agent audits ran concurrently against the same live stack: a line-by-line static code review (15 subsystems, two passes) and a hands-on live/runtime validation (Playwright UI clicking, API fuzzing, provider/AI live tests, an authorized self-targeted scanner/pentest run, resilience/concurrency/failure-injection, dynamic security testing). Every finding was independently adversarially verified (2 voters, both had to agree) before a fix was attempted. 52 bugs confirmed+fixed by the static pass, 36 by the live pass, nearly all with new regression tests.
 

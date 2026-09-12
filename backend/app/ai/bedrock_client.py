@@ -57,8 +57,12 @@ class BedrockClaudeClient:
         max_tokens: Optional[int] = None,
     ) -> None:
         settings = get_settings()
-        self._model_id = model_id if model_id is not None else settings.bedrock_model_id
-        self._max_tokens = max_tokens if max_tokens is not None else settings.bedrock_max_tokens
+        # `or` (not an explicit is-None check): the runtime-config UI's Model
+        # field defaults to "" and saves that unless a model is explicitly
+        # picked, so an empty string reaching here is the common case, not
+        # an edge case -- and boto3's converse() hard-errors on modelId="".
+        self._model_id = model_id or settings.bedrock_model_id
+        self._max_tokens = max_tokens or settings.bedrock_max_tokens
         bearer_token = bedrock_api_key if bedrock_api_key is not None else settings.bedrock_api_key
         access_key = aws_access_key_id if aws_access_key_id is not None else settings.aws_access_key_id
         secret_key = aws_secret_access_key if aws_secret_access_key is not None else settings.aws_secret_access_key
