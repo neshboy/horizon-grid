@@ -115,11 +115,16 @@ export function ProviderConfigRow({
     setSaving(true);
     try {
       await onSave(values, showModelField ? modelId : undefined);
-      // Clear true secrets just entered, but keep plaintext fields (e.g.
-      // Ollama's base_url) filled in -- otherwise the very next Test click
-      // would send it blank again, the exact bug this component was fixed
-      // for.
-      setValues(plaintextInitialValues());
+      // Deliberately NOT resetting `values` here. It used to reset to
+      // plaintextInitialValues() (i.e. wipe every true-secret field back to
+      // empty) on the theory that only plaintext fields need to survive a
+      // save. Real bug found live: /ai/test and /ai/{backend}/models always
+      // test the *candidate* value passed in the request, never the
+      // already-saved one server-side -- so wiping the just-saved secret
+      // meant clicking Test Connection immediately after Save (a completely
+      // normal "did that work?" click) sent blank credentials and failed
+      // every single time, no matter how many times the same correct key
+      // was re-typed and re-saved.
     } finally {
       setSaving(false);
     }
@@ -173,12 +178,11 @@ export function ProviderConfigRow({
             <p className="text-xs text-muted-foreground">This provider needs no API key.</p>
           ) : (
             fields.map((field) => {
-              const isPlaintext = plaintextFields?.includes(field) ?? false;
               return (
                 <label key={field} className="flex flex-col gap-1 text-xs">
                   <span className="capitalize text-muted-foreground">{field.replace(/_/g, " ")}</span>
                   <input
-                    type={isPlaintext ? "text" : "password"}
+                    type="text"
                     value={values[field] ?? ""}
                     onChange={(e) => setValues((prev) => ({ ...prev, [field]: e.target.value }))}
                     placeholder={
