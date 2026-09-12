@@ -61,7 +61,7 @@ structlog.configure(processors=[structlog.processors.JSONRenderer()])
 
 settings = get_settings()
 
-_APP_VERSION = "0.3.12"
+_APP_VERSION = "0.3.13"
 # Real gap found live during the 0.3.8 QA pass: this constant was never
 # bumped alongside windows/installer.iss and linux/debian/control for six
 # releases (0.3.1-0.3.8 all shipped still reporting "0.3.0" via /health and

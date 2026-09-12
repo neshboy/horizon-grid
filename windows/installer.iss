@@ -16,7 +16,7 @@
 ; winget install.)
 
 #define MyAppName "HORIZON GRID"
-#define MyAppVersion "0.3.12"
+#define MyAppVersion "0.3.13"
 #define MyAppPublisher "HORIZON GRID"
 #define MyAppURL "http://localhost:3000"
 #define RepoRoot "..\"

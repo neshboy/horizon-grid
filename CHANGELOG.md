@@ -2,6 +2,13 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.13] — 2026-09-12 — Bedrock real calls timing out at botocore's default 60s read_timeout
+
+Found live immediately after 0.3.12 shipped: a fully working, correctly-configured Bedrock credential (valid auth, correct model ID) still failed every real investigation, while the Test Connection button kept succeeding.
+
+### Fixed
+- **Final Assessment generation timed out against a real Bedrock model**: a Final Assessment call generates up to `settings.bedrock_max_tokens` (4096 by default) of structured JSON covering five sections (executive summary, technical summary, threat assessment, relationships, risk/verdict) in one response, routed through a cross-region `global.` inference profile — comfortably over botocore's default 60s `read_timeout` (the same ballpark every other AI client here uses, but for much shorter calls). The connection test never caught this because it only requests 8 tokens. Bumped Bedrock's real-call client to a 120s `read_timeout` / 10s `connect_timeout`.
+
 ## [0.3.12] — 2026-09-12 — Provider credential save/masking bug, Bedrock empty-model-id bug
 
 Found live while configuring AWS Bedrock end-to-end through the running app (Providers UI → Save → Test Connection → Set Active → real investigation).
