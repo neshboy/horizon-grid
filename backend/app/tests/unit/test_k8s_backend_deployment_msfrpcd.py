@@ -49,6 +49,15 @@ def _backend_container_command() -> str:
     return " ".join(command)
 
 
+def _migrate_job_command() -> str:
+    docs = list(yaml.safe_load_all(_BACKEND_DEPLOYMENT.read_text(encoding="utf-8")))
+    job = next(doc for doc in docs if doc and doc.get("kind") == "Job" and doc["metadata"]["name"] == "backend-migrate")
+    containers = job["spec"]["template"]["spec"]["containers"]
+    command = containers[0].get("command") or []
+    assert command, "backend-migrate Job has no command at all in k8s/base/backend-deployment.yaml"
+    return " ".join(command)
+
+
 @pytest.mark.skipif(not _BACKEND_DEPLOYMENT.exists(), reason=_SKIP_REASON)
 def test_backend_deployment_command_starts_msfrpcd():
     command = _backend_container_command()
@@ -89,6 +98,17 @@ def test_backend_deployment_msfrpcd_matches_compose_pattern():
     # path -- guard against the k8s manifest drifting away from that same,
     # already-verified startup sequence (msfrpcd backgrounded, then alembic, then
     # uvicorn).
+    #
+    # Real test bug found live: this originally demanded "alembic upgrade head"
+    # appear in the Deployment's own container command, matching
+    # docker-compose.yml's single-container command verbatim. But the k8s
+    # manifest deliberately does NOT run migrations inline in the Deployment --
+    # see the Deployment spec's own comment: with replicas: 2, running
+    # migrations in every pod's startup risks a concurrent-migration race, so
+    # they run exactly once via the separate backend-migrate Job below instead.
+    # That's a legitimate, intentional divergence from docker-compose.yml's
+    # single-container shape, not drift -- this test was comparing the wrong
+    # two things and had been failing in CI since before this fix existed.
     compose_text = _COMPOSE.read_text(encoding="utf-8")
     assert "msfrpcd -f -P" in compose_text, (
         "test assumption stale: docker-compose.yml no longer starts msfrpcd this way "
@@ -97,8 +117,14 @@ def test_backend_deployment_msfrpcd_matches_compose_pattern():
     )
 
     command = _backend_container_command()
-    for required_fragment in ("msfrpcd -f -P", "-S -a 127.0.0.1 -p 55553 -U msf", "alembic upgrade head", "uvicorn app.main:app"):
+    for required_fragment in ("msfrpcd -f -P", "-S -a 127.0.0.1 -p 55553 -U msf", "uvicorn app.main:app"):
         assert required_fragment in command, (
-            f"k8s/base/backend-deployment.yaml's command is missing {required_fragment!r}, "
+            f"k8s/base/backend-deployment.yaml's Deployment command is missing {required_fragment!r}, "
             f"which docker-compose.yml's already-verified backend command relies on -- command was: {command!r}"
         )
+
+    migrate_command = _migrate_job_command()
+    assert "alembic" in migrate_command and "upgrade" in migrate_command and "head" in migrate_command, (
+        f"k8s/base/backend-deployment.yaml's backend-migrate Job command is missing "
+        f"'alembic upgrade head' -- command was: {migrate_command!r}"
+    )
