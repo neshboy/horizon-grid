@@ -1,4 +1,5 @@
 import type {
+  ActivityTimeline,
   AssessmentRecord,
   AuditLogEntry,
   BasketItem,
@@ -471,6 +472,12 @@ export async function getKpis(): Promise<DashboardKpis> {
 export async function getExecutiveSummary(): Promise<ExecutiveSummary> {
   const res = await authedFetch(`${getApiUrl()}/api/v1/dashboard/executive-summary`);
   if (!res.ok) throw new Error("Failed to fetch executive summary");
+  return res.json();
+}
+
+export async function getActivityTimeline(hours: number): Promise<ActivityTimeline> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/dashboard/activity-timeline?hours=${hours}`);
+  if (!res.ok) throw new Error("Failed to fetch activity timeline");
   return res.json();
 }
 

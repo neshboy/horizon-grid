@@ -2,16 +2,20 @@
 
 /**
  * Executive Dashboard: the 30,000-foot view of the platform's current state
- * -- 7 top-line KPIs, an AI (or template-fallback) narrative summary, and a
- * compact provider-health widget linking to the full Provider Health page.
+ * -- 7 top-line KPIs, an hourly activity timeline, an AI (or
+ * template-fallback) narrative summary, and a compact provider-health widget
+ * linking to the full Provider Health page.
  *
  * Every number on this page comes from a real API response (getKpis(),
- * getExecutiveSummary(), getProviderHealth()) -- nothing here is hardcoded.
+ * getActivityTimeline(), getExecutiveSummary(), getProviderHealth()) --
+ * nothing here is hardcoded.
  *
  * getExecutiveSummary() hits a brand-new backend endpoint that may not exist
  * yet on every environment (404) or may fail for other reasons -- both are
  * handled with a graceful "Executive summary unavailable" fallback rather
  * than a crash, independent of whether the KPI tiles above loaded fine.
+ * ActivityTimeline fetches independently too (own loading/error state) --
+ * same "one widget's outage never blocks another" pattern.
  */
 
 import { useEffect, useState } from "react";
@@ -27,6 +31,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
+import { ActivityTimeline } from "@/components/dashboard/ActivityTimeline";
 import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { ProviderHealthStatusBadge } from "@/components/dashboard/ProviderHealthStatusBadge";
@@ -140,8 +145,8 @@ export default function DashboardPage() {
   const nonHealthyProviders = (providers ?? []).filter((p) => p["24h"]?.status !== "healthy");
 
   return (
-    <main className="min-h-screen px-4 py-8">
-      <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <main className="min-h-screen px-4 py-6">
+      <div className="mx-auto flex max-w-6xl flex-col gap-4">
         <BrandHeader />
 
         <div>
@@ -216,7 +221,9 @@ export default function DashboardPage() {
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <ActivityTimeline />
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader className="flex-row items-center justify-between gap-2">
               <CardTitle>Executive Summary</CardTitle>

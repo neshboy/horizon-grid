@@ -677,3 +677,19 @@ export interface ExecutiveSummary {
   source: "ai" | "template_fallback";
   kpis: DashboardKpis;
 }
+
+// Mirrors backend GET /dashboard/activity-timeline. One entry per hour in
+// range, including zero-activity hours (never a gap) -- `bucket` is an
+// ISO8601 UTC hour string. high_risk/suspicious/failed are SUBSETS of
+// `total`, not additive categories -- never sum them on top of total.
+export interface ActivityTimelineBucket {
+  bucket: string;
+  total: number;
+  high_risk: number;
+  suspicious: number;
+  failed: number;
+}
+
+export interface ActivityTimeline {
+  buckets: ActivityTimelineBucket[];
+}
