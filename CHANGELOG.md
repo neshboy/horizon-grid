@@ -2,6 +2,13 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.14] — 2026-09-15 — 3D threat globe, per-IP fly-to, and a global command palette
+
+### Added
+- **3D Threat Globe** on the Executive Dashboard (`GET /dashboard/geo-activity`): real per-country investigation activity plotted with real `world-countries` reference coordinates. A country with zero activity gets no marker; a lookup with no attributable country is reported in a visible coverage-gap caption, never silently dropped. Country resolution (`whois_rdap` → `abuseipdb` → `virustotal`, otx deliberately excluded, only exact 2-letter codes accepted) lives in a shared `backend/app/core/geo.py` module.
+- **Per-investigation "View on Globe"** (`GET /lookup/{id}/geo`): once an investigation completes, a public IP with a resolved country shows a working button that flies the dashboard globe's camera to it (eased, 1.5–3s, cancels the instant the analyst drags), shows a beacon distinct from the aggregate markers, and opens an Intelligence Card built only from real fields (threat score, severity, confidence, ASN, org, approximate location with an explicit "Approximate IP Geolocation" disclaimer). A private/loopback/link-local/reserved/multicast/unspecified address never reaches provider resolution and shows an honest "Private network address" note instead of a button.
+- **Global Ctrl/Cmd+K command palette**: jump to any workspace page, investigate a typed value, or open a recent investigation. Real Navigate/Recent-Investigation matches always win selection over the generic "Investigate" catch-all, deterministically (manual filtering, not left to fuzzy-score ties — a real bug that briefly existed during development: typing an exact command name like "Provider Health" landed on a bogus IOC investigation instead of the real page).
+
 ## [0.3.13] — 2026-09-12 — Bedrock real calls timing out at botocore's default 60s read_timeout
 
 Found live immediately after 0.3.12 shipped: a fully working, correctly-configured Bedrock credential (valid auth, correct model ID) still failed every real investigation, while the Test Connection button kept succeeding.
