@@ -30,6 +30,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThreatScoreGauge } from "@/components/dashboard/ThreatScoreGauge";
 import { ProviderStatusStrip } from "@/components/dashboard/ProviderStatusStrip";
+import { ViewOnGlobeAction } from "@/components/dashboard/ViewOnGlobeAction";
 import { ProviderProgressTracker } from "@/components/dashboard/ProviderProgressTracker";
 import { ProviderCardGrid } from "@/components/dashboard/ProviderCardGrid";
 import { FinalAssessmentPanel } from "@/components/dashboard/FinalAssessmentPanel";
@@ -200,6 +201,7 @@ export default function LookupDetailPage() {
                 {status}
               </span>
             )}
+            {lookupId && <ViewOnGlobeAction lookupId={lookupId} iocType={iocType} ready={isCompleted} />}
           </div>
         </div>
 

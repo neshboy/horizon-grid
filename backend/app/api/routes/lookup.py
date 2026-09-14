@@ -6,6 +6,7 @@ too. This is the single endpoint the frontend's search box drives.
 import asyncio
 import csv
 import io
+import ipaddress
 import json
 import logging
 import uuid
@@ -26,6 +27,7 @@ from app.auth.rbac import CurrentUser, require_permission
 from app.core.cache import RateLimiter
 from app.core.config import get_settings
 from app.core.db import get_db, new_session
+from app.core.geo import GEO_PROVIDER_IDS, resolve_lookup_country
 from app.core import runtime_config as runtime_config_svc
 from app.correlation.engine import correlate
 from app.evidence.builder import build_evidence
@@ -660,6 +662,92 @@ async def get_lookup(
 ):
     lookup = await _load_lookup_detail(db, lookup_id)
     return _serialize_lookup(lookup)
+
+
+@router.get("/{lookup_id}/geo")
+async def get_lookup_geo(
+    lookup_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(require_permission("lookup:read")),
+):
+    """Per-investigation companion to app/core/dashboard.py's aggregate
+    GET /dashboard/geo-activity, for the "View on Globe" action on a single
+    completed lookup: tells the frontend whether/where THIS ONE lookup can be
+    plotted on the 3D threat globe, never a guess.
+
+    HARD RULE, identical in spirit to get_geo_activity(): never fabricate or
+    guess a location. A private/loopback/link-local/reserved/multicast/
+    unspecified IP (per Python's ipaddress module) is NEVER placed on the
+    globe -- status "private", country_code/asn/org always null, and the
+    provider-resolution code path below is never even reached for such an
+    address. An IP with no resolvable country from this lookup's own real
+    provider_results is reported as "public_unresolved", never given a
+    guessed position.
+
+    Response: {"status": "public_resolved" | "public_unresolved" | "private"
+    | "not_applicable", "country_code": "US" | null, "asn": "AS15169" | null,
+    "org": "Google LLC" | null}.
+    """
+    lookup = await _load_lookup_detail(db, lookup_id)
+
+    # Geolocation only applies to ipv4/ipv6 IOCs -- domains/urls/hashes/CVEs/
+    # etc. have no address to place on a globe at all.
+    if lookup.ioc_type not in ("ipv4", "ipv6"):
+        return {"status": "not_applicable", "country_code": None, "asn": None, "org": None}
+
+    # A malformed ioc_value must never 500 this endpoint -- treated the same
+    # as "not resolvable" (falls through to public_unresolved below), never
+    # as a crash and never as "private" (we cannot prove privacy of a value
+    # we can't even parse as an IP).
+    try:
+        parsed_ip = ipaddress.ip_address(lookup.ioc_value)
+    except ValueError:
+        parsed_ip = None
+
+    if parsed_ip is not None and (
+        parsed_ip.is_private
+        or parsed_ip.is_loopback
+        or parsed_ip.is_link_local
+        or parsed_ip.is_reserved
+        or parsed_ip.is_multicast
+        or parsed_ip.is_unspecified
+    ):
+        # NEVER attempt provider-based resolution for a private address, and
+        # never place it at any coordinate -- return immediately, before any
+        # provider_results are even inspected.
+        return {"status": "private", "country_code": None, "asn": None, "org": None}
+
+    # A real public IP (or an unparseable value, treated identically to "no
+    # country resolvable" per the malformed-input handling above) -- resolve
+    # this lookup's OWN country using the exact same shared, already-correct
+    # priority order/validity rule as the dashboard's aggregate globe
+    # endpoint (app/core/geo.py, extracted from app/core/dashboard.py's
+    # get_geo_activity()).
+    provider_data: dict[str, list[dict]] = {}
+    for result in lookup.provider_results:
+        if result.provider_id in GEO_PROVIDER_IDS:
+            provider_data.setdefault(result.provider_id, []).append(result.data or {})
+
+    country_code = resolve_lookup_country(provider_data) if parsed_ip is not None else None
+
+    # asn/org come ONLY from this lookup's own virustotal provider_result, if
+    # present -- independent of whether country resolved, and never
+    # merged/guessed from any other provider.
+    asn = None
+    org = None
+    for result in lookup.provider_results:
+        if result.provider_id == "virustotal":
+            vt_data = result.data or {}
+            asn = vt_data.get("asn")
+            org = vt_data.get("as_owner")
+            break
+
+    return {
+        "status": "public_resolved" if country_code else "public_unresolved",
+        "country_code": country_code,
+        "asn": asn,
+        "org": org,
+    }
 
 
 _FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@")
