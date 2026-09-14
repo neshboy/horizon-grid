@@ -30,12 +30,63 @@ spread thin across the entire spec. That slice was:
    render loop, capped DPR, explicit GL disposal on unmount.
 
 **Everything else in the Omega spec — Horizon Design System overhaul, global
-command bar, 3D threat globe, provider/AI operations center redesigns,
-security-assessment UX redesign, backend/DB/AI performance engineering, full
-security review, load/soak testing, README/CHANGELOG/RELEASE_NOTES updates,
-scrubbed screenshots, and release artifacts — was not attempted this session
-and remains outstanding.** This report should be read as validating the slice
+command bar, provider/AI operations center redesigns, security-assessment UX
+redesign, backend/DB/AI performance engineering, full security review,
+load/soak testing, README/CHANGELOG/RELEASE_NOTES updates, scrubbed
+screenshots, and release artifacts — was not attempted this session and
+remains outstanding.** This report should be read as validating the slice
 that was built, not the full transformation the original spec describes.
+
+## Update — 3D Threat Globe (delivered in a follow-up increment)
+
+The 3D threat globe originally listed as outstanding above was subsequently
+implemented and merged, in response to the later APEX / Premium UI Redesign
+specs pasted in this same session, which both re-emphasized it as the
+flagship feature. Delivered on branch `rebuild/apex-globe` (backup tag
+`backup/pre-apex-globe`), two commits:
+
+- **Aggregate dashboard globe** (`GET /dashboard/geo-activity`): real
+  per-country investigation counts plotted with real `world-countries`
+  reference coordinates. A country with zero activity gets no marker; a
+  lookup with no attributable country is counted in a visible coverage-gap
+  caption, never silently dropped. Country resolution (`whois_rdap` →
+  `abuseipdb` → `virustotal`, otx deliberately excluded, only exact 2-letter
+  codes ever accepted) was extracted into a shared `backend/app/core/geo.py`
+  module rather than duplicated.
+- **Per-investigation "View on Globe"** (`GET /lookup/{id}/geo`): once an
+  investigation completes, a public IP with a resolved country shows a
+  working "View on Globe" button that flies the dashboard globe's camera to
+  it (eased, 1.5–3s, cancels the instant the analyst drags), shows a beacon
+  distinct from the aggregate country markers, and opens an Intelligence Card
+  built only from real fields (threat score, severity, confidence, ASN, org,
+  approximate location with an explicit "Approximate IP Geolocation"
+  disclaimer). A private/loopback/link-local/reserved/multicast/unspecified
+  address never reaches provider resolution at all and shows an honest
+  "Private network address — geographic location is not applicable" badge
+  instead of a button. A public IP with no resolvable country shows a muted
+  "location unavailable" note rather than a broken link.
+
+Verified live (not just built): screenshotted the dashboard globe's empty
+state before any lookup existed, then a real investigation of `1.1.1.1`
+resolving to Australia (WHOIS/RDAP) with a working fly-to/beacon/card, and a
+real investigation of `192.168.1.1` correctly showing the private-address
+badge with no button. Both test suites re-run clean afterward (frontend
+30/30; backend 808 passed, same 3 pre-existing/unrelated errors as before —
+see below). Full `npm run build` passed with no new errors.
+
+One process note: a prior background workflow implementing the per-IP focus
+frontend piece was killed mid-run (by an interrupted turn, not a crash). One
+of its two files (`ThreatGlobeScene.tsx`) had already returned a complete,
+correct result; the other (`ThreatGlobe.tsx`) was left mid-edit — a prop type
+was declared but never actually wired to anything. This was caught by reading
+the actual diff rather than trusting the grep-level "some progress happened"
+signal, and finished by hand rather than re-run as a fresh agent, since the
+remaining scope was by then small and fully understood. A second, unrelated
+process mistake: a commit was made directly to `main` instead of a rebuild
+branch, breaking this project's own established backup-tag-and-branch
+pattern; caught before anything was pushed and corrected by tagging
+`backup/pre-apex-globe`, moving the commit onto `rebuild/apex-globe`, and
+proceeding from there instead of on `main` directly.
 
 ## Process followed
 
