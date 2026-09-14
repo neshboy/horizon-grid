@@ -17,6 +17,7 @@
  * else about the page changes.
  */
 import { useEffect, useState } from "react";
+import { CommandPalette } from "@/components/CommandPalette";
 import { Logo } from "@/components/Logo";
 import { StatusBadge, type OperationalStatus } from "@/components/StatusBadge";
 import { TopSearchBar } from "@/components/dashboard/TopSearchBar";
@@ -67,7 +68,10 @@ export function BrandHeader({ searchBarInitialValue }: BrandHeaderProps) {
     <div className="flex flex-col gap-3 border-b border-border pb-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Logo size="compact" />
-        <SystemStatusIndicator />
+        <div className="flex items-center gap-3">
+          <CommandPalette />
+          <SystemStatusIndicator />
+        </div>
       </div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <TopSearchBar initialValue={searchBarInitialValue} />
