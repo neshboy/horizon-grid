@@ -57,6 +57,25 @@ function threatLevelBadgeClasses(level: string): string {
   }
 }
 
+/** Color treatment for a provider's raw `data.verdict`-shaped string (the
+ * "malicious"/"suspicious"/"clean"/"unknown" vocabulary real connectors
+ * return -- see e.g. virustotal.py, abuseipdb.py, urlhaus.py -- distinct
+ * from lib/utils.ts's verdictColor(), which speaks the FinalAssessment's
+ * own final_verdict vocabulary (highly_malicious/benign/tor_exit_node/etc). */
+function dataVerdictBadgeClasses(verdict: string): string {
+  const v = verdict.toLowerCase();
+  if (v === "malicious" || v === "highly_malicious") {
+    return "border-destructive/40 bg-destructive/10 text-destructive";
+  }
+  if (v === "suspicious") {
+    return "border-warning/40 bg-warning/10 text-warning";
+  }
+  if (v === "clean" || v === "benign") {
+    return "border-success/40 bg-success/10 text-success";
+  }
+  return "border-border bg-muted text-muted-foreground";
+}
+
 function Pill({ children }: { children: React.ReactNode }) {
   return (
     <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] text-foreground">
@@ -139,6 +158,140 @@ function DataField({ label, value }: { label: string; value: unknown }) {
 
   // Nested object -- deferred to the raw data <details>.
   return null;
+}
+
+// --- Structured summary section -------------------------------------------
+//
+// The handful of fields that recur across most real provider connectors
+// (see backend/app/providers/*.py -- virustotal.py, abuseipdb.py,
+// whois_rdap.py, otx.py, urlhaus.py, threatfox.py, malwarebazaar.py,
+// urlscan_io.py, nvd.py, cisa_kev.py, stubs/spamhaus.py, etc.), promoted out
+// of the flat key/value dump into a small "spec sheet" grid up top: a
+// verdict/reputation, a detection/report count, first/last-seen dates, and
+// the ASN/country/registrant trio whois-/RDAP-shaped data always carries.
+//
+// Every entry here is optional -- a provider whose `data` has none of these
+// keys (e.g. mitre_attack.py's technique_id/name/tactics shape) simply gets
+// no summary grid at all, and every field actually present but NOT
+// recognized here still renders via the existing generic DataField loop
+// below. Nothing is fabricated: a spec only produces a cell when one of its
+// candidate keys is present with a real, non-empty value on THIS result.
+interface SummaryFieldSpec {
+  /** Candidate keys tried in order; the first with a meaningful value wins. */
+  keys: string[];
+  label: string;
+  kind?: "verdict";
+}
+
+const SUMMARY_FIELD_SPECS: SummaryFieldSpec[] = [
+  { label: "Verdict", keys: ["verdict"], kind: "verdict" },
+  { label: "Reputation", keys: ["reputation_score", "abuse_confidence_score", "reputation"] },
+  { label: "Detections", keys: ["detection_ratio"] },
+  { label: "Total reports", keys: ["total_reports"] },
+  { label: "OTX pulses", keys: ["pulse_count"] },
+  { label: "Threat matches", keys: ["match_count"] },
+  { label: "URLs seen", keys: ["url_count"] },
+  { label: "Certificates", keys: ["certificate_count"] },
+  { label: "First seen", keys: ["first_seen"] },
+  { label: "Last seen", keys: ["last_seen"] },
+  { label: "ASN", keys: ["asn"] },
+  { label: "Network owner", keys: ["as_owner", "isp"] },
+  { label: "Country", keys: ["country", "country_code", "registrant_country"] },
+  { label: "Network", keys: ["network"] },
+  { label: "Registrar", keys: ["registrar"] },
+  { label: "Registrant", keys: ["registrant"] },
+  { label: "Expires", keys: ["expiration_date"] },
+];
+
+type SummaryPrimitive = string | number | boolean;
+
+interface ResolvedSummaryField {
+  key: string;
+  label: string;
+  value: SummaryPrimitive | Array<SummaryPrimitive | null>;
+  kind?: "verdict";
+}
+
+/** Only primitives, and arrays of primitives, are "meaningful" enough to
+ * promote into the clean summary grid -- nested objects/arrays of objects
+ * stay exactly where they already were (the generic loop below, which
+ * defers them to the raw-JSON <details>), never rendered as a vague blob. */
+function isMeaningful(value: unknown): value is SummaryPrimitive | Array<SummaryPrimitive | null> {
+  if (value === null || value === undefined || value === "") return false;
+  if (Array.isArray(value)) {
+    return value.length > 0 && value.every((v) => v === null || isPrimitive(v));
+  }
+  return isPrimitive(value);
+}
+
+function buildProviderSummary(data: Record<string, unknown>): {
+  fields: ResolvedSummaryField[];
+  consumedKeys: Set<string>;
+} {
+  const fields: ResolvedSummaryField[] = [];
+  const consumedKeys = new Set<string>();
+
+  for (const spec of SUMMARY_FIELD_SPECS) {
+    const foundKey = spec.keys.find((k) => isMeaningful(data[k]));
+    if (!foundKey) continue;
+    fields.push({
+      key: foundKey,
+      label: spec.label,
+      value: data[foundKey] as SummaryPrimitive | Array<SummaryPrimitive | null>,
+      kind: spec.kind,
+    });
+    consumedKeys.add(foundKey);
+  }
+
+  return { fields, consumedKeys };
+}
+
+function SummaryFieldValue({ field }: { field: ResolvedSummaryField }) {
+  if (field.kind === "verdict" && typeof field.value === "string") {
+    return (
+      <span
+        className={cn(
+          "inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize",
+          dataVerdictBadgeClasses(field.value)
+        )}
+      >
+        {field.value.replace(/_/g, " ")}
+      </span>
+    );
+  }
+
+  if (Array.isArray(field.value)) {
+    const visible = field.value.slice(0, 6);
+    const remaining = field.value.length - visible.length;
+    return (
+      <div className="flex flex-wrap gap-1">
+        {visible.map((v, i) => (
+          <Pill key={i}>{v === null ? "—" : formatPrimitive(v)}</Pill>
+        ))}
+        {remaining > 0 && <Pill>+{remaining} more</Pill>}
+      </div>
+    );
+  }
+
+  return <span className="break-all text-sm font-semibold text-foreground">{formatPrimitive(field.value)}</span>;
+}
+
+/** The promoted "at a glance" summary -- label-above-value spec-sheet cells,
+ * a deliberately different visual rhythm from the flat label:value list
+ * below so the hierarchy (important vs. everything else) is unmistakable. */
+function ProviderSummaryGrid({ fields }: { fields: ResolvedSummaryField[] }) {
+  return (
+    <div className="mb-3 grid grid-cols-2 gap-x-4 gap-y-3 rounded-md border border-border/60 bg-muted/20 p-3 sm:grid-cols-3">
+      {fields.map((field) => (
+        <div key={field.key} className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            {field.label}
+          </span>
+          <SummaryFieldValue field={field} />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 interface OsintFinding {
@@ -257,6 +410,12 @@ export function ProviderCard({ result, summary }: ProviderCardProps) {
   const dataEntries = Object.entries(result.data ?? {});
   const isOk = result.status === "ok";
 
+  const { fields: summaryFields, consumedKeys } = React.useMemo(
+    () => buildProviderSummary(result.data ?? {}),
+    [result.data]
+  );
+  const remainingEntries = dataEntries.filter(([key]) => !consumedKeys.has(key));
+
   const osintFindingsRaw = result.data?.["osint_findings"];
   const osintFindings = Array.isArray(osintFindingsRaw) ? osintFindingsRaw.filter(isOsintFinding) : null;
 
@@ -298,21 +457,27 @@ export function ProviderCard({ result, summary }: ProviderCardProps) {
           <p className="mb-2 text-xs text-destructive">{result.error_message}</p>
         )}
 
-        {dataEntries.length > 0 ? (
-          <div className="divide-y divide-border/50">
-            {dataEntries.map(([key, value]) =>
-              key === "osint_findings" && osintFindings ? (
-                <div key={key} className="py-1">
-                  <span className="text-xs text-muted-foreground">{formatLabel(key)}</span>
-                  <OsintFindingsList findings={osintFindings} />
-                </div>
-              ) : (
-                <DataField key={key} label={formatLabel(key)} value={value} />
-              )
-            )}
-          </div>
-        ) : (
+        {dataEntries.length === 0 ? (
           !result.error_message && <p className="text-xs text-muted-foreground">No data returned.</p>
+        ) : (
+          <>
+            {summaryFields.length > 0 && <ProviderSummaryGrid fields={summaryFields} />}
+
+            {remainingEntries.length > 0 && (
+              <div className="divide-y divide-border/50">
+                {remainingEntries.map(([key, value]) =>
+                  key === "osint_findings" && osintFindings ? (
+                    <div key={key} className="py-1">
+                      <span className="text-xs text-muted-foreground">{formatLabel(key)}</span>
+                      <OsintFindingsList findings={osintFindings} />
+                    </div>
+                  ) : (
+                    <DataField key={key} label={formatLabel(key)} value={value} />
+                  )
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {dataEntries.length > 0 && (

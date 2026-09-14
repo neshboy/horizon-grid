@@ -26,11 +26,14 @@ import type {
   ProviderSummary,
 } from "@/lib/types";
 import { cn, verdictColor } from "@/lib/utils";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThreatScoreGauge } from "@/components/dashboard/ThreatScoreGauge";
+import { ProviderStatusStrip } from "@/components/dashboard/ProviderStatusStrip";
 import { ProviderProgressTracker } from "@/components/dashboard/ProviderProgressTracker";
 import { ProviderCardGrid } from "@/components/dashboard/ProviderCardGrid";
 import { FinalAssessmentPanel } from "@/components/dashboard/FinalAssessmentPanel";
-import { RelationshipGraph } from "@/components/dashboard/RelationshipGraph";
+import { RelationshipGraphSwitcher } from "@/components/dashboard/RelationshipGraphSwitcher";
 import { MitreMatrix } from "@/components/dashboard/MitreMatrix";
 import { DetectionRulesPanel } from "@/components/dashboard/DetectionRulesPanel";
 import { RecommendedActionsPanel } from "@/components/dashboard/RecommendedActionsPanel";
@@ -158,6 +161,12 @@ export default function LookupDetailPage() {
   // alone silently removed the whole panel, with no explanation, any time the
   // investigation ended in FAILED even though every provider had succeeded.
   const investigationFinished = status === "completed" || status === "failed";
+  const providerResultsList = Object.values(providerResults);
+  // Broadest condition under which the Analyst Tools tab could show
+  // anything at all -- isCompleted implies investigationFinished, and the
+  // two analyst-panel blocks below keep their exact original, separate
+  // gating (isCompleted vs investigationFinished) unchanged.
+  const analystToolsAvailable = !!lookupId && investigationFinished;
 
   return (
     <main className="min-h-screen px-4 py-8">
@@ -200,39 +209,80 @@ export default function LookupDetailPage() {
           </div>
         )}
 
-        {/* 2-column responsive layout: main content spans 2 cols, sidebar is 1 col */}
+        {/* At-a-glance row: threat score + compact per-provider status strip,
+           ahead of any full detail so a viewer gets the gist before drilling
+           into evidence. */}
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+          <ThreatScoreGauge risk={finalAssessment?.risk ?? null} loading={loading} />
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Provider Status</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ProviderStatusStrip results={providerResultsList} />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* 2-column responsive layout: tabbed main content spans 2 cols, sidebar is 1 col */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="flex flex-col gap-6 lg:col-span-2">
-            <ThreatScoreGauge risk={finalAssessment?.risk ?? null} loading={loading} />
+            <Tabs defaultValue="summary" className="flex flex-col gap-4">
+              <TabsList>
+                <TabsTrigger value="summary">Summary</TabsTrigger>
+                <TabsTrigger value="evidence">
+                  Evidence
+                  {providerResultsList.length > 0 && (
+                    <span className="ml-1 text-[10px] normal-case text-muted-foreground/70">
+                      ({providerResultsList.length})
+                    </span>
+                  )}
+                </TabsTrigger>
+                {analystToolsAvailable && <TabsTrigger value="analyst-tools">Analyst Tools</TabsTrigger>}
+              </TabsList>
 
-            <ProviderCardGrid
-              results={Object.values(providerResults)}
-              summaries={providerSummaries}
-            />
+              {/* SUMMARY: the AI final assessment plus everything derived from it. */}
+              <TabsContent value="summary" className="flex flex-col gap-6">
+                <FinalAssessmentPanel assessment={finalAssessment} />
 
-            <FinalAssessmentPanel assessment={finalAssessment} />
+                <RecommendedActionsPanel assessment={finalAssessment} />
 
-            <RelationshipGraph data={correlation} />
+                <MitreMatrix mappings={finalAssessment?.mitre_mappings ?? []} loading={loading} />
 
-            <MitreMatrix mappings={finalAssessment?.mitre_mappings ?? []} loading={loading} />
+                <DetectionRulesPanel detectionRules={finalAssessment?.detection_rules ?? []} loading={loading} />
+              </TabsContent>
 
-            <DetectionRulesPanel detectionRules={finalAssessment?.detection_rules ?? []} loading={loading} />
+              {/* EVIDENCE: the raw per-provider results and their relationships. */}
+              <TabsContent value="evidence" className="flex flex-col gap-6">
+                <ProviderCardGrid
+                  results={providerResultsList}
+                  summaries={providerSummaries}
+                />
 
-            <RecommendedActionsPanel assessment={finalAssessment} />
+                <RelationshipGraphSwitcher data={correlation} />
+              </TabsContent>
 
-            {isCompleted && lookupId && (
-              <>
-                <VerdictAnalysisPanel lookupId={lookupId} onShowReceipts={setHighlightedEvidenceIds} />
-                <EvidencePanel lookupId={lookupId} highlightIds={highlightedEvidenceIds} />
-                <PivotPanel lookupId={lookupId} />
-                <HuntingCenterPanel lookupId={lookupId} />
-                <InvestigationCopilot lookupId={lookupId} onShowReceipts={setHighlightedEvidenceIds} />
-              </>
-            )}
+              {/* ANALYST TOOLS: deeper post-completion investigation aids,
+                 grouped together rather than as a flat page continuation. */}
+              {analystToolsAvailable && (
+                <TabsContent value="analyst-tools" className="flex flex-col gap-6">
+                  {isCompleted && lookupId && (
+                    <>
+                      <VerdictAnalysisPanel lookupId={lookupId} onShowReceipts={setHighlightedEvidenceIds} />
+                      <EvidencePanel lookupId={lookupId} highlightIds={highlightedEvidenceIds} />
+                      <PivotPanel lookupId={lookupId} />
+                      <HuntingCenterPanel lookupId={lookupId} />
+                      <InvestigationCopilot lookupId={lookupId} onShowReceipts={setHighlightedEvidenceIds} />
+                    </>
+                  )}
 
-            {investigationFinished && lookupId && iocValue && (
-              <SecurityAssessmentPanel lookupId={lookupId} iocValue={iocValue} iocType={iocType} />
-            )}
+                  {investigationFinished && lookupId && iocValue && (
+                    <SecurityAssessmentPanel lookupId={lookupId} iocValue={iocValue} iocType={iocType} />
+                  )}
+                </TabsContent>
+              )}
+            </Tabs>
           </div>
 
           <div className="flex flex-col gap-6">
@@ -248,7 +298,7 @@ export default function LookupDetailPage() {
             <AskAiPanel
               iocValue={iocValue}
               iocType={iocType}
-              providerResults={Object.values(providerResults)}
+              providerResults={providerResultsList}
               providerSummaries={providerSummaries}
               correlation={correlation}
             />
