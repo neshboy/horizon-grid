@@ -8,11 +8,11 @@ the exact same get_kpis() numbers -- see app/ai/dashboard_summary.py for why
 the AI-calling logic lives there and not in app/core/dashboard.py (which is
 deliberately AI-free).
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.ai.dashboard_summary import generate_executive_summary
 from app.auth.rbac import CurrentUser, require_permission
-from app.core.dashboard import get_kpis
+from app.core.dashboard import get_activity_timeline, get_kpis
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -20,6 +20,14 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/kpis")
 async def dashboard_kpis(user: CurrentUser = Depends(require_permission("dashboard:read"))):
     return await get_kpis()
+
+
+@router.get("/activity-timeline")
+async def dashboard_activity_timeline(
+    hours: int = Query(24, ge=1, le=168),
+    user: CurrentUser = Depends(require_permission("dashboard:read")),
+):
+    return {"buckets": await get_activity_timeline(hours=hours)}
 
 
 @router.get("/executive-summary")

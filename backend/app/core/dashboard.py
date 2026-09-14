@@ -281,6 +281,76 @@ async def get_kpis() -> dict:
     }
 
 
+# Cap on get_activity_timeline()'s `hours` param -- 7 days of hourly buckets
+# (168 rows) is already more than the command-center UI ever renders at once;
+# capping keeps the query (and the response payload) bounded regardless of
+# what a caller passes.
+_TIMELINE_MAX_HOURS = 168
+
+
+async def get_activity_timeline(hours: int = 24) -> list[dict]:
+    """Hourly-bucketed investigation activity for the dashboard's activity
+    timeline widget. Real DB aggregation only, same as get_kpis() above --
+    no AI, no new provider calls, reads only IOCLookup rows the real
+    investigation pipeline already persisted.
+
+    Every hour in [now - hours, now] is present in the response, INCLUDING
+    hours with zero investigations (total=0) -- a real quiet hour must
+    render as a real zero, never be silently absent from the series (an
+    absent bucket and a zero-activity bucket are not the same fact, and a
+    line/bar chart built from a response with gaps would visually
+    interpolate across the gap as if activity were continuous through it).
+
+    Each bucket: {bucket: ISO8601 UTC hour start, total: int,
+    high_risk: int (malicious + highly_malicious lookups), suspicious: int,
+    failed: int}. `total` counts every IOCLookup regardless of verdict/status
+    (including still-RUNNING ones created in that hour); high_risk/suspicious/
+    failed are subsets of total, not additional categories, so a caller
+    rendering a stacked bar must not sum them on top of total.
+    """
+    hours = max(1, min(hours, _TIMELINE_MAX_HOURS))
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(hours=hours)
+
+    bucket_col = func.date_trunc("hour", IOCLookup.created_at).label("bucket")
+
+    async with new_session() as db:
+        rows = (
+            await db.execute(
+                select(
+                    bucket_col,
+                    func.count().label("total"),
+                    func.sum(
+                        case((IOCLookup.final_verdict.in_([Verdict.HIGHLY_MALICIOUS, Verdict.MALICIOUS]), 1), else_=0)
+                    ).label("high_risk"),
+                    func.sum(case((IOCLookup.final_verdict == Verdict.SUSPICIOUS, 1), else_=0)).label("suspicious"),
+                    func.sum(case((IOCLookup.status == LookupStatus.FAILED, 1), else_=0)).label("failed"),
+                )
+                .where(IOCLookup.created_at >= window_start)
+                .group_by(bucket_col)
+            )
+        ).all()
+
+    by_hour = {row.bucket: row for row in rows}
+
+    out: list[dict] = []
+    cursor = window_start.replace(minute=0, second=0, microsecond=0)
+    end = now.replace(minute=0, second=0, microsecond=0)
+    while cursor <= end:
+        row = by_hour.get(cursor)
+        out.append(
+            {
+                "bucket": cursor.isoformat(),
+                "total": row.total if row else 0,
+                "high_risk": (row.high_risk or 0) if row else 0,
+                "suspicious": (row.suspicious or 0) if row else 0,
+                "failed": (row.failed or 0) if row else 0,
+            }
+        )
+        cursor += timedelta(hours=1)
+    return out
+
+
 # Rolling windows reported for every provider by get_provider_health_history().
 _HEALTH_WINDOWS: dict[str, timedelta] = {
     "1h": timedelta(hours=1),
