@@ -1,0 +1,106 @@
+name: Build Release Artifacts
+
+# Least-privilege: only builds and uploads workflow artifacts, never pushes
+# or modifies the repo, never creates a GitHub Release itself.
+permissions:
+  contents: read
+
+# Builds both real release artifacts -- the Windows installer
+# (windows/installer.iss, via Inno Setup) and the Linux package
+# (linux/build-deb.sh, via dpkg-deb) -- on clean, disposable GitHub-hosted
+# runners rather than on a maintainer's own machine, which would otherwise
+# require installing Inno Setup locally just to produce a build.
+#
+# Triggers on a version tag push (the project's own "vX.Y.Z" convention --
+# see git tag history) so this runs once per real release, plus
+# workflow_dispatch for an on-demand test run without needing to cut a tag.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Chocolatey ships preinstalled on GitHub's windows-latest runners.
+      # The innosetup package adds an `iscc` shim to PATH, so no need to
+      # hardcode Inno Setup's Program Files install path afterward.
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile Windows installer
+        run: iscc windows\installer.iss
+
+      # windows/installer.iss's own OutputDir=..\release +
+      # OutputBaseFilename=HORIZON-GRID-Setup-{#MyAppVersion} -- resolved
+      # here rather than hardcoded again, so this step can never drift out
+      # of sync with the installer script's own real config.
+      - name: Locate installer output
+        id: locate
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path release -Filter "HORIZON-GRID-Setup-*.exe" -ErrorAction Stop | Select-Object -First 1
+          if (-not $exe) { throw "No installer .exe was produced under release/" }
+          if ($exe.Length -lt 1MB) { throw "Installer .exe is suspiciously small ($($exe.Length) bytes) -- likely a broken build" }
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Compute SHA256 checksum
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash -Algorithm SHA256 -Path "${{ steps.locate.outputs.path }}"
+          "$($hash.Hash)  $($hash.Path | Split-Path -Leaf)" | Out-File -Encoding ascii "${{ steps.locate.outputs.path }}.sha256"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.locate.outputs.name }}
+          path: |
+            ${{ steps.locate.outputs.path }}
+            ${{ steps.locate.outputs.path }}.sha256
+          retention-days: 30
+
+  linux-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # dpkg-deb ships preinstalled on ubuntu-latest; linux/build-deb.sh
+      # itself checks for it and fails loudly if it's ever missing.
+      - name: Build .deb package
+        run: bash linux/build-deb.sh
+
+      # linux/build-deb.sh's own $OUT_DIR="$REPO_ROOT/release" +
+      # PKG_NAME="horizon-grid_${VERSION}_amd64" -- resolved here rather than
+      # hardcoded again, for the same drift-proofing reason as the Windows job.
+      - name: Locate .deb output
+        id: locate
+        run: |
+          deb=$(find release -maxdepth 1 -iname "horizon-grid_*.deb" | head -n1)
+          if [ -z "$deb" ]; then echo "No .deb was produced under release/" >&2; exit 1; fi
+          size=$(stat -c%s "$deb")
+          if [ "$size" -lt 10000 ]; then echo "$deb is suspiciously small ($size bytes) -- likely a broken build" >&2; exit 1; fi
+          echo "path=$deb" >> "$GITHUB_OUTPUT"
+
+      # Real structural sanity check, not just "a file exists" -- dpkg-deb
+      # itself refuses to describe a malformed package.
+      - name: Verify package is well-formed
+        run: dpkg-deb --info "${{ steps.locate.outputs.path }}"
+
+      - name: Compute SHA256 checksum
+        run: sha256sum "${{ steps.locate.outputs.path }}" > "${{ steps.locate.outputs.path }}.sha256"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: horizon-grid-deb
+          path: |
+            ${{ steps.locate.outputs.path }}
+            ${{ steps.locate.outputs.path }}.sha256
+          retention-days: 30

@@ -4,14 +4,11 @@ name: Frontend Build
 permissions:
   contents: read
 
-# Runs lint + build on changes under frontend/**.
+# Runs lint + test + build on changes under frontend/**.
 #
-# NOTE: there is no real frontend test suite yet. "test": "vitest run" is wired
-# up in frontend/package.json and vitest is a devDependency, but zero
-# *.test.ts(x)/*.spec.ts(x) files exist under frontend/app, frontend/components,
-# or frontend/lib, and there is no vitest.config.*. Running "npm test" today
-# would just fail/error with "No test files found", so it is deliberately not
-# invoked here. This job only does install + lint + build.
+# A real vitest suite now exists (5 files, 30 tests, under frontend/lib and
+# frontend/app/pentest -- see vitest.config.ts), so "npm test" is invoked as
+# a real regression check, not skipped.
 
 on:
   push:
@@ -42,6 +39,10 @@ jobs:
       - name: Lint
         working-directory: frontend
         run: npm run lint
+
+      - name: Test
+        working-directory: frontend
+        run: npm test
 
       - name: Build
         working-directory: frontend
