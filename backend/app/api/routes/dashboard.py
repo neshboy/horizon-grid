@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.ai.dashboard_summary import generate_executive_summary
 from app.auth.rbac import CurrentUser, require_permission
-from app.core.dashboard import get_activity_timeline, get_kpis
+from app.core.dashboard import get_activity_timeline, get_geo_activity, get_kpis
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -28,6 +28,14 @@ async def dashboard_activity_timeline(
     user: CurrentUser = Depends(require_permission("dashboard:read")),
 ):
     return {"buckets": await get_activity_timeline(hours=hours)}
+
+
+@router.get("/geo-activity")
+async def dashboard_geo_activity(
+    hours: int = Query(720, ge=1, le=4320),
+    user: CurrentUser = Depends(require_permission("dashboard:read")),
+):
+    return await get_geo_activity(hours=hours)
 
 
 @router.get("/executive-summary")

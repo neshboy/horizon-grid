@@ -18,8 +18,8 @@
  * same "one widget's outage never blocks another" pattern.
  */
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   Activity,
@@ -32,14 +32,21 @@ import {
   Sparkles,
 } from "lucide-react";
 import { ActivityTimeline } from "@/components/dashboard/ActivityTimeline";
+import { ThreatGlobe } from "@/components/dashboard/ThreatGlobe";
 import { BrandHeader } from "@/components/dashboard/BrandHeader";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { ProviderHealthStatusBadge } from "@/components/dashboard/ProviderHealthStatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getExecutiveSummary, getKpis, getProviderHealth, isLoggedIn } from "@/lib/api";
+import { getExecutiveSummary, getKpis, getLookup, getLookupGeo, getProviderHealth, isLoggedIn } from "@/lib/api";
 import { summaryLoadingHint } from "@/lib/dashboardSummary";
-import type { DashboardKpis, ExecutiveSummary, ProviderHealthEntry, ProviderHealthStatus } from "@/lib/types";
+import type {
+  DashboardKpis,
+  ExecutiveSummary,
+  ProviderHealthEntry,
+  ProviderHealthStatus,
+} from "@/lib/types";
+import type { ThreatGlobeProps } from "@/components/dashboard/ThreatGlobe";
 import { cn, riskScoreColor } from "@/lib/utils";
 
 function SummarySkeleton({ hint }: { hint?: string }) {
@@ -55,8 +62,59 @@ function SummarySkeleton({ hint }: { hint?: string }) {
 
 const HEALTH_ORDER: ProviderHealthStatus[] = ["healthy", "degraded", "down", "unknown"];
 
-export default function DashboardPage() {
+function DashboardPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const focusLookupId = searchParams.get("focusLookupId");
+
+  // Populated from ?focusLookupId=... (set by the "View on Globe" action on
+  // the IOC investigation pages -- see ViewOnGlobeAction.tsx). Only ever
+  // built from GET /lookup/{id} + GET /lookup/{id}/geo's own real response;
+  // if that lookup's geo status isn't "public_resolved" (e.g. someone hand-
+  // edits the URL), this stays null and the globe just renders normally with
+  // no focus/beacon -- never a guessed position.
+  const [globeFocus, setGlobeFocus] = useState<ThreatGlobeProps["focusTarget"]>(null);
+
+  useEffect(() => {
+    if (!focusLookupId) {
+      setGlobeFocus(null);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([getLookup(focusLookupId), getLookupGeo(focusLookupId)])
+      .then(([lookup, geo]) => {
+        if (cancelled) return;
+        if (geo.status !== "public_resolved" || !geo.country_code) {
+          setGlobeFocus(null);
+          return;
+        }
+        const risk = lookup?.final_assessment?.risk ?? null;
+        setGlobeFocus({
+          countryCode: geo.country_code,
+          lookupId: focusLookupId,
+          iocValue: lookup?.ioc_value ?? "",
+          iocType: lookup?.ioc_type ?? "",
+          riskScore: risk?.overall_risk_score ?? null,
+          severity: risk?.severity ?? null,
+          confidenceScore: risk?.confidence_score ?? null,
+          providersCompleted: Array.isArray(lookup?.provider_results) ? lookup.provider_results.length : null,
+          providersTotal: Array.isArray(lookup?.provider_results) ? lookup.provider_results.length : null,
+          asn: geo.asn,
+          org: geo.org,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setGlobeFocus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [focusLookupId]);
+
+  const clearGlobeFocus = () => {
+    setGlobeFocus(null);
+    router.replace("/dashboard");
+  };
 
   const [kpis, setKpis] = useState<DashboardKpis | null>(null);
   const [kpisError, setKpisError] = useState<string | null>(null);
@@ -221,6 +279,8 @@ export default function DashboardPage() {
           />
         </div>
 
+        <ThreatGlobe focusTarget={globeFocus} onClearFocus={clearGlobeFocus} />
+
         <ActivityTimeline />
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -304,5 +364,13 @@ export default function DashboardPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-sm text-muted-foreground">Loading...</div>}>
+      <DashboardPageInner />
+    </Suspense>
   );
 }

@@ -693,3 +693,41 @@ export interface ActivityTimelineBucket {
 export interface ActivityTimeline {
   buckets: ActivityTimelineBucket[];
 }
+
+// Mirrors backend GET /dashboard/geo-activity. One entry per ISO-3166-1
+// alpha-2 country code with at least one attributable lookup in range --
+// countries with zero real activity are simply absent, never a zero-valued
+// placeholder. high_risk/suspicious are SUBSETS of `total`, not additive
+// categories -- same convention as ActivityTimelineBucket above, never sum
+// them on top of total. `unmapped_count` is the real count of in-window
+// lookups where no country could be extracted at all -- always reported,
+// never silently dropped.
+export interface GeoActivityCountry {
+  country_code: string;
+  total: number;
+  high_risk: number;
+  suspicious: number;
+}
+
+export interface GeoActivity {
+  countries: GeoActivityCountry[];
+  unmapped_count: number;
+}
+
+// Mirrors backend GET /lookup/{lookup_id}/geo (same router/file as GET
+// /lookup/{lookup_id}, same lookup:read permission). Distinct from
+// GeoActivityCountry above -- this is ONE lookup's own real geolocation
+// outcome, not an aggregate. "private" NEVER carries a country_code (private/
+// loopback/link-local/reserved/multicast/unspecified addresses are never
+// placed on the globe); "not_applicable" is for non-IP ioc_types, where
+// geolocation simply doesn't apply. country_code/asn/org are only ever real
+// values resolved from this lookup's OWN provider_results -- never guessed,
+// never merged from another lookup or provider.
+export type LookupGeoStatus = "public_resolved" | "public_unresolved" | "private" | "not_applicable";
+
+export interface LookupGeo {
+  status: LookupGeoStatus;
+  country_code: string | null;
+  asn: string | null;
+  org: string | null;
+}

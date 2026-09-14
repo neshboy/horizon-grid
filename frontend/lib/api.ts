@@ -16,9 +16,11 @@ import type {
   ExecutiveSummary,
   FalsePositiveAssessment,
   FinalAssessment,
+  GeoActivity,
   HuntingPackage,
   IntelligenceGaps,
   IOCComparisonResponse,
+  LookupGeo,
   NetworkInfo,
   PentestAssessment,
   PentestExploitAttempt,
@@ -478,6 +480,24 @@ export async function getExecutiveSummary(): Promise<ExecutiveSummary> {
 export async function getActivityTimeline(hours: number): Promise<ActivityTimeline> {
   const res = await authedFetch(`${getApiUrl()}/api/v1/dashboard/activity-timeline?hours=${hours}`);
   if (!res.ok) throw new Error("Failed to fetch activity timeline");
+  return res.json();
+}
+
+export async function getGeoActivity(hours: number): Promise<GeoActivity> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/dashboard/geo-activity?hours=${hours}`);
+  if (!res.ok) throw new Error("Failed to fetch geo activity");
+  return res.json();
+}
+
+// See backend GET /lookup/{lookup_id}/geo (same router/file/permission as
+// getLookup() above) -- one lookup's own real geolocation outcome, used by
+// the "View on Globe" affordance (lookup/new + lookup/[id] pages) and by
+// ThreatGlobe.tsx's focus-target flow. Never call this for a non-IP
+// ioc_type; the backend still answers correctly ("not_applicable") but
+// there's nothing useful for a caller to do with that.
+export async function getLookupGeo(lookupId: string): Promise<LookupGeo> {
+  const res = await authedFetch(`${getApiUrl()}/api/v1/lookup/${lookupId}/geo`);
+  if (!res.ok) throw new Error("Failed to fetch lookup geolocation");
   return res.json();
 }
 

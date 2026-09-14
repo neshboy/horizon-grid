@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, case, func, select
 
 from app.core.db import new_session
+from app.core.geo import GEO_PROVIDER_IDS as _GEO_PROVIDER_IDS
+from app.core.geo import resolve_lookup_country as _resolve_lookup_country
 from app.core.runtime_config import get_ioc_provider_snapshot
 from app.models.case import Case, CaseSeverity, CaseStatus
 from app.models.lookup import FinalAssessmentRecord, IOCLookup, LookupStatus, ProviderResultRecord, Verdict
@@ -349,6 +351,142 @@ async def get_activity_timeline(hours: int = 24) -> list[dict]:
         )
         cursor += timedelta(hours=1)
     return out
+
+
+# Provider IDs consulted for country extraction in get_geo_activity(), in the
+# exact priority order documented on _resolve_lookup_country() (now in
+# app/core/geo.py, imported above -- whois_rdap is checked via two different
+# fields, hence that priority list has 4 entries against only 3 provider_ids
+# here).
+#
+# _GEO_PROVIDER_IDS/_resolve_lookup_country used to be defined directly in
+# this module; they were extracted into app/core/geo.py (as
+# GEO_PROVIDER_IDS/resolve_lookup_country, imported above under these same
+# underscore-prefixed local names to keep every call site below unchanged)
+# so GET /api/v1/lookup/{lookup_id}/geo (app/api/routes/lookup.py) can reuse
+# the identical, already-correct country-resolution logic instead of
+# re-deriving it. This refactor changes nothing about get_geo_activity()'s
+# own behavior -- same priority order, same validity rule, same otx
+# exclusion.
+
+# Cap on get_geo_activity()'s `hours` param. Deliberately its own constant,
+# not a reuse of _TIMELINE_MAX_HOURS above -- the two endpoints have
+# independent, unrelated bounds (this one mirrors the data contract's own
+# le=4320 (180 days), since the threat-globe widget looks back much further
+# than the hourly activity-timeline chart ever does).
+_GEO_ACTIVITY_MAX_HOURS = 4320
+
+
+async def get_geo_activity(hours: int = 720) -> dict:
+    """Country breakdown of completed IOC lookups for the executive
+    dashboard's 3D threat globe. Same READ-ONLY, no-AI, no-new-provider-call
+    contract as every other function in this module: this purely summarizes
+    provider_results/ioc_lookups rows other subsystems already persisted.
+
+    HARD RULE for this endpoint: never fabricate a country. Only
+    whois_rdap/abuseipdb/virustotal are consulted, in the exact priority
+    order documented on app/core/geo.py's resolve_lookup_country() (imported
+    above as _resolve_lookup_country -- never otx, see that function's
+    docstring for why), and only a clean 2-letter alpha code is ever accepted
+    from any of them (geo.py's valid_country_code()). Anything else -- a full
+    country name, a 3-letter code, a missing/empty field, or a lookup with no
+    rows at all among these three providers -- is always counted in
+    unmapped_count, NEVER guessed at.
+
+    Response shape:
+      {"countries": [{"country_code": "US", "total": 3, "high_risk": 1,
+                       "suspicious": 0}, ...],
+       "unmapped_count": 2}
+    - "countries" has at most one entry per country_code (uppercase).
+    - high_risk/suspicious are SUBSETS of total, never additional categories
+      on top of it -- identical convention to get_activity_timeline() above
+      (a lookup verdicted highly_malicious/malicious counts in both total
+      and high_risk; one verdicted suspicious counts in both total and
+      suspicious; a caller must never sum high_risk + suspicious on top of
+      total).
+    - unmapped_count = completed lookups in the window whose country could
+      not be determined -- always reported as a real number, never silently
+      dropped from the response.
+    - Only IOCLookup rows with status == 'completed' are counted at all,
+      matching every other aggregation in this module.
+    """
+    hours = max(1, min(hours, _GEO_ACTIVITY_MAX_HOURS))
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(hours=hours)
+
+    async with new_session() as db:
+        # ONE query: every completed IOCLookup in the window, LEFT-joined to
+        # its own provider_results rows restricted to the 3 country-bearing
+        # providers. LEFT (not INNER) is deliberate and required for
+        # correctness, not just style: a lookup with ZERO rows among these
+        # three providers must still appear in this result set (with a NULL
+        # provider_id/data) so it is counted in unmapped_count below --
+        # an INNER join would silently make such a lookup vanish from the
+        # query entirely instead of being reported as unmapped, which would
+        # violate this endpoint's own "unmapped_count must be real, never
+        # silently dropped" rule. Country resolution and all of
+        # total/high_risk/suspicious/unmapped aggregation happen in Python
+        # below, over this single batched result set -- no per-lookup query,
+        # same "one query, group in Python" pattern as
+        # _all_provider_window_metrics()/get_provider_health_history() above.
+        rows = (
+            await db.execute(
+                select(
+                    IOCLookup.id.label("lookup_id"),
+                    IOCLookup.final_verdict,
+                    ProviderResultRecord.provider_id,
+                    ProviderResultRecord.data,
+                )
+                .select_from(IOCLookup)
+                .outerjoin(
+                    ProviderResultRecord,
+                    and_(
+                        ProviderResultRecord.lookup_id == IOCLookup.id,
+                        ProviderResultRecord.provider_id.in_(_GEO_PROVIDER_IDS),
+                    ),
+                )
+                .where(
+                    IOCLookup.status == LookupStatus.COMPLETED,
+                    IOCLookup.created_at >= window_start,
+                )
+            )
+        ).all()
+
+    # Group provider rows by lookup_id (a lookup with no matching provider
+    # row simply never gets a key here, and _resolve_lookup_country() treats
+    # a missing key the same as an empty dict -- unmapped). final_verdict is
+    # a column of IOCLookup, not of the joined provider_results row, so it's
+    # identical across every row sharing a lookup_id -- last-write-wins here
+    # is fine because every write for a given key is the same value.
+    provider_data_by_lookup: dict = {}
+    verdict_by_lookup: dict = {}
+    for row in rows:
+        verdict_by_lookup[row.lookup_id] = row.final_verdict
+        if row.provider_id is not None:
+            provider_data_by_lookup.setdefault(row.lookup_id, {}).setdefault(row.provider_id, []).append(
+                row.data or {}
+            )
+
+    countries: dict[str, dict] = {}
+    unmapped_count = 0
+    for lookup_id, final_verdict in verdict_by_lookup.items():
+        country_code = _resolve_lookup_country(provider_data_by_lookup.get(lookup_id, {}))
+        if country_code is None:
+            unmapped_count += 1
+            continue
+        entry = countries.setdefault(
+            country_code, {"country_code": country_code, "total": 0, "high_risk": 0, "suspicious": 0}
+        )
+        entry["total"] += 1
+        if final_verdict in (Verdict.HIGHLY_MALICIOUS, Verdict.MALICIOUS):
+            entry["high_risk"] += 1
+        if final_verdict == Verdict.SUSPICIOUS:
+            entry["suspicious"] += 1
+
+    return {
+        "countries": list(countries.values()),
+        "unmapped_count": unmapped_count,
+    }
 
 
 # Rolling windows reported for every provider by get_provider_health_history().

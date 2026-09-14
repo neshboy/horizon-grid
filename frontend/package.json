@@ -27,6 +27,7 @@
     "recharts": "2.12.7",
     "tailwind-merge": "2.5.2",
     "three": "0.186.0",
+    "world-countries": "^5.1.0",
     "zustand": "4.5.5"
   },
   "devDependencies": {
