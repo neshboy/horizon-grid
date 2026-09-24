@@ -106,7 +106,7 @@ spec:
             # single-container command) -- see gap 1 above: with replicas: 2, running
             # it in every pod's own startup risks a concurrent-migration race.
             # Migrations run exactly once via the separate backend-migrate Job above.
-            - "msfrpcd -f -P \"$(MSF_RPC_PASSWORD)\" -S -a 127.0.0.1 -p 55553 -U msf & uvicorn app.main:app --host 0.0.0.0 --port 8000"
+            - "msfrpcd -f -P \"${MSF_RPC_PASSWORD}\" -S -a 127.0.0.1 -p 55553 -U msf & uvicorn app.main:app --host 0.0.0.0 --port 8000"
           ports:
             - containerPort: 8000
               name: http

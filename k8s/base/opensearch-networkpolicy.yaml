@@ -1,0 +1,38 @@
+# OpenSearch runs with the security plugin disabled (DISABLE_SECURITY_PLUGIN=true
+# in configmap.yaml, matching docker-compose.yml exactly -- see that file's own
+# comment). With no authentication in front of port 9200, any pod that can reach
+# opensearch:9200 has unauthenticated read/write/delete access to the IOC data
+# store. This NetworkPolicy is the only access control in front of it: it
+# restricts ingress on 9200 to just the workloads that actually talk to
+# OpenSearch (backend, celery-worker, celery-beat), so a compromised or
+# unrelated pod elsewhere in the namespace/cluster can't reach it directly.
+#
+# This does not replace enabling the OpenSearch security plugin (TLS + auth) --
+# it only narrows the network blast radius under the current no-auth config.
+# Requires a CNI that enforces NetworkPolicy (e.g. Calico, Cilium); on a CNI
+# that doesn't, this resource is created but has no enforcement effect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opensearch-restrict-ingress
+  namespace: ioc-intel-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: opensearch
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+        - podSelector:
+            matchLabels:
+              app: celery-worker
+        - podSelector:
+            matchLabels:
+              app: celery-beat
+      ports:
+        - protocol: TCP
+          port: 9200

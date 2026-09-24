@@ -14,6 +14,7 @@ resources:
   - redis-deployment.yaml
   - neo4j-statefulset.yaml
   - opensearch-statefulset.yaml
+  - opensearch-networkpolicy.yaml
   - backend-deployment.yaml
   - celery-worker-deployment.yaml
   - celery-beat-deployment.yaml
