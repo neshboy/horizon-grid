@@ -2,6 +2,19 @@
 
 All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md`, and, for the v0.2.3 mission-critical hardening pass specifically, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
+## [0.3.15] — 2026-09-25 — Fresh-install crash fixes found by a clean-room GitHub-app audit
+
+A separate audit session cloned this repository fresh from GitHub (no pre-existing local state) and followed only the README's own documented Docker Compose quick-start, specifically to test whether a brand-new user could actually get a working install. Two real, reproducible defects were found this way and fixed; everything else in this release is the substantial backlog of already-tested fixes that had accumulated on `main` since v0.3.14 shipped (documentation accuracy pass, dependency/security fixes, accessibility fixes, database indexing, and more — see individual commit messages between v0.3.14 and this tag for that detail).
+
+### Fixed
+- **`docker compose up --build` crash-looped the frontend container on every fresh install**: `docker-compose.yml` mounts an anonymous volume over `/app/.next` for the dev server's build cache, but that path doesn't exist yet at image-build time, so Docker initialized the volume root-owned — and the Dockerfile's non-root `node` user (added specifically to avoid running the dev server as root) failed with `EACCES: permission denied, open '/app/.next/package.json'` on every start. Fixed by pre-creating and chowning `.next` in the Dockerfile before switching to `USER node`, the same pattern already used for `node_modules`.
+- **Every single IOC investigation silently failed (`status: failed`) on a fresh install, with no explanation surfaced anywhere**: `.env.example` shipped `ENCRYPTION_MASTER_KEY` with a non-empty placeholder string that isn't valid Fernet key material, and the README's Quick Start only ever told a new user to replace `JWT_SECRET_KEY`, not this one — so every single `encrypt_secret()`/`decrypt_secret()` call raised `ValueError`. Fixed two ways: `_fernet()` now catches invalid key material and falls back to the already-existing JWT-derived key instead of crashing (matching this same file's own established "never crash on bad key material" philosophy), and `.env.example` now ships this value empty by default (the safe, working case) with the original rotation-tradeoff guidance kept as a comment. 2 new regression tests, verified fail-then-pass by temporarily reverting the fix and confirming both failed with the exact live error before restoring it.
+
+Verified end-to-end after both fixes: a full IOC investigation against `8.8.8.8` (free-tier providers + a local Ollama backend) now completes through to a real final assessment instead of ending in `status: failed`. RBAC (Admin/Analyst/Viewer) and the Security Assessment Toolkit's authorization gate were also independently re-verified against a live instance, including adversarial checks (a mismatched `target_confirmation` correctly rejected; a Viewer correctly getting 403 on admin/analyst-only routes).
+
+### Documentation
+- 27 real screenshots existed committed under `qa_screenshots_overnight/` from a prior QA pass but were never displayed in the README. Curated the strongest into `docs/assets/screenshots/` (a real CVE-2024-3400 investigation, the executive dashboard with the 3D threat globe, the provider-health matrix, and a new admin/RBAC overview) and added a Screenshots section plus a hero image.
+
 ## [0.3.14] — 2026-09-15 — 3D threat globe, per-IP fly-to, and a global command palette
 
 ### Added
