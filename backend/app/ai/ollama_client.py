@@ -81,6 +81,8 @@ class OllamaClient:
         timeout_seconds: Optional[int] = None,
         *,
         _ssrf_checked: bool = False,
+        request_base_url: Optional[str] = None,
+        host_header: Optional[str] = None,
     ) -> None:
         # Optional overrides let app/core/runtime_config.py construct a
         # client from the currently-active runtime configuration instead of
@@ -122,6 +124,13 @@ class OllamaClient:
         settings = get_settings()
         resolved_base_url = (base_url if base_url is not None else settings.ollama_base_url).rstrip("/")
         self._base_url = resolved_base_url
+        # Pinned by create() below to the exact IP assert_safe_outbound_url
+        # validated -- defaults to the unpinned hostname URL so a direct
+        # (non-create()) construction with _ssrf_checked=True (only ever
+        # done by tests that bypass the real check entirely) doesn't crash;
+        # every real caller goes through create(), which always sets these.
+        self._request_base_url = request_base_url if request_base_url is not None else resolved_base_url
+        self._host_header = host_header
         self._model = model if model is not None else settings.ollama_model
         self._max_tokens = max_tokens if max_tokens is not None else settings.ollama_max_tokens
         # getattr fallback: some tests construct a minimal Settings stand-in
@@ -153,15 +162,18 @@ class OllamaClient:
         settings = get_settings()
         resolved_base_url = (base_url if base_url is not None else settings.ollama_base_url).rstrip("/")
 
-        from app.core.url_safety import assert_safe_outbound_url
+        from app.core.url_safety import assert_safe_outbound_url, pin_resolved_host
 
-        await assert_safe_outbound_url(resolved_base_url)
+        resolved_ip = await assert_safe_outbound_url(resolved_base_url)
+        pinned_base_url, host_header = pin_resolved_host(resolved_base_url, resolved_ip)
         return cls(
             base_url=resolved_base_url,
             model=model,
             max_tokens=max_tokens,
             timeout_seconds=timeout_seconds,
             _ssrf_checked=True,
+            request_base_url=pinned_base_url,
+            host_header=host_header,
         )
 
     @property
@@ -205,9 +217,17 @@ class OllamaClient:
         # _TIMEOUT_SECONDS comment for the live measurements this default is
         # based on. Operators running an even slower/larger model can raise
         # OLLAMA_TIMEOUT_SECONDS further without a code change.
+        # Connects to self._request_base_url (the IP assert_safe_outbound_url
+        # already validated, via create()'s pin_resolved_host call) rather
+        # than re-resolving self._base_url's hostname here -- see
+        # app/core/url_safety.py's assert_safe_outbound_url docstring for
+        # why a second, independent resolution would be a DNS-rebinding
+        # TOCTOU. The Host header preserves the original hostname in case
+        # Ollama or a reverse proxy in front of it does virtual-hosting.
+        request_headers = {"Host": self._host_header} if self._host_header else None
         async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
             try:
-                response = await client.post(f"{self._base_url}/api/chat", json=body)
+                response = await client.post(f"{self._request_base_url}/api/chat", json=body, headers=request_headers)
             except httpx.ConnectError as exc:
                 raise RuntimeError(
                     f"Could not reach Ollama at {self._base_url} -- is it running? ({exc})"

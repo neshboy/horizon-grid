@@ -497,7 +497,12 @@ async def test_ollama_missing_base_url_fails_before_any_request():
 @pytest.mark.asyncio
 @respx.mock
 async def test_ollama_200_is_success():
-    respx.post("http://localhost:11434/api/chat").mock(
+    # Mocked against the resolved 127.0.0.1, not the "localhost" hostname in
+    # base_url: _check_ollama now pins its request to the exact IP
+    # assert_safe_outbound_url validated (see app/core/url_safety.py's
+    # pin_resolved_host) rather than letting httpx re-resolve "localhost"
+    # itself, to close the DNS-rebinding TOCTOU that pattern otherwise has.
+    respx.post("http://127.0.0.1:11434/api/chat").mock(
         return_value=httpx.Response(200, json={"message": {"content": "pong"}})
     )
     result = await check_ai_connection("ollama", {"base_url": "http://localhost:11434"}, model="llama3.2:3b")
@@ -507,7 +512,9 @@ async def test_ollama_200_is_success():
 @pytest.mark.asyncio
 @respx.mock
 async def test_ollama_model_not_pulled_is_clear_error():
-    respx.post("http://localhost:11434/api/chat").mock(return_value=httpx.Response(404))
+    # Mocked against the resolved 127.0.0.1 -- see test_ollama_200_is_success's
+    # comment on request pinning.
+    respx.post("http://127.0.0.1:11434/api/chat").mock(return_value=httpx.Response(404))
     result = await check_ai_connection("ollama", {"base_url": "http://localhost:11434"}, model="nonexistent:1b")
     assert result.ok is False
     assert "ollama pull" in result.message
@@ -521,7 +528,9 @@ async def test_ollama_literal_null_message_does_not_crash():
     # `.get("message", {})`'s default only applies when the key is absent,
     # so this used to raise an uncaught AttributeError instead of a clean
     # AITestResult.
-    respx.post("http://localhost:11434/api/chat").mock(
+    # Mocked against the resolved 127.0.0.1 -- see test_ollama_200_is_success's
+    # comment on request pinning.
+    respx.post("http://127.0.0.1:11434/api/chat").mock(
         return_value=httpx.Response(200, json={"message": None})
     )
     result = await check_ai_connection("ollama", {"base_url": "http://localhost:11434"}, model="llama3.2:3b")
@@ -530,19 +539,18 @@ async def test_ollama_literal_null_message_does_not_crash():
 
 
 @pytest.mark.asyncio
+@respx.mock
 async def test_ollama_connect_error_is_reported_cleanly():
-    # Deliberately unreachable port -- exercises the real httpx.ConnectError
-    # path without needing respx (no mock installed, so the connection
-    # genuinely fails at the TCP layer). Must be Ollama's real default port
-    # (11434), not an arbitrary one like ":1" -- url_safety.
-    # assert_safe_outbound_url() now rejects any OTHER port on a
-    # private/loopback address (see test_url_safety_ollama_port_scan.py),
-    # specifically to stop this same base_url field being used to port-scan
-    # this app's own internal services, so an arbitrary "obviously
-    # unreachable" port would now be refused by that check before ever
-    # reaching the network layer -- 11434 is still genuinely unreachable in
-    # the test environment (nothing listens on it inside the backend
-    # container) while staying a realistic, allowed Ollama address.
+    # Explicitly mocked to raise ConnectError rather than relying on port
+    # 11434 being genuinely unreachable in whatever environment runs this
+    # test -- that assumption doesn't hold on a dev machine (or CI runner)
+    # that happens to have a real Ollama instance running on its default
+    # port, which would otherwise make this test flakily observe a real 200
+    # response instead of the connect-error path it exists to check.
+    # Mocked against 127.0.0.1 (the resolved IP _check_ollama pins its
+    # request to via pin_resolved_host), not the "localhost" hostname in
+    # base_url -- see test_ollama_200_is_success's comment.
+    respx.post("http://127.0.0.1:11434/api/chat").mock(side_effect=httpx.ConnectError("connection refused"))
     result = await check_ai_connection("ollama", {"base_url": "http://localhost:11434"}, model="llama3.2:3b")
     assert result.ok is False
     assert "reach ollama" in result.message.lower()

@@ -17,7 +17,7 @@ from app.ai import deepseek_client, groq_client, kimi_client, mistral_client, op
 from app.ai.connection_test import test_ai_connection
 from app.auth.rbac import CurrentUser, bearer_scheme, get_current_user, require_permission
 from app.core.db import get_db
-from app.core.url_safety import assert_safe_outbound_url
+from app.core.url_safety import assert_safe_outbound_url, pin_resolved_host
 from app.models.user import ROLE_PERMISSIONS, User
 
 logger = logging.getLogger(__name__)
@@ -214,9 +214,14 @@ async def ai_list_models(
         base_url = payload.credentials.get("base_url", "").rstrip("/")
         if base_url:
             try:
-                await assert_safe_outbound_url(base_url)
+                resolved_ip = await assert_safe_outbound_url(base_url)
+                # Pin to the validated IP -- see url_safety.py's
+                # assert_safe_outbound_url docstring on why re-resolving
+                # base_url's hostname here would reopen the DNS-rebinding
+                # TOCTOU this check exists to close.
+                pinned_url, host_header = pin_resolved_host(base_url, resolved_ip)
                 async with httpx.AsyncClient(timeout=10) as client:
-                    r = await client.get(f"{base_url}/api/tags")
+                    r = await client.get(f"{pinned_url}/api/tags", headers={"Host": host_header})
                 if r.status_code == 200:
                     names = parse_ollama_tags_response(r.json())
                     if names:

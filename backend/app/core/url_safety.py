@@ -50,8 +50,19 @@ _OLLAMA_DEFAULT_PORT = 11434
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
 
 
-async def assert_safe_outbound_url(url: str) -> None:
-    """Raises ValueError if `url` is not safe to fetch server-side.
+async def assert_safe_outbound_url(url: str) -> str:
+    """Raises ValueError if `url` is not safe to fetch server-side. Returns
+    one resolved, validated IP address literal (deterministically chosen via
+    `sorted()`, same convention as resolve_safe_address below) for the
+    caller to actually connect to.
+
+    Callers MUST use the returned address for the real outbound request
+    (via pin_resolved_host below) instead of re-resolving `url`'s hostname
+    themselves -- otherwise this check is a DNS-rebinding TOCTOU exactly
+    like the one resolve_safe_address's own docstring documents fixing for
+    the Security Assessment Toolkit: validate 8.8.8.8 here, then have httpx
+    independently re-resolve the same hostname to a private address for the
+    actual connection, and this whole function is decorative.
 
     async (not a plain function) specifically so the DNS-resolution step
     below runs via the event loop's own resolver (asyncio.AbstractEventLoop.
@@ -121,6 +132,34 @@ async def assert_safe_outbound_url(url: str) -> None:
                 "this restriction exists to stop this feature being used to probe/fingerprint "
                 "other internal services."
             )
+
+    # Deterministic pick (sorted, not set/getaddrinfo iteration order) so
+    # the address just validated above is the exact one callers pin their
+    # real connection to via pin_resolved_host -- see this function's
+    # docstring on why re-resolving `url`'s hostname a second time for the
+    # actual request would silently reopen the DNS-rebinding TOCTOU.
+    return sorted(addrs)[0]
+
+
+def pin_resolved_host(url: str, resolved_ip: str) -> tuple[str, str]:
+    """Rewrites `url` to point at `resolved_ip` (the exact address
+    `assert_safe_outbound_url` just validated) instead of its original
+    hostname, and returns `(pinned_url, original_host_header)`.
+
+    Callers must issue their real request against `pinned_url` and send
+    `original_host_header` as the `Host` header, so the connection goes to
+    the address that was actually checked -- never letting the HTTP client
+    re-resolve the original hostname itself (which is the TOCTOU this
+    exists to close; see assert_safe_outbound_url's docstring)."""
+    parsed = urlparse(url)
+    host_header = parsed.hostname or ""
+    if parsed.port is not None:
+        host_header = f"{host_header}:{parsed.port}"
+    netloc = f"[{resolved_ip}]" if ":" in resolved_ip else resolved_ip
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    pinned = parsed._replace(netloc=netloc)
+    return pinned.geturl(), host_header
 
 
 def assert_valid_hostname_syntax(value: str) -> None:

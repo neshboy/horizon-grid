@@ -23,7 +23,7 @@ from typing import Optional
 import httpx
 
 from app.ai.bedrock_client import BEARER_TOKEN_ENV_LOCK
-from app.core.url_safety import assert_safe_outbound_url
+from app.core.url_safety import assert_safe_outbound_url, pin_resolved_host
 
 _MINIMAL_SYSTEM = "You are a connection test. Reply with exactly one word: pong"
 _MINIMAL_USER = "ping"
@@ -337,13 +337,18 @@ async def _check_ollama(base_url: str, model: str) -> AITestResult:
     if not base_url or not model:
         return AITestResult(ok=False, message="Ollama base URL and model are both required.")
     try:
-        await assert_safe_outbound_url(base_url)
+        resolved_ip = await assert_safe_outbound_url(base_url)
     except ValueError as exc:
         return AITestResult(ok=False, message=f"Refusing to connect to {base_url}: {exc}")
+    # Pin to the exact IP just validated -- see app/core/url_safety.py's
+    # assert_safe_outbound_url docstring: letting httpx re-resolve base_url's
+    # hostname here would reopen the DNS-rebinding TOCTOU this check exists
+    # to close.
+    pinned_url, host_header = pin_resolved_host(base_url, resolved_ip)
     async with httpx.AsyncClient(timeout=60) as client:
         try:
             r = await client.post(
-                f"{base_url}/api/chat",
+                f"{pinned_url}/api/chat",
                 json={
                     "model": model,
                     "messages": [
@@ -353,6 +358,7 @@ async def _check_ollama(base_url: str, model: str) -> AITestResult:
                     "stream": False,
                     "options": {"num_predict": 8, "temperature": 0},
                 },
+                headers={"Host": host_header},
             )
         except httpx.ConnectError as exc:
             return AITestResult(ok=False, message=f"Could not reach Ollama at {base_url} -- is it running? ({exc})")

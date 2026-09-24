@@ -70,7 +70,7 @@ class _TimeoutRecordingAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    async def post(self, url, json=None):
+    async def post(self, url, json=None, headers=None):
         return _FakeChatResponse()
 
 
