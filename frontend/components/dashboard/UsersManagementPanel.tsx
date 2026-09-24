@@ -8,7 +8,7 @@
  * this component is UX only, never the authorization boundary.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createUser, listUsers, resetUserPassword, setUserActive, updateUser } from "@/lib/api";
 import type { CurrentUser, Role, User } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,18 @@ export function UsersManagementPanel({ currentUser }: UsersManagementPanelProps)
   const [resettingUser, setResettingUser] = useState<User | null>(null);
   const [togglingUser, setTogglingUser] = useState<User | null>(null);
 
+  // Guards against out-of-order responses: refresh() is called both from
+  // the filter/sort/page useEffect below and from four dialog completion
+  // callbacks (onCreated/onSaved/onReset/onToggled), with no AbortController
+  // or "cancelled" flag. If a user changes two filters in quick succession
+  // (or a dialog's refresh lands while a filter-triggered refresh is still
+  // in flight) and the responses resolve out of order, the slower/older
+  // response would otherwise unconditionally overwrite users/total with
+  // stale data that no longer matches the currently-selected filters.
+  const latestRequestIdRef = useRef(0);
+
   const refresh = () => {
+    const requestId = ++latestRequestIdRef.current;
     setLoading(true);
     listUsers({
       search: appliedSearch || undefined,
@@ -62,12 +73,18 @@ export function UsersManagementPanel({ currentUser }: UsersManagementPanelProps)
       sortDir,
     })
       .then((res) => {
+        if (latestRequestIdRef.current !== requestId) return;
         setUsers(res.items);
         setTotal(res.total);
         setError(null);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load users"))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (latestRequestIdRef.current !== requestId) return;
+        setError(err instanceof Error ? err.message : "Failed to load users");
+      })
+      .finally(() => {
+        if (latestRequestIdRef.current === requestId) setLoading(false);
+      });
   };
 
   useEffect(() => {
