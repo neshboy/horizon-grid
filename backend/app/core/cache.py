@@ -69,15 +69,26 @@ def cache_key(provider_id: str, ioc_type: str, ioc_value: str) -> str:
 
 
 async def get_cached_result(provider_id: str, ioc_type: str, ioc_value: str) -> Optional[dict[str, Any]]:
-    raw = await get_redis().get(cache_key(provider_id, ioc_type, ioc_value))
+    # Bounded like RateLimiter.allow() below -- without this, a Redis
+    # instance that's merely slow/hung (not erroring) leaves this await
+    # pending forever. app/providers/orchestrator.py's _run_with_policy
+    # wraps this call in a try/except Exception specifically to degrade to
+    # a live fetch on any cache-read failure, but that handler can never
+    # fire if nothing ever raises -- it just hangs the whole provider
+    # fan-out for this one provider instead of degrading.
+    raw = await asyncio.wait_for(
+        get_redis().get(cache_key(provider_id, ioc_type, ioc_value)), timeout=_REDIS_CALL_TIMEOUT_SECONDS
+    )
     return json.loads(raw) if raw else None
 
 
 async def set_cached_result(
     provider_id: str, ioc_type: str, ioc_value: str, payload: dict[str, Any], ttl_seconds: int
 ) -> None:
-    await get_redis().set(
-        cache_key(provider_id, ioc_type, ioc_value), json.dumps(payload, default=str), ex=ttl_seconds
+    # Same rationale as get_cached_result above.
+    await asyncio.wait_for(
+        get_redis().set(cache_key(provider_id, ioc_type, ioc_value), json.dumps(payload, default=str), ex=ttl_seconds),
+        timeout=_REDIS_CALL_TIMEOUT_SECONDS,
     )
 
 
@@ -94,8 +105,20 @@ class RateLimiter:
         r = get_redis()
         try:
             current = await asyncio.wait_for(r.incr(self._key), timeout=_REDIS_CALL_TIMEOUT_SECONDS)
-            if current == 1:
-                await asyncio.wait_for(r.expire(self._key, self._window_seconds), timeout=_REDIS_CALL_TIMEOUT_SECONDS)
+            # expire(..., nx=True) unconditionally (not just when
+            # current == 1) is what actually closes the race: the old
+            # `if current == 1` gate set the TTL in a separate round trip
+            # from the incr() that created the key, so a transient
+            # failure/timeout on just THIS call left the key permanently
+            # without a TTL -- current==1 never happens again for that key,
+            # so expire() was never retried, and the counter climbed forever
+            # with no window reset, permanently locking out whoever it was
+            # keyed on. nx=True (Redis 7+, EXPIRE's NX flag) is a no-op if a
+            # TTL already exists, so calling it every time is safe and lets
+            # a later call self-heal a TTL an earlier call failed to set.
+            await asyncio.wait_for(
+                r.expire(self._key, self._window_seconds, nx=True), timeout=_REDIS_CALL_TIMEOUT_SECONDS
+            )
         except (RedisError, asyncio.TimeoutError) as exc:
             raise RateLimiterUnavailable(f"Redis unavailable for rate limiting: {exc!r}") from exc
         return current <= self._max_calls

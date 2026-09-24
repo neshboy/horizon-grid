@@ -100,7 +100,7 @@ async def test_allow_still_works_normally_when_redis_is_healthy(monkeypatch):
             self.calls.append(key)
             return len(self.calls)
 
-        async def expire(self, key, ttl):
+        async def expire(self, key, ttl, nx=False):
             pass
 
     fake = _HealthyRedis()
