@@ -96,7 +96,10 @@ class MistralClient:
         body = {
             "model": self._model_id,
             "temperature": 0.1,
-            "max_completion_tokens": max_tokens or self._max_tokens,
+            # Mistral's chat/completions API recognizes "max_tokens", not
+            # "max_completion_tokens" (an OpenAI o1-series-specific param
+            # name) -- was silently not capping generation length.
+            "max_tokens": max_tokens or self._max_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

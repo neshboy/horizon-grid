@@ -260,7 +260,15 @@ async def _get_ai_client(backend_override: Optional[str] = None) -> tuple[_AICli
     if config is not None:
         backend = config["backend"]
         model_id = config["model_id"] or _model_id_for_backend(backend, get_settings())
-        client = await _build_client(backend, config["credentials"], config["model_id"])
+        # Real bug: this used to pass the RAW config["model_id"] here instead
+        # of the just-resolved `model_id` above -- if config["model_id"] was
+        # an empty string (falsy, the common case from the runtime AI
+        # Providers UI leaving the model field blank), _build_client forwarded
+        # "" straight into e.g. GeminiClient(model_id=""), whose own
+        # `model_id if model_id is not None else settings.gemini_model_id`
+        # check treats "" as "explicitly provided" and never falls back to
+        # the real default -- breaking every backend this way, not just one.
+        client = await _build_client(backend, config["credentials"], model_id)
     else:
         settings = get_settings()
         backend = backend_override or settings.ai_backend
