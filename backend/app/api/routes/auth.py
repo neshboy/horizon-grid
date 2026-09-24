@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.rbac import get_current_user, CurrentUser
@@ -57,6 +57,20 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     # Self-registration only bootstraps the very first admin. Every subsequent
     # account must be created by an existing admin from the Administration page,
     # so nobody accidentally lands as Analyst via the public form.
+    #
+    # The "any user exist yet?" check below is a classic check-then-act race:
+    # with an empty users table, two concurrent /auth/register calls can both
+    # observe zero rows before either commits, so both create an ADMIN user.
+    # A Postgres advisory lock (same pattern as
+    # app/core/security_assessment.py's is_primary race fix) closes this: a
+    # cross-connection, cross-process mutex (this backend runs multiple
+    # replicas in k8s) that's automatically released on commit/rollback, so
+    # a second concurrent caller blocks here until the first's INSERT+commit
+    # has fully landed, then re-checks and correctly sees a real admin exists.
+    # Keyed on a fixed string (there's only ever one "is this the bootstrap
+    # registration" gate, unlike the per-lookup_id key used there).
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('auth:bootstrap_admin_registration', 0))"))
+
     user_count = await db.execute(select(User.id))
     if user_count.first():
         raise HTTPException(
