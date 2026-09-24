@@ -18,8 +18,13 @@ class UUIDPrimaryKeyMixin:
 
 
 class TimestampMixin:
+    # index=True: created_at is the primary ORDER BY / WHERE column for
+    # nearly every list and dashboard query across every table that uses
+    # this mixin (see migration b3f0587f2493, which adds the matching
+    # index to the 20 already-existing tables -- this only affects schema
+    # generation for new tables/fresh installs going forward).
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), index=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
