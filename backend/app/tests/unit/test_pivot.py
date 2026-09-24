@@ -58,7 +58,11 @@ def test_limit_is_respected_and_clamped():
     edges = [edge(target_value=f"host{i}.test", confidence=0.5 + i * 0.01) for i in range(20)]
     assert len(rank_pivots(SEED, edges, limit=5)) == 5
     assert len(rank_pivots(SEED, edges, limit=1000)) == 20  # clamped to available, but capped internally at 50
-    assert len(rank_pivots(SEED, edges, limit=0)) == 1  # clamped to at least 1
+    # A caller-requested limit=0 must return zero pivots, not be silently
+    # bumped up to 1 -- real bug, reachable via
+    # GET /lookup/{id}/pivots?limit=0 (the route has no Query(ge=...) bound).
+    assert len(rank_pivots(SEED, edges, limit=0)) == 0
+    assert len(rank_pivots(SEED, edges, limit=-5)) == 0
 
 
 def test_case_insensitive_seed_matching():

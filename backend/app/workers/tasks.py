@@ -117,14 +117,33 @@ async def _run_osint_crawl_async() -> int:
         # actually cached. A provider outage or a run of individually-
         # failing targets would still log/return "refreshed cache for N
         # IOC(s)", silently overstating how much real work happened.
-        refreshed = 0
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            for ioc_value, ioc_type_str in targets:
+        #
+        # Bounded-concurrency fan-out across targets (semaphore-capped, not
+        # a bare gather): _crawl_one's own internet_intelligence_provider.run
+        # already fans each IOC's own 4 crawler sources out concurrently via
+        # asyncio.gather (app/crawler/collector.py::fetch()), so this outer
+        # loop used to be the one remaining serialization point -- with up to
+        # _MAX_IOCS_PER_RUN targets, total crawl time scaled linearly with
+        # target count instead of being bounded by the slowest single IOC.
+        # Capped at 5 concurrent targets (20 concurrent source requests at
+        # once) rather than firing all _MAX_IOCS_PER_RUN (25) at once, to
+        # avoid a burst of ~100 simultaneous outbound requests against
+        # rate-limited third-party providers.
+        semaphore = asyncio.Semaphore(5)
+
+        async def _crawl_one_bounded(ioc_value: str, ioc_type_str: str, client: httpx.AsyncClient) -> bool:
+            async with semaphore:
                 try:
-                    if await _crawl_one(ioc_value, ioc_type_str, client):
-                        refreshed += 1
+                    return await _crawl_one(ioc_value, ioc_type_str, client)
                 except Exception:  # noqa: BLE001 -- one bad target must not abort the whole run
                     logger.warning("Scheduled OSINT crawl failed for %r (%s)", ioc_value, ioc_type_str, exc_info=True)
+                    return False
+
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            results = await asyncio.gather(
+                *(_crawl_one_bounded(ioc_value, ioc_type_str, client) for ioc_value, ioc_type_str in targets)
+            )
+        refreshed = sum(1 for ok in results if ok)
 
         logger.info(
             "Scheduled OSINT crawl: refreshed cache for %d of %d attempted IOC(s)", refreshed, len(targets)

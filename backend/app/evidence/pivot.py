@@ -49,4 +49,9 @@ def rank_pivots(seed_value: str, edges: list[EdgeLike], limit: int = 10) -> list
         )
 
     pivots.sort(key=lambda p: (p["corroborating_providers"], p["confidence"]), reverse=True)
-    return pivots[: max(1, min(limit, 50))]
+    # Lower bound is 0, not 1: a caller-requested limit=0 (reachable via
+    # GET /lookup/{id}/pivots?limit=0 -- the route declares limit: int = 10
+    # with no Query(ge=..., le=...) constraint) must return zero pivots, not
+    # silently be bumped up to 1. Negative limits are also clamped to 0
+    # rather than falling through to Python's negative-slice semantics.
+    return pivots[: max(0, min(limit, 50))]
