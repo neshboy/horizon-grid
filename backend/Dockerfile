@@ -13,7 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # own backend process -- never exposed on the Docker network or the host.
 # This is a large (~1-2GB), heavy addition on purpose -- it's real offensive
 # tooling, added deliberately, not a transitive dependency.
-RUN curl -fsSL https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb -o /tmp/msfinstall \
+#
+# Pinned to a specific commit (not the mutable `master` branch) with a
+# checksum check before execution -- previously this fetched
+# .../master/... and piped straight into `sh`, so a compromised or
+# force-pushed master branch could execute arbitrary code as root during
+# every image build with no way to detect it. To roll the pin forward,
+# fetch the new commit's raw URL, verify the checksum out-of-band, and
+# update both MSFINSTALL_COMMIT and MSFINSTALL_SHA256 together.
+ENV MSFINSTALL_COMMIT=21d459344aa291e9d8c0abdd6cbd9806fdb84791
+ENV MSFINSTALL_SHA256=d12fea4d1339ebecb09d8cc36920d9f5e5e7e9fffbe092b1e1cd09255cc16825
+RUN curl -fsSL "https://raw.githubusercontent.com/rapid7/metasploit-omnibus/${MSFINSTALL_COMMIT}/config/templates/metasploit-framework-wrappers/msfupdate.erb" -o /tmp/msfinstall \
+    && echo "${MSFINSTALL_SHA256}  /tmp/msfinstall" | sha256sum -c - \
     && chmod 755 /tmp/msfinstall \
     && /tmp/msfinstall \
     && rm -f /tmp/msfinstall
