@@ -19,6 +19,16 @@ RUN npm install
 
 COPY --chown=node:node . .
 
+# docker-compose.yml mounts an anonymous volume over /app/.next so the dev
+# server's build cache survives independently of the ./frontend bind mount.
+# That path doesn't exist yet at this point in the image (Next.js only
+# creates it at runtime), so Docker would otherwise initialize the volume
+# root-owned -- causing "EACCES: permission denied, open
+# '/app/.next/package.json'" for the non-root `node` user at container
+# start. Pre-creating it now, chowned, means the volume is seeded from an
+# already-correctly-owned directory.
+RUN mkdir -p .next && chown node:node .next
+
 EXPOSE 3000
 
 CMD ["npm", "run", "dev"]
