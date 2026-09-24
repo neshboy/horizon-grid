@@ -14,6 +14,7 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { List, Waypoints } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -147,9 +148,31 @@ function GraphListView({ nodes, links }: { nodes: GraphNodeDatum[]; links: Graph
           const target = nodesById.get(link.target);
           return (
             <tr key={link.id} className="border-b border-border/50 last:border-none">
-              <td className="py-2 pr-3">{source?.value ?? link.source}</td>
+              <td className="py-2 pr-3">
+                {source ? (
+                  <Link
+                    href={`/lookup/new?value=${encodeURIComponent(source.value)}`}
+                    className="underline-offset-2 hover:underline focus-visible:underline"
+                  >
+                    {source.value}
+                  </Link>
+                ) : (
+                  link.source
+                )}
+              </td>
               <td className="py-2 pr-3 text-muted-foreground">{formatLabel(link.relationship)}</td>
-              <td className="py-2 pr-3">{target?.value ?? link.target}</td>
+              <td className="py-2 pr-3">
+                {target ? (
+                  <Link
+                    href={`/lookup/new?value=${encodeURIComponent(target.value)}`}
+                    className="underline-offset-2 hover:underline focus-visible:underline"
+                  >
+                    {target.value}
+                  </Link>
+                ) : (
+                  link.target
+                )}
+              </td>
               <td className="py-2 pr-3">{Math.round((link.confidence ?? 0) * 100)}%</td>
               <td className="py-2 text-muted-foreground">{link.provenance || "unknown"}</td>
             </tr>
