@@ -292,8 +292,9 @@ async def test_user(db_session):
     # ones. A unique email per test invocation (the same pattern already
     # established in test_pentest_api.py's _unique_email) means one test's
     # cleanup failure can never block any other test's own fixture.
+    user_email = f"stream-persistence-test-{uuid.uuid4().hex[:10]}@example.test"
     user = User(
-        email=f"stream-persistence-test-{uuid.uuid4().hex[:10]}@example.test",
+        email=user_email,
         hashed_password=hash_password("irrelevant"),
         full_name="Stream Persistence Test",
         role=Role.ANALYST,
@@ -362,11 +363,15 @@ async def test_user(db_session):
     except Exception as exc:  # noqa: BLE001 -- see docstring above
         import logging
 
+        # user.email would look identical here, but the commits above already
+        # expired user's attributes (expire_on_commit=True); a lazy reload from
+        # this sync log call raises sqlalchemy.exc.MissingGreenlet, which itself
+        # escapes uncaught and defeats the whole point of this except block.
         logging.getLogger(__name__).warning(
             "test_user teardown could not fully clean up %s (%r) -- "
             "leaving an orphaned row under its own unique email; it will "
             "not block any other test.",
-            user.email, exc,
+            user_email, exc,
         )
 
 
