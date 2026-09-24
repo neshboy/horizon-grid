@@ -16,9 +16,11 @@
 
 ### [⬇️ Download the latest installer (Windows `.exe` / Linux `.deb`)](https://github.com/neshboy/horizon-grid/releases/latest)
 
-**[Quick Start](#-installation--quick-start)** · **[Features](#-features)** · **[Providers](#-provider-intelligence)** · **[Docs](#-documentation)** · **[Security](#-security)**
+**[Quick Start](#-installation--quick-start)** · **[Features](#-features)** · **[Providers](#-provider-intelligence)** · **[Screenshots](#-screenshots)** · **[Docs](#-documentation)** · **[Security](#-security)**
 
 </div>
+
+![Investigating CVE-2024-3400: real CISA KEV and NIST NVD data, correlated OSINT findings, and an AI second-opinion panel](docs/assets/screenshots/investigation-cve.png)
 
 ---
 
@@ -365,6 +367,18 @@ systemd-backed CLI (`start` / `stop` / `restart`).
 To build it yourself instead of downloading: `linux/build-deb.sh` (requires
 a Debian/Ubuntu host, e.g. `docker run --rm -v "$PWD":/src -w /src debian:12
 bash linux/build-deb.sh`).
+
+## 📸 Screenshots
+
+All screenshots below are from the real, running application (synthetic/demo indicators, no confidential data) — none are mockups.
+
+**Executive dashboard** — real KPI tiles backed by live SQL aggregations, plus a 24h provider-health breakdown:
+
+![Executive dashboard: active investigations, critical IOC count, average threat score, provider health, and AI success rate, all from real live queries](docs/assets/screenshots/dashboard.png)
+
+**Provider health matrix** — per-provider status, success rate, latency, and consecutive-failure streaks, with unconfigured providers shown honestly as `UNKNOWN` rather than hidden:
+
+![Provider health table listing every registered IOC provider with real status/success-rate/latency columns](docs/assets/screenshots/provider-health.png)
 
 ## 📚 Documentation
 
