@@ -74,6 +74,17 @@ async def test_otx_200_is_success():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_otx_403_is_auth_failure():
+    respx.get("https://otx.alienvault.com/api/v1/indicators/IPv4/8.8.8.8/general").mock(
+        return_value=httpx.Response(403)
+    )
+    result = await check_provider_connection("otx", {"api_key": "bad-key"})
+    assert result.ok is False
+    assert "Authentication failed" in result.message
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_abusech_bad_auth_key_query_status_is_failure_despite_http_200():
     # abuse.ch APIs return HTTP 200 even on bad auth -- the real signal is
     # the query_status field, not the status code.
@@ -141,6 +152,7 @@ async def test_nvd_403_is_auth_failure():
     )
     result = await check_provider_connection("nvd", {"api_key": "bad-key"})
     assert result.ok is False
+    assert "Authentication failed" in result.message
 
 
 @pytest.mark.asyncio
@@ -209,6 +221,7 @@ async def test_google_safe_browsing_401_is_auth_failure():
     )
     result = await check_provider_connection("google_safe_browsing", {"api_key": "bad-key"})
     assert result.ok is False
+    assert "check your API key" in result.message
 
 
 @pytest.mark.asyncio

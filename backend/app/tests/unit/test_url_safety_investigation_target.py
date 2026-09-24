@@ -72,9 +72,38 @@ def test_globally_routable_accepts_domain_resolving_to_loopback(monkeypatch):
     assert_globally_routable_target("domain", "self-test.local")
 
 
-def test_globally_routable_rejects_flag_shaped_domain_value():
-    with pytest.raises(ValueError):
+def test_globally_routable_rejects_flag_shaped_domain_value(monkeypatch):
+    """Confirms the flag-shaped value is rejected by the hostname-syntax
+    guard itself, not merely because it coincidentally also fails to
+    resolve over real DNS (which would raise a ValueError for an unrelated
+    reason and let this test pass even if the syntax guard were deleted).
+    monkeypatch getaddrinfo to blow up if it's ever reached, and match on
+    the syntax-specific message, so this actually pins down which check
+    fired."""
+    import socket
+
+    def _fail_if_dns_reached(host, port):
+        raise AssertionError(
+            "assert_valid_hostname_syntax should reject this value before any DNS lookup"
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fail_if_dns_reached)
+    with pytest.raises(ValueError, match="not a syntactically valid hostname"):
         assert_globally_routable_target("domain", "--script=vuln.example.com")
+
+
+def test_globally_routable_rejects_domain_that_fails_dns_resolution(monkeypatch):
+    """Negative path not covered elsewhere in this file: a syntactically
+    valid domain that cannot be resolved at all must surface as a
+    ValueError (wrapping socket.gaierror), not an unhandled exception."""
+    import socket
+
+    def _unresolvable(host, port):
+        raise socket.gaierror("nodename nor servname provided, or not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _unresolvable)
+    with pytest.raises(ValueError, match="Could not resolve host"):
+        assert_globally_routable_target("domain", "nonexistent.example.invalid")
 
 
 def test_globally_routable_accepts_a_url_target_whose_host_is_a_globally_routable_ipv6_literal():

@@ -61,7 +61,13 @@ async def test_unparseable_tld_response_maps_to_no_data(provider, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_domain_name_in_response_maps_to_no_data(provider, monkeypatch):
-    monkeypatch.setattr("app.providers.whois_rdap.pywhois.whois", lambda *a, **k: {})
+    # Non-empty response (truthy dict) that simply lacks a "domain_name" key --
+    # distinct from a fully empty response, so this specifically exercises the
+    # `entry.get("domain_name")` fallback rather than the `not entry` check.
+    monkeypatch.setattr(
+        "app.providers.whois_rdap.pywhois.whois",
+        lambda *a, **k: {"registrar": "Example Registrar"},
+    )
     result = await provider._fetch_whois("example.test", IOCType.DOMAIN)
     assert result.status == ProviderStatus.NO_DATA
 

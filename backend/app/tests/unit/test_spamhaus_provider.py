@@ -56,7 +56,7 @@ async def test_query_error_code_is_never_reported_as_malicious():
     assert result.data["verdict"] == "unknown"
     assert result.data["listed"] is False
     assert result.status == ProviderStatus.ERROR
-    assert "reject" in result.error_message.lower() or "query" in result.error_message.lower()
+    assert "reject" in result.error_message.lower() and "query" in result.error_message.lower()
 
 
 @pytest.mark.asyncio
@@ -66,6 +66,8 @@ async def test_query_error_code_for_ip_zen_lookup_is_also_never_malicious():
         result = await spamhaus_provider.fetch("8.8.8.8", IOCType.IPV4, client=None)
     assert result.data["verdict"] == "unknown"
     assert result.data["listed"] is False
+    assert result.status == ProviderStatus.ERROR
+    assert "query" in result.error_message.lower()
 
 
 @pytest.mark.asyncio

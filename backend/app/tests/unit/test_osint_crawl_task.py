@@ -59,6 +59,28 @@ async def test_refreshed_count_reflects_actual_cache_writes_not_attempts():
 
 
 @pytest.mark.asyncio
+async def test_refreshed_count_is_zero_when_every_target_fails():
+    """Provider outage: every attempted target ends in ProviderStatus.ERROR
+    (no exception, no OK) -- the returned count must be 0, not len(targets)
+    attempted, and nothing gets written to the cache."""
+    targets = [("evil.example", "domain"), ("also-evil.example", "domain")]
+
+    async def fake_run(ioc_value, ioc_type, client):
+        return _result(ioc_value, ioc_type, ProviderStatus.ERROR)
+
+    with (
+        patch.object(tasks_module, "_recent_crawlable_iocs", AsyncMock(return_value=targets)),
+        patch.object(tasks_module.internet_intelligence_provider, "run", side_effect=fake_run),
+        patch.object(tasks_module, "set_cached_result", AsyncMock()) as mock_set_cached,
+        patch.object(tasks_module.db_module, "_engine", AsyncMock()),
+    ):
+        refreshed = await tasks_module._run_osint_crawl_async()
+
+    assert refreshed == 0
+    mock_set_cached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_a_crawl_exception_does_not_inflate_the_refreshed_count_or_abort_the_run():
     targets = [("crashes.example", "domain"), ("fine.example", "domain")]
 

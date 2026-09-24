@@ -446,6 +446,13 @@ async def test_openrouter_network_timeout_is_reported_cleanly():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_no_key_fails_before_any_request():
+    result = await check_ai_connection("anthropic", {})
+    assert result.ok is False
+    assert "No API key" in result.message
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_anthropic_200_is_success():
     respx.post("https://api.anthropic.com/v1/messages").mock(
@@ -455,6 +462,8 @@ async def test_anthropic_200_is_success():
     )
     result = await check_ai_connection("anthropic", {"api_key": "mock-anthropic-key"})
     assert result.ok is True
+    assert result.model == "claude-sonnet-4-5-20250929"
+    assert result.latency_ms is not None
 
 
 @pytest.mark.asyncio
@@ -467,6 +476,13 @@ async def test_anthropic_401_is_auth_failure():
 
 
 @pytest.mark.asyncio
+async def test_gemini_no_key_fails_before_any_request():
+    result = await check_ai_connection("gemini", {})
+    assert result.ok is False
+    assert "No API key" in result.message
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_gemini_200_is_success():
     respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
@@ -476,6 +492,8 @@ async def test_gemini_200_is_success():
     )
     result = await check_ai_connection("gemini", {"api_key": "mock-gemini-key"})
     assert result.ok is True
+    assert result.model == "gemini-2.0-flash"
+    assert result.latency_ms is not None
 
 
 @pytest.mark.asyncio

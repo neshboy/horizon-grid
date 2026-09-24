@@ -60,6 +60,24 @@ def test_frontend_deployment_command_runs_a_build_before_starting():
         f"command was: {command!r}"
     )
 
+    # The assertion above only proves the word "build" appears *somewhere* in the
+    # command -- it does not prove the build actually happens *before* the server
+    # starts, which is the whole point of this test (and this exact bug: a build step
+    # present but ordered after -- or never actually gating -- server startup would
+    # still crash-loop the same way). Verify ordering explicitly.
+    build_index = command.index("build")
+    start_markers = [marker for marker in ("next start", "npm start", "server.js") if marker in command]
+    assert start_markers, (
+        "k8s/base/frontend-deployment.yaml's command does not appear to start the server "
+        f"at all (found none of 'next start' / 'npm start' / 'server.js'). command was: {command!r}"
+    )
+    earliest_start_index = min(command.index(marker) for marker in start_markers)
+    assert build_index < earliest_start_index, (
+        "k8s/base/frontend-deployment.yaml's command runs the build step *after* (or "
+        "without ever gating) starting the server, not before -- the build must complete "
+        f"before the server process starts. command was: {command!r}"
+    )
+
 
 @pytest.mark.skipif(
     not (_FRONTEND_DEPLOYMENT.exists() and _NEXT_CONFIG.exists()),
@@ -104,9 +122,27 @@ def test_frontend_deployment_command_matches_compose_prod_standalone_pattern():
     )
 
     command = _frontend_container_command()
-    for required_fragment in ("npm run build", ".next/standalone/.next/static", "node .next/standalone/server.js"):
+    # Order matters here, not just presence: the docstring above (and the compose_prod
+    # command being mirrored) require build -> copy static into standalone -> run
+    # standalone server.js, in that order. Checking presence alone would still pass for
+    # a manifest that ran these same fragments in the wrong order (e.g. starting the
+    # server before the static assets were copied in, or before the build even ran).
+    required_fragments_in_order = (
+        "npm run build",
+        ".next/standalone/.next/static",
+        "node .next/standalone/server.js",
+    )
+    fragment_positions = []
+    for required_fragment in required_fragments_in_order:
         assert required_fragment in command, (
             f"k8s/base/frontend-deployment.yaml's command is missing {required_fragment!r}, "
             "which docker-compose.prod.yml's already-verified frontend.command relies on -- "
             f"command was: {command!r}"
         )
+        fragment_positions.append(command.index(required_fragment))
+    assert fragment_positions == sorted(fragment_positions), (
+        "k8s/base/frontend-deployment.yaml's command contains all of "
+        f"{required_fragments_in_order!r} but not in the build -> copy static -> run "
+        "standalone server order that docker-compose.prod.yml's frontend.command uses -- "
+        f"command was: {command!r}"
+    )

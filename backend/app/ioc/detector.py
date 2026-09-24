@@ -200,7 +200,13 @@ def value_matches_ioc_type(value: str, ioc_type: IOCType) -> bool:
     check at all -- the ioc_type==UNKNOWN rejection only ever ran against
     the *auto-detected* type, never against a hint.
     """
-    if not value:
+    # .strip() here too (not just `not value`), despite the docstring's
+    # "assumed already stripped" contract: both current callers do strip
+    # first, but this is a general-purpose validation primitive, and a
+    # future caller that forgets to pre-strip should not get `True` back
+    # for a whitespace-only value on any of the free-text IOC types that
+    # otherwise fall through to the final `return True` below.
+    if not value or not value.strip():
         return False
 
     if ioc_type == IOCType.IPV4:

@@ -29,7 +29,22 @@ def test_prod_compose_backend_command_still_starts_msfrpcd():
     next_service_markers = [text.index(m, backend_start + 1) for m in ("\n  celery_worker:", "\n  celery_beat:", "\n  frontend:") if m in text[backend_start + 1:]]
     backend_end = min(next_service_markers) if next_service_markers else len(text)
     backend_block = text[backend_start:backend_end]
-    assert "msfrpcd" in backend_block, (
+    # Strip full-line comments first: this file's own header/explanatory
+    # comments (including this test's guard rationale) mention "msfrpcd" by
+    # name, so a naive substring search over the whole block would still
+    # pass even if the real `command:` override dropped msfrpcd entirely --
+    # exactly the regression this test exists to catch. Scoping to the
+    # command section (after stripping comments) makes sure the match comes
+    # from the actual command being run, not from surrounding prose.
+    code_only = "\n".join(
+        line for line in backend_block.splitlines() if not line.strip().startswith("#")
+    )
+    assert "command:" in code_only, (
+        "docker-compose.prod.yml's backend service no longer has a command: "
+        "override to check -- update this test if that override was intentionally removed."
+    )
+    command_section = code_only[code_only.index("command:"):]
+    assert "msfrpcd" in command_section, (
         "docker-compose.prod.yml's backend service command no longer starts msfrpcd -- "
         "this breaks Exploit Validation on every real installed deployment."
     )

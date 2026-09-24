@@ -39,6 +39,9 @@ def test_round_or_accepts_decimal_or_int_like_db_scalars():
     from decimal import Decimal
 
     assert _round_or(Decimal("12.345"), 0.0) == 12.35
+    # ...and a plain int (e.g. a driver that hands back a whole-number
+    # scalar) must be accepted too, per this test's own name.
+    assert _round_or(12, 0.0) == 12.0
 
 
 # --- _rate_or --------------------------------------------------------------

@@ -22,6 +22,13 @@ def test_missing_api_key_maps_to_error_not_no_data():
 def test_invalid_api_key_maps_to_error():
     status, error_message = map_query_status("invalid_api_key")
     assert status == ProviderStatus.ERROR
+    assert "Auth-Key" in error_message
+
+
+def test_unauthorized_maps_to_error():
+    status, error_message = map_query_status("unauthorized")
+    assert status == ProviderStatus.ERROR
+    assert "Auth-Key" in error_message
 
 
 def test_genuine_empty_result_maps_to_no_data():
@@ -33,3 +40,4 @@ def test_genuine_empty_result_maps_to_no_data():
 def test_hash_not_found_maps_to_no_data():
     status, error_message = map_query_status("hash_not_found")
     assert status == ProviderStatus.NO_DATA
+    assert error_message is None

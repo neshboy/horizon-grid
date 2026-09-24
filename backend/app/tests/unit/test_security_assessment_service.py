@@ -157,7 +157,7 @@ def test_rejects_url_target_resolving_to_internal_docker_service(monkeypatch):
         _validate_scope(lookup, "http://opensearch:9200/_cluster/health", True)
 
 
-def test_rejects_a_private_rfc1918_cidr_target():
+def test_rejects_a_private_rfc1918_docker_subnet_cidr_target_regression():
     """Regression test for the CIDR-typed sibling of the SSRF bug above:
     _validate_scope's CIDR branch size-checked the network but never called
     assert_globally_routable_target the way the IPV4/IPV6/DOMAIN/HOSTNAME/

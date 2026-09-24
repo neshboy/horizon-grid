@@ -82,6 +82,16 @@ def test_backend_deployment_starts_msfrpcd_before_uvicorn_and_bound_to_loopback(
         "msfrpcd must be started before uvicorn (backgrounded with '&', mirroring "
         f"docker-compose.yml) so it is listening by the time the app serves requests. command: {command!r}"
     )
+    # The ordering check above only confirms "msfrpcd" appears earlier in the text --
+    # it would still pass even if msfrpcd were NOT backgrounded (e.g. joined with ';'
+    # or '&&' instead of '&'), in which case msfrpcd would block in the foreground and
+    # uvicorn would never actually start. Explicitly verify the backgrounding '&' this
+    # assertion message already claims to check for.
+    assert "&" in command[msf_index:uvicorn_index], (
+        "msfrpcd must be backgrounded with '&' between the msfrpcd and uvicorn "
+        f"invocations, or uvicorn will never start because msfrpcd blocks in the "
+        f"foreground. command: {command!r}"
+    )
     # Bound to loopback only (matches docker-compose.yml and secret.example.yaml's
     # own documentation of this) -- never exposed outside the pod.
     assert "-a 127.0.0.1" in command and "-p 55553" in command, (

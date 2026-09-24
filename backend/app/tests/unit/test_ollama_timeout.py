@@ -37,6 +37,7 @@ httpx.AsyncClient for a real call_claude_json() call), not real elapsed
 time -- asserting the fix by actually waiting out a 120s-vs-300s window
 would make this test itself take minutes for no added confidence.
 """
+import httpx
 import pytest
 
 import app.ai.ollama_client as ollama_client_module
@@ -108,6 +109,50 @@ async def test_timeout_is_configurable_per_deployment_via_settings(monkeypatch):
     )
 
     assert _TimeoutRecordingAsyncClient.last_timeout == 900
+
+
+class _TimingOutAsyncClient:
+    """Stand-in for httpx.AsyncClient whose one POST call genuinely raises
+    httpx.TimeoutException (as the real httpx client does when a request
+    outlives the `timeout=` it was constructed with) -- so the error-path
+    half of call_claude_json (the `except httpx.TimeoutException` branch
+    that raises the RuntimeError described in this module's docstring) is
+    actually exercised, not just the happy-path timeout wiring covered
+    above."""
+
+    def __init__(self, timeout=None):
+        self._timeout = timeout
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, json=None, headers=None):
+        raise httpx.TimeoutException("timed out")
+
+
+@pytest.mark.asyncio
+async def test_call_claude_json_error_names_the_real_configured_timeout_not_the_old_120s(monkeypatch):
+    """When Ollama genuinely doesn't respond within the configured window,
+    the resulting RuntimeError (app/ai/service.py's retry loop only retries
+    pydantic.ValidationError -- see module docstring -- so this message is
+    the only signal an operator gets) must name the REAL configured
+    timeout_seconds, not a stale hardcoded 120, so the number in the log
+    line can be trusted."""
+    monkeypatch.setattr(ollama_client_module.httpx, "AsyncClient", _TimingOutAsyncClient)
+
+    client = await OllamaClient.create(
+        base_url="http://127.0.0.1:11434", model="llama3.2:3b", timeout_seconds=45
+    )
+
+    with pytest.raises(RuntimeError, match="45s"):
+        await client.call_claude_json(
+            system_prompt="system prompt",
+            user_prompt="user prompt",
+            json_schema={"type": "object"},
+        )
 
 
 def test_settings_default_gives_real_headroom_above_the_measured_187s_cold_load(monkeypatch):

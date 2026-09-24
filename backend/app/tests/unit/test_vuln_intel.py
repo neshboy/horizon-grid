@@ -232,6 +232,21 @@ async def test_cpe_match_is_case_and_punctuation_insensitive(client):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_network_failure_degrades_to_empty_list_not_an_exception(client):
+    """search_cves_by_service()'s own docstring promises this is a best-effort
+    enrichment step that "[n]ever raises for an ordinary "no results"/network
+    failure -- returns an empty list" so a scan finding must degrade
+    gracefully rather than blow up the whole enrichment pipeline when NVD is
+    unreachable."""
+    respx.get(_NVD_URL).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    results = await search_cves_by_service(client, "Uvicorn", "1.0", limit=5)
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_mismatched_cpe_product_is_excluded(client):
     """A CVE that keyword-matched but whose own CPE configuration names a
     different product entirely (not merely "no CPE data yet") must also be

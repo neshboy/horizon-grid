@@ -108,6 +108,41 @@ async def test_a_connect_timeout_is_retried_and_can_still_succeed(client):
     assert provider.call_count == 2, "must have retried after the first ConnectTimeout instead of giving up immediately"
 
 
+@pytest.mark.asyncio
+async def test_a_provider_that_hangs_past_the_timeout_budget_degrades_to_timeout_not_a_crash(client, monkeypatch):
+    """The autouse _no_real_cache fixture above says this file "exercises
+    only the retry/timeout policy" -- but until now nothing here actually
+    drove _run_with_policy() through its other non-OK exit branch: the
+    asyncio.wait_for() safety net (see its own comment in orchestrator.py on
+    why its timeout is provider_timeout_seconds + 1) that must degrade a
+    fetch() which hangs past the timeout budget into ProviderStatus.TIMEOUT,
+    not let asyncio.TimeoutError propagate out of this function uncaught."""
+
+    class _FastTimeoutSettings:
+        provider_max_retries = 0
+        provider_timeout_seconds = 0.05
+        provider_cache_ttl_seconds = 3600
+
+    monkeypatch.setattr(orchestrator_module, "get_settings", lambda: _FastTimeoutSettings())
+
+    class _HangingProvider(BaseProvider):
+        provider_id = "hanging-retry-test"
+        provider_name = "Hanging Retry Test Provider"
+        category = ProviderCategory.THREAT_INTEL
+        supported_types = {IOCType.IPV4}
+        requires_key = False
+        configured = True
+
+        async def fetch(self, ioc_value, ioc_type, client):
+            await asyncio.sleep(10)  # never finishes within the tiny timeout budget above
+            raise AssertionError("fetch() must have been cancelled by the timeout before reaching here")
+
+    provider = _HangingProvider()
+    result = await orchestrator_module._run_with_policy(provider, "1.2.3.4", IOCType.IPV4, client)
+    assert result.status == ProviderStatus.TIMEOUT
+    assert "Timed out after" in result.error_message
+
+
 # NOTE: cache-read/cache-write Redis-outage regression coverage for
 # _run_with_policy lives in test_orchestrator_cache_failure.py (added by a
 # separate audit pass) rather than being duplicated here -- it exercises the

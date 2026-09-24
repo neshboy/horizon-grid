@@ -121,6 +121,26 @@ async def test_both_db_and_env_unconfigured_still_short_circuits(client):
 
 
 @pytest.mark.asyncio
+async def test_disabled_override_short_circuits(client):
+    """DISABLED is a distinct short-circuit branch in run() (an admin turning
+    a provider off at runtime, separate from NOT_CONFIGURED), but nothing in
+    this file exercised it -- add the missing negative-path case alongside
+    the other run()-short-circuit tests above."""
+    from app.core.runtime_context import set_provider_overrides
+
+    provider = _StubProvider(requires_key=True, configured=True)  # would otherwise run fine
+    set_provider_overrides({"stub": {"enabled": False, "configured": True, "credentials": {}}})
+    try:
+        result = await provider.run("1.2.3.4", IOCType.IPV4, client)
+    finally:
+        set_provider_overrides({})
+    assert result.status == ProviderStatus.DISABLED
+    assert "disabled" in result.error_message.lower()
+    assert result.latency_ms is not None
+    assert result.latency_ms >= 0
+
+
+@pytest.mark.asyncio
 async def test_http_429_maps_to_rate_limited(client):
     async def fetch_impl(ioc_value, ioc_type, http_client):
         request = httpx.Request("GET", "https://example.test")

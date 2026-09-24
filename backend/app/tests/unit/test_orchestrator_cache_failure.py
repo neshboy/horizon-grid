@@ -132,3 +132,37 @@ async def test_run_all_providers_still_yields_the_result_when_the_cache_write_fa
     assert len(results) == 1, "the provider must not silently disappear from the investigation"
     assert results[0].status == ProviderStatus.OK
     assert results[0].data == {"ok": True, "verdict": "malicious"}
+
+
+@pytest.mark.asyncio
+async def test_run_all_providers_still_yields_the_result_when_the_cache_read_fails(monkeypatch):
+    """Same end-to-end guarantee as the cache-write test above, but for the
+    other half of the live reproduction described in this module's docstring
+    -- a Redis blip on the READ side must not make the provider vanish from
+    the investigation with zero results either."""
+
+    async def _broken_get_cached_result(*args, **kwargs):
+        raise ConnectionError("redis down on READ (simulated)")
+
+    monkeypatch.setattr(orchestrator_module, "get_cached_result", _broken_get_cached_result)
+
+    async def _noop_set_cached_result(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(orchestrator_module, "set_cached_result", _noop_set_cached_result)
+
+    from app.core import runtime_config as runtime_config_module
+
+    async def _empty_snapshot():
+        return {}
+
+    monkeypatch.setattr(runtime_config_module, "get_ioc_provider_snapshot", _empty_snapshot)
+    monkeypatch.setattr(orchestrator_module, "get_ioc_provider_snapshot", _empty_snapshot)
+
+    provider = _GoodProvider()
+    results = await orchestrator_module.run_all_providers_collected("1.2.3.4", IOCType.IPV4, [provider])
+
+    assert len(results) == 1, "the provider must not silently disappear from the investigation"
+    assert results[0].status == ProviderStatus.OK
+    assert results[0].data == {"ok": True, "verdict": "malicious"}
+    assert provider.call_count == 1, "a broken cache read must fall back to a live fetch, not skip it"

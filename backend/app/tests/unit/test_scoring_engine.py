@@ -392,10 +392,22 @@ def test_security_finding_floor_never_lowers_an_already_higher_score():
     assert with_low_finding.overall_risk_score == high_reputation.overall_risk_score
 
 
-def test_multiple_findings_at_the_top_severity_nudge_the_floor_higher_than_one():
-    one = score_investigation([], empty_correlation(), security_finding_severities=["high"])
-    two = score_investigation([], empty_correlation(), security_finding_severities=["high", "high"])
-    assert two.overall_risk_score >= one.overall_risk_score
+def test_security_finding_floor_uses_only_the_highest_severity_present():
+    """_top_severity() picks the single highest-ranked severity present and
+    ignores the rest entirely -- it does not sum or average across findings.
+    A lower-severity finding alongside a higher one must have ZERO additional
+    effect (["low", "critical"] must land exactly on the "critical" floor,
+    not somewhere above it), and duplicate findings at the same severity must
+    not raise the floor beyond what one already produces."""
+    critical_alone = score_investigation([], empty_correlation(), security_finding_severities=["critical"])
+    low_and_critical = score_investigation(
+        [], empty_correlation(), security_finding_severities=["low", "critical"]
+    )
+    assert low_and_critical.overall_risk_score == critical_alone.overall_risk_score
+
+    high_alone = score_investigation([], empty_correlation(), security_finding_severities=["high"])
+    duplicate_high = score_investigation([], empty_correlation(), security_finding_severities=["high", "high"])
+    assert duplicate_high.overall_risk_score == high_alone.overall_risk_score
 
 
 def test_security_finding_severity_accepts_enum_like_objects():

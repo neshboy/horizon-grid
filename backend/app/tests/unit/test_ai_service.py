@@ -21,7 +21,7 @@ fabricate" instruction and ignored it.
 import pytest
 from pydantic import ValidationError
 
-from app.ai.schemas import FinalAssessment
+from app.ai.schemas import FinalAssessment, ProviderSummary
 from app.ai.service import _prune_for_prompt, generate_final_assessment
 from app.correlation.engine import CorrelationResult
 from app.models.lookup import Verdict
@@ -163,6 +163,50 @@ async def test_correlation_edges_alone_are_enough_to_call_the_ai(monkeypatch):
     )
 
     assert called["value"], "AI must be consulted when correlation edges provide real evidence"
+
+
+@pytest.mark.asyncio
+async def test_provider_summaries_alone_are_enough_to_call_the_ai(monkeypatch):
+    """Symmetric case to test_correlation_edges_alone_are_enough_to_call_the_ai
+    above: the guard is "no summaries AND no edges" -- a provider that
+    returned real data is real evidence on its own, even with zero
+    correlation edges (e.g. no cross-IOC relationships were found), so the
+    AI must still be consulted rather than short-circuited.
+    """
+    called = {"value": False}
+
+    class _StubAIClient:
+        is_configured = True
+
+        async def call_claude_json(self, system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None):
+            called["value"] = True
+            return dict(_VALID_ASSESSMENT_PAYLOAD)
+
+    async def _stub_get_ai_client(backend_override=None):
+        return _StubAIClient(), "ollama", "stub-model"
+
+    monkeypatch.setattr("app.ai.service._get_ai_client", _stub_get_ai_client)
+
+    provider_summaries = [
+        ProviderSummary(
+            provider_id="virustotal",
+            what_it_knows="42 of 70 engines flagged this file as malicious.",
+            reputation="malicious",
+            detection_status="42/70 detections",
+            threat_level="high",
+            confidence="high",
+        )
+    ]
+
+    await generate_final_assessment(
+        ioc_value="x",
+        ioc_type="md5",
+        provider_summaries=provider_summaries,
+        correlation=_empty_correlation(),
+        scoring=_scoring_matching(_VALID_ASSESSMENT_PAYLOAD),
+    )
+
+    assert called["value"], "AI must be consulted when provider summaries provide real evidence, even with zero correlation edges"
 
 
 def _some_evidence_correlation() -> CorrelationResult:

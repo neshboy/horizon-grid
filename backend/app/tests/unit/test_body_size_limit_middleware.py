@@ -56,6 +56,16 @@ async def test_chunked_body_over_the_limit_split_across_many_small_chunks_is_rej
 
 
 @pytest.mark.asyncio
+async def test_content_length_header_over_the_limit_is_rejected_before_reading_body():
+    """The cheap early-rejection path: an honest Content-Length header that
+    already exceeds the cap should short-circuit with 413 before the body
+    is ever streamed/read at all."""
+    request = _fake_request([], content_length=str(_MAX_REQUEST_BODY_BYTES + 1))
+    response = await request_body_size_limit_middleware(request, _call_next_ok)
+    assert response.status_code == 413
+
+
+@pytest.mark.asyncio
 async def test_body_under_the_limit_with_no_content_length_header_passes_through():
     request = _fake_request([b"small body"], content_length=None)
     response = await request_body_size_limit_middleware(request, _call_next_ok)

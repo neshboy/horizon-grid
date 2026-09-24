@@ -127,6 +127,24 @@ def test_redis_only_module_falls_back_when_in_network_redis_unreachable(monkeypa
     assert (host, port) == ("localhost", 6379)
 
 
+def test_redis_only_module_neither_reachable_falls_back_to_published_pair_unchanged(monkeypatch):
+    """Mirrors test_neither_reachable_falls_back_to_published_pair_unchanged
+    above but for the Redis-only module's distinct `_resolve_redis_host_port`
+    helper: when neither the in-network `redis` hostname nor the
+    host-published `localhost:6379` mapping is reachable (e.g. infra simply
+    isn't up yet), it must still return a well-formed pair (the
+    host-published one) rather than raising, so the caller's own skipif
+    guard is what reports the "not reachable" condition."""
+
+    def fake_create_connection(address, timeout=1.0):
+        raise OSError("simulated: nothing up yet")
+
+    monkeypatch.setattr(socket, "create_connection", _as_context_manager(fake_create_connection))
+
+    host, port = _redis_only_module._resolve_redis_host_port()
+    assert (host, port) == ("localhost", 6379)
+
+
 def test_resolve_infra_host_port_helper_exists():
     """Directly documents the "fails before, passes after" property: this
     helper (and its Redis-only counterpart exercised above) did not exist at

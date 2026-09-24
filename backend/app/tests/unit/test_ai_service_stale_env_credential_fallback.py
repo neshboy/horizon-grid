@@ -83,6 +83,34 @@ async def test_groq_client_with_real_configured_credential_still_uses_it(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_groq_client_with_credentials_none_still_uses_the_settings_fallback_by_design(monkeypatch):
+    """Contrast case for this fix's own scope boundary, per _explicit_cred's
+    docstring: `credentials=None` (no ProviderRuntimeConfig row seeded at
+    all yet -- the legacy "no runtime config" case) is deliberately NOT
+    routed through _explicit_cred's "" coercion, and must keep falling back
+    to Settings/.env exactly as before. Without this, a future change that
+    accidentally widened the "" coercion to also cover the `credentials is
+    None` branch would silently break every legitimate .env-only deployment
+    that has never configured a runtime AI provider row -- and nothing else
+    in this file would catch that, since every other test here only ever
+    passes an explicit (non-None) credentials dict."""
+    import app.ai.groq_client as groq_client_module
+
+    monkeypatch.setattr(groq_client_module, "get_settings", lambda: _FakeSettingsWithStaleGroqKey())
+    # Force a fresh construction rather than potentially returning a
+    # singleton some earlier-run test in this process already cached against
+    # a different (unpatched) settings object -- see the identical pattern in
+    # test_ai_service_ollama_ssrf.py's test_no_credentials_override_uses_the_
+    # settings_default_and_it_passes_validation.
+    monkeypatch.setattr(groq_client_module, "_singleton", None)
+
+    client = await _build_client("groq", None, None)
+
+    assert client._api_key == "stale-env-key-never-entered-via-ui"
+    assert client.is_configured is True
+
+
+@pytest.mark.asyncio
 async def test_anthropic_client_with_no_configured_credential_does_not_fall_back_to_stale_env_key(monkeypatch):
     """Same bug, different backend -- confirms the fix isn't groq-specific."""
     import app.ai.anthropic_client as anthropic_client_module

@@ -16,8 +16,18 @@ def test_decode_bytes_converts_a_flat_dict():
 
 
 def test_decode_bytes_converts_nested_lists_and_dicts():
-    raw = {b"data": b"some output\n", b"busy": False, b"refs": [[b"CVE", b"2017-0144"]]}
-    assert _decode_bytes(raw) == {"data": "some output\n", "busy": False, "refs": [["CVE", "2017-0144"]]}
+    raw = {
+        b"data": b"some output\n",
+        b"busy": False,
+        b"refs": [[b"CVE", b"2017-0144"]],
+        b"RHOSTS": {b"required": True, b"type": b"address", b"desc": b"target address"},
+    }
+    assert _decode_bytes(raw) == {
+        "data": "some output\n",
+        "busy": False,
+        "refs": [["CVE", "2017-0144"]],
+        "RHOSTS": {"required": True, "type": "address", "desc": "target address"},
+    }
 
 
 def test_decode_bytes_leaves_non_bytes_scalars_untouched():

@@ -20,6 +20,20 @@ def test_no_override_set_returns_none():
     assert asyncio.run(_run()) is None
 
 
+def test_get_provider_override_returns_none_for_provider_not_in_overrides():
+    """Overrides are typically set for only a subset of providers (e.g. the
+    ones an investigation actually customized) -- querying a provider_id
+    that is not a key in that dict must return None via dict.get's default,
+    not raise a KeyError, so get_credential's fallback still kicks in for
+    every provider that wasn't overridden."""
+
+    async def _run():
+        set_provider_overrides({"virustotal": {"enabled": True, "configured": True, "credentials": {"api_key": "vt-value"}}})
+        return get_provider_override("otx")
+
+    assert asyncio.run(_run()) is None
+
+
 def test_get_credential_falls_back_when_no_override_set():
     async def _run():
         return get_credential("virustotal", "api_key", "fallback-value")

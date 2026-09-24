@@ -39,20 +39,24 @@ def _fake_provider_result(**overrides):
     return SimpleNamespace(**defaults)
 
 
-def _fake_lookup(final_assessment=None, provider_results=None):
+_UNSET = object()
+
+
+def _fake_lookup(final_assessment=_UNSET, provider_results=_UNSET):
+    """`final_assessment=_UNSET`/`provider_results=_UNSET` sentinels (rather
+    than defaulting to None/None and falling back with `x or <default>`) are
+    required so callers can explicitly pass final_assessment=None or
+    provider_results=[] and have that actually stick -- both None and [] are
+    falsy, so an `or`-based fallback would silently replace them with the
+    default instead, defeating tests that specifically want to exercise the
+    "missing final assessment" / "no provider results" code paths.
+    """
     import datetime
 
-    return SimpleNamespace(
-        id="00000000-0000-0000-0000-000000000000",
-        ioc_value="CVE-2021-44228",
-        ioc_type="cve",
-        final_verdict=Verdict.MALICIOUS,
-        risk_score=90.0,
-        confidence_score=95.0,
-        created_at=datetime.datetime(2026, 8, 14, tzinfo=datetime.timezone.utc),
-        provider_results=provider_results or [_fake_provider_result()],
-        final_assessment=final_assessment
-        or {
+    if provider_results is _UNSET:
+        provider_results = [_fake_provider_result()]
+    if final_assessment is _UNSET:
+        final_assessment = {
             "final_verdict": "malicious",
             "risk": {"overall_risk_score": 90.0, "confidence_score": 95.0},
             "executive_summary": "Critical remote code execution vulnerability.",
@@ -67,7 +71,18 @@ def _fake_lookup(final_assessment=None, provider_results=None):
             "investigation_priorities": ["Check for indicators of compromise."],
             "incident_response_recommendations": ["Isolate affected hosts."],
             "detection_rules": [{"title": "Log4Shell JNDI", "format": "sigma", "rule": "detection:\n  selection:\n    message: '${jndi:'"}],
-        },
+        }
+
+    return SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000000",
+        ioc_value="CVE-2021-44228",
+        ioc_type="cve",
+        final_verdict=Verdict.MALICIOUS,
+        risk_score=90.0,
+        confidence_score=95.0,
+        created_at=datetime.datetime(2026, 8, 14, tzinfo=datetime.timezone.utc),
+        provider_results=provider_results,
+        final_assessment=final_assessment,
     )
 
 
@@ -98,6 +113,11 @@ def test_render_csv_handles_no_provider_results():
     csv_text = _render_csv(lookup)
     assert "CVE-2021-44228" in csv_text  # metadata section still renders
 
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    header_idx = rows.index(["provider_id", "provider_name", "category", "status", "source_url", "error_message", "latency_ms"])
+    assert rows[header_idx + 1:] == [], "no provider rows must follow the header when provider_results is empty"
+    assert "nvd" not in csv_text  # the default fixture's provider row must not have leaked in
+
 
 def test_render_pdf_produces_a_real_pdf():
     lookup = _fake_lookup()
@@ -107,14 +127,28 @@ def test_render_pdf_produces_a_real_pdf():
     assert len(pdf_bytes) > 500
 
 
-def test_render_pdf_handles_missing_final_assessment_gracefully():
+def test_render_pdf_handles_missing_final_assessment_gracefully(monkeypatch):
     """An investigation that hasn't finished yet (or failed before reaching
     a final assessment) must still produce a valid, non-crashing PDF -- not
     a 500 from a None.get() somewhere."""
+    from reportlab.platypus import Paragraph as _real_paragraph
+
+    seen_texts = []
+
+    def _recording_paragraph(text, *args, **kwargs):
+        seen_texts.append(text)
+        return _real_paragraph(text, *args, **kwargs)
+
+    monkeypatch.setattr("reportlab.platypus.Paragraph", _recording_paragraph)
+
     lookup = _fake_lookup(final_assessment=None)
+    assert lookup.final_assessment is None, "sanity check: this test must actually exercise the missing-assessment path"
     pdf_bytes = _render_pdf(lookup)
 
     assert pdf_bytes.startswith(b"%PDF")
+    assert any("No final assessment is available for this investigation yet." in t for t in seen_texts)
+    # None of the assessment-derived sections should ever have been reached.
+    assert not any("Executive Summary" in t for t in seen_texts)
 
 
 # --- BUG-022: CSV/formula injection (CWE-1236) -------------------------------

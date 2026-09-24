@@ -45,6 +45,15 @@ def test_no_evidence_for_non_ok_provider():
     assert records == []
 
 
+def test_ok_provider_without_matching_summary_produces_no_evidence():
+    """An OK provider result with no corresponding ProviderSummary (e.g. AI
+    summary generation failed or was skipped for that provider) must be
+    silently skipped rather than crash or fabricate evidence with no basis."""
+    result = make_result("virustotal")
+    records = build_evidence_from_providers([result], [])
+    assert records == []
+
+
 def test_ok_provider_with_summary_produces_reputation_evidence():
     result = make_result("virustotal")
     summary = make_summary("virustotal")

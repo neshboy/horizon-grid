@@ -134,3 +134,25 @@ def test_bedrock_bearer_token_credential_alone_is_considered_configured(unroutab
     client = BedrockClaudeClient(bedrock_api_key="my-bearer-token", aws_region="us-east-1")
 
     assert client.is_configured is True
+
+
+def test_bedrock_no_credentials_at_all_is_not_considered_configured():
+    """Negative-path counterpart to the two positive-configuration checks
+    above: with neither a bearer token nor a complete access-key/secret
+    pair, the client must report itself as unconfigured (same
+    `self._configured = bool(bearer_token or (access_key and secret_key))`
+    logic in bedrock_client.py exercised by the positive cases). All three
+    optional credential kwargs are explicitly passed as "" (not omitted) so
+    this doesn't accidentally read real credentials out of a developer's
+    local .env / process environment via get_settings() -- keeping this
+    hermetic like the rest of the file. No call is made, so no endpoint
+    redirect is needed here.
+    """
+    client = BedrockClaudeClient(
+        bedrock_api_key="",
+        aws_access_key_id="",
+        aws_secret_access_key="",
+        aws_region="us-east-1",
+    )
+
+    assert client.is_configured is False

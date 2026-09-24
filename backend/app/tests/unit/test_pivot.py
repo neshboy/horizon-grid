@@ -66,9 +66,14 @@ def test_limit_is_respected_and_clamped():
 
 
 def test_case_insensitive_seed_matching():
-    e = edge(source_value=SEED.upper())
-    pivots = rank_pivots(SEED, [e])
+    # SEED ("1.2.3.4") has no letters, so SEED.upper() == SEED and would pass
+    # this test even without any case-folding in rank_pivots. Use a domain
+    # value (which actually changes under .upper()) so the assertion exercises
+    # the seed_value.strip().lower() normalization for real.
+    e = edge(source_value="EVIL.TEST", source_type="domain", target_value="another.test", target_type="domain")
+    pivots = rank_pivots("evil.test", [e])
     assert len(pivots) == 1
+    assert pivots[0]["ioc_value"] == "another.test"
 
 
 def test_no_edges_returns_empty_list():

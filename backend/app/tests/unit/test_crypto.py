@@ -30,6 +30,20 @@ def test_decrypting_garbage_returns_empty_string_not_raise():
     assert decrypt_secret("not-a-real-fernet-token") == ""
 
 
+def test_decrypting_a_token_from_a_different_key_returns_empty_string():
+    # The real-world case that motivates the above: a structurally valid
+    # Fernet token that was encrypted under a *different* key (e.g. after a
+    # master-key rotation) must still degrade to "" rather than raise --
+    # this is distinct from plain garbage, since it exercises the HMAC
+    # verification failure path rather than a token-parsing failure.
+    from cryptography.fernet import Fernet
+
+    foreign_ciphertext = Fernet(Fernet.generate_key()).encrypt(
+        b"sk-test-abcdef123456"
+    ).decode("ascii")
+    assert decrypt_secret(foreign_ciphertext) == ""
+
+
 def test_ciphertext_never_contains_the_plaintext():
     plaintext = "super-secret-value-1234567890"
     ciphertext = encrypt_secret(plaintext)
@@ -59,3 +73,12 @@ def test_mask_secret_shorter_than_suffix_is_fully_masked():
     masked = mask_secret("ab")
     assert masked == "**"
     assert "ab" not in masked
+
+
+def test_mask_secret_exact_suffix_length_is_fully_masked():
+    # Boundary: length == visible_suffix must take the "fully masked"
+    # branch (len(plaintext) <= visible_suffix), not the suffix-revealing
+    # branch -- otherwise a short credential would be shown in full.
+    masked = mask_secret("abcd")
+    assert masked == "****"
+    assert "abcd" not in masked

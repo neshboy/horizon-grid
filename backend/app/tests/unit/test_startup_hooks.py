@@ -4,6 +4,8 @@ offline with the literal .env.example placeholder was accepted by the real
 running backend (GET /auth/me and admin-only POST /admin/users both
 succeeded with zero real credentials) -- this guard is the fix.
 """
+import logging
+
 import pytest
 
 from app.main import _warn_if_jwt_secret_is_a_placeholder, settings
@@ -26,10 +28,15 @@ async def test_production_with_other_known_placeholder_also_refuses_to_start(mon
 
 
 @pytest.mark.asyncio
-async def test_development_with_placeholder_secret_only_warns(monkeypatch):
+async def test_development_with_placeholder_secret_only_warns(monkeypatch, caplog):
     monkeypatch.setattr(settings, "jwt_secret_key", "replace-with-a-long-random-string")
     monkeypatch.setattr(settings, "environment", "development")
-    await _warn_if_jwt_secret_is_a_placeholder()  # must not raise
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        await _warn_if_jwt_secret_is_a_placeholder()  # must not raise
+    # The name of this test promises a warning, not just "doesn't raise" --
+    # actually confirm one was logged, otherwise a future change that quietly
+    # drops the warning() call in development would pass this test unnoticed.
+    assert "JWT_SECRET_KEY is still set to the placeholder value" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -231,6 +231,21 @@ async def test_malformed_submission_response_missing_uuid_maps_to_error(provider
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_submission_response_non_dict_json_maps_to_error(provider, client):
+    # fetch()'s `if not isinstance(submission, dict) or not submission.get("uuid")`
+    # guard also has to handle valid JSON that parses to something other than
+    # an object (e.g. a bare list) -- distinct from, and previously uncovered
+    # alongside, the missing-uuid case above.
+    respx.post("https://urlscan.io/api/v1/scan/").mock(return_value=httpx.Response(200, json=["unexpected", "array"]))
+
+    result = await provider.fetch("http://evil.test/", IOCType.URL, client)
+
+    assert result.status == ProviderStatus.ERROR
+    assert "uuid" in result.error_message
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_malformed_result_json_maps_to_error(provider, client):
     respx.post("https://urlscan.io/api/v1/scan/").mock(
         return_value=httpx.Response(200, json={"uuid": "88888888-8888-8888-8888-888888888888"})
@@ -242,6 +257,25 @@ async def test_malformed_result_json_maps_to_error(provider, client):
     result = await provider.fetch("http://evil.test/", IOCType.URL, client)
 
     assert result.status == ProviderStatus.ERROR
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_result_response_non_dict_json_maps_to_error(provider, client):
+    # _poll_for_result()'s `if not isinstance(payload, dict)` guard is a
+    # separate branch from the malformed-JSON case above (valid JSON that
+    # parses fine, just not to an object) and was previously untested.
+    respx.post("https://urlscan.io/api/v1/scan/").mock(
+        return_value=httpx.Response(200, json={"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"})
+    )
+    respx.get("https://urlscan.io/api/v1/result/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/").mock(
+        return_value=httpx.Response(200, json=["unexpected", "array"])
+    )
+
+    result = await provider.fetch("http://evil.test/", IOCType.URL, client)
+
+    assert result.status == ProviderStatus.ERROR
+    assert "non-object" in result.error_message
 
 
 @pytest.mark.asyncio

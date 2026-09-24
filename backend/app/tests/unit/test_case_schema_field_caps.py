@@ -56,6 +56,16 @@ def test_ioc_type_empty_string_is_rejected():
         CaseIOCAddRequest(ioc_value="9.9.9.9", ioc_type="")
 
 
+def test_ioc_value_over_column_limit_is_rejected():
+    # CaseIOC.ioc_value is VARCHAR(2048) (app/models/case.py) and
+    # CaseIOCAddRequest.ioc_value already carries a matching
+    # Field(max_length=2048) (app/schemas/case.py) -- this file otherwise
+    # exercises every capped field on CaseIOCAddRequest/CaseNoteCreateRequest
+    # at their boundary, so ioc_value's own cap should not go unverified.
+    with pytest.raises(ValidationError):
+        CaseIOCAddRequest(ioc_value="9" * 2049, ioc_type="ipv4")
+
+
 def test_anchor_type_within_column_limit_is_accepted():
     note = CaseNoteCreateRequest(body="note body", anchor_type="ioc")
     assert note.anchor_type == "ioc"

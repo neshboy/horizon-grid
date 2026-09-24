@@ -37,7 +37,36 @@ def test_nmap_profiles_are_plain_argument_lists_not_strings():
 
 @pytest.mark.asyncio
 async def test_nmap_unknown_profile_is_rejected_before_any_subprocess():
-    result = await nmap_tool.run("127.0.0.1", IOCType.IPV4, "totally-made-up-profile")
+    """is_available() is mocked to True (not left to the real environment):
+    NmapTool.run checks is_available() BEFORE the profile_id check, so on a
+    host without the real nmap binary installed (e.g. this file's own CI
+    "unit" job runner) an unmocked call would fail with "nmap is not
+    installed" instead, and this test would pass for the wrong reason --
+    never actually exercising the unknown-profile rejection its name
+    claims."""
+    with patch("app.security_assessment.nmap_tool.NmapTool.is_available", new=AsyncMock(return_value=True)), \
+         patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
+        result = await nmap_tool.run("127.0.0.1", IOCType.IPV4, "totally-made-up-profile")
+    assert not mock_exec.called, "an unknown profile must be rejected before nmap is ever spawned"
+    assert result.provider_result.status == ProviderStatus.ERROR
+    assert "Unknown scan profile" in (result.provider_result.error_message or "")
+    assert result.findings == []
+
+
+@pytest.mark.asyncio
+async def test_nmap_refuses_a_target_starting_with_a_dash_before_any_subprocess():
+    """CWE-88: nmap's own argv parser (not a shell) treats a leading '-' as
+    the start of a flag, not part of a hostname/IP -- e.g.
+    "--script=vuln.example.com" would load nmap's real NSE "vuln" script
+    category if it ever reached argv. This check runs unconditionally,
+    before is_available()/any subprocess call (see nmap_tool.py's own
+    comment on this exact check for why), so is_available() is mocked True
+    here too -- this guarantee must hold even when nmap itself is
+    installed, not just happen to hold because it isn't."""
+    with patch("app.security_assessment.nmap_tool.NmapTool.is_available", new=AsyncMock(return_value=True)), \
+         patch("app.security_assessment.nmap_tool.asyncio.create_subprocess_exec", new=AsyncMock(return_value=_fake_completed_process())) as mock_exec:
+        result = await nmap_tool.run("--script=vuln.example.com", IOCType.DOMAIN, "quick")
+    assert not mock_exec.called, "a target starting with '-' must never reach a real subprocess call"
     assert result.provider_result.status == ProviderStatus.ERROR
     assert result.findings == []
 

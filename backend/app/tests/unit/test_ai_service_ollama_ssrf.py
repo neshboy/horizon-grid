@@ -121,7 +121,16 @@ async def test_no_credentials_override_uses_the_settings_default_and_it_passes_v
     with patch("asyncio.get_event_loop") as mock_loop:
         mock_loop.return_value.getaddrinfo = _mock_getaddrinfo("203.0.113.5")
         client = await _build_client("ollama", None, None)
-    assert client is not None
+    # A bare "is not None" would pass even if the _singleton reset above
+    # were deleted and a stale cached client -- never re-checked against
+    # this test's own mocked resolver -- were returned instead (construction
+    # never raises None; it either raises or returns a real instance).
+    # Asserting the actual connection target is pinned to the mocked
+    # resolved address (per OllamaClient.create()/pin_resolved_host, see
+    # url_safety.py) confirms this really re-invoked create() -- and
+    # therefore the real link-local check -- against this test's mock.
+    assert client._base_url == ollama_client_module.get_settings().ollama_base_url.rstrip("/")
+    assert client._request_base_url.startswith("http://203.0.113.5")
 
 
 @pytest.mark.asyncio
@@ -140,4 +149,10 @@ async def test_missing_base_url_in_credentials_does_not_raise(monkeypatch):
     with patch("asyncio.get_event_loop") as mock_loop:
         mock_loop.return_value.getaddrinfo = _mock_getaddrinfo("203.0.113.5")
         client = await _build_client("ollama", {}, "llama3.2:3b")
-    assert client is not None
+    # Same reasoning as the test above -- confirm the mocked resolution
+    # actually drove this construction (not a vacuous "didn't crash" check),
+    # and that the explicit model override above actually reached the
+    # constructed client rather than silently falling back to the settings
+    # default.
+    assert client._request_base_url.startswith("http://203.0.113.5")
+    assert client._model == "llama3.2:3b"

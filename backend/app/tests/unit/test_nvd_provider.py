@@ -51,6 +51,13 @@ async def test_invalid_api_key_404_maps_to_error_not_no_data(provider, client):
     assert result.status != ProviderStatus.NO_DATA
     assert result.error_message
     assert "apikey" in result.error_message.lower() or "invalid" in result.error_message.lower()
+    # The mocked response's own "message" header already contains the word
+    # "invalid", so the two checks above would still pass even if the
+    # apiKey-vs-malformed-cveId reason selection were broken (e.g. always
+    # picked the "malformed" branch). Only the reason text itself can ever
+    # contain "malformed" here, so asserting its absence actually pins down
+    # that this request-with-a-configured-key case took the apiKey branch.
+    assert "malformed" not in result.error_message.lower()
 
 
 @pytest.mark.asyncio
@@ -64,6 +71,16 @@ async def test_malformed_cve_id_404_maps_to_error_without_api_key(provider, clie
 
     assert result.status == ProviderStatus.ERROR
     assert result.error_message
+    # Without these, this test would still pass even if the reason-selection
+    # logic always picked the "invalid/expired NVD apiKey" branch regardless
+    # of whether a key was actually configured -- checking only "truthy
+    # error_message" doesn't exercise the "_without_api_key" behavior this
+    # test is named for. "malformed" only ever appears in the no-key reason
+    # text (never in the mocked response's own detail), and "apikey" only
+    # ever appears in the with-key reason text, so these pin down that the
+    # no-api-key branch was actually the one taken.
+    assert "malformed" in result.error_message.lower()
+    assert "apikey" not in result.error_message.lower()
 
 
 @pytest.mark.asyncio

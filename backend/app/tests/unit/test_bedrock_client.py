@@ -73,7 +73,10 @@ async def test_bearer_token_env_var_is_restored_even_if_the_call_raises():
     try:
         with patch("app.ai.bedrock_client.boto3.client", side_effect=fake_boto_client):
             client = BedrockClaudeClient(bedrock_api_key="candidate-token", aws_region="us-east-1")
-            with pytest.raises(Exception):
+            # Specific type+message, not bare Exception: confirms the original
+            # error propagates unchanged (only ClientError/BotoCoreError get
+            # wrapped by _converse) rather than being swallowed or re-wrapped.
+            with pytest.raises(RuntimeError, match="boom"):
                 await client.call_claude_json("system", "user", {"type": "object"})
         assert os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == "pre-existing-value"
     finally:

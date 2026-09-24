@@ -12,8 +12,6 @@ import app.core.cache as cache_module
 
 
 def test_get_redis_recreates_client_when_the_event_loop_has_changed(monkeypatch):
-    created_for_loop = []
-
     class _FakeLoop:
         pass
 
@@ -27,11 +25,14 @@ def test_get_redis_recreates_client_when_the_event_loop_has_changed(monkeypatch)
 
     loop_a = _FakeLoop()
     loop_b = _FakeLoop()
-    loops = iter([loop_a, loop_a, loop_b])
+    loops = iter([loop_a, loop_a, loop_b, loop_b])
     monkeypatch.setattr(asyncio, "get_event_loop", lambda: next(loops))
 
-    cache_module._pool = None
-    cache_module._pool_loop = None
+    # Use monkeypatch (not a bare assignment) so these module globals are
+    # restored to whatever they were before this test ran, rather than
+    # leaking this test's fake client/loop into whichever test runs next.
+    monkeypatch.setattr(cache_module, "_pool", None)
+    monkeypatch.setattr(cache_module, "_pool_loop", None)
 
     client_1 = cache_module.get_redis()
     client_2 = cache_module.get_redis()
@@ -39,3 +40,11 @@ def test_get_redis_recreates_client_when_the_event_loop_has_changed(monkeypatch)
 
     client_3 = cache_module.get_redis()
     assert client_3 is not client_1  # loop changed (loop_b) -- must recreate, not reuse a dead client
+
+    # Bookkeeping check: recreating the client must also update _pool_loop
+    # to the new loop, or every subsequent call would recreate again even
+    # though the loop hasn't changed a second time. Without this call, a
+    # regression that recreates the client but forgets to update
+    # _pool_loop would slip through undetected.
+    client_4 = cache_module.get_redis()
+    assert client_4 is client_3  # loop unchanged (loop_b again) -- must reuse the just-recreated client
