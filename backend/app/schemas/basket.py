@@ -14,7 +14,11 @@ class BasketAddRequest(BaseModel):
     # letting an arbitrarily large string reach basket_items with no guard.
     ioc_value: str = Field(min_length=1, max_length=2048)
     ioc_type_hint: Optional[IOCType] = None
-    note: Optional[str] = None
+    # Matches BasketItem.note's String(1024) column (app/models/basket.py) --
+    # without this cap, a note longer than 1024 characters isn't rejected
+    # with a clean 422 here, it sails through add_to_basket() straight to
+    # the INSERT and crashes with an unhandled 500.
+    note: Optional[str] = Field(default=None, max_length=1024)
 
 
 class BasketItemResponse(BaseModel):

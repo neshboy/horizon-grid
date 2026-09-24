@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Annotated, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,12 +14,19 @@ from app.models.case import CaseSeverity, CaseStatus
 _MAX_DESCRIPTION_LENGTH = 20000
 _MAX_NOTE_BODY_LENGTH = 10000
 
+# Matches Case.tags' ARRAY(String(64)) column (app/models/case.py) -- same
+# "real gap fixed" pattern as description/body above: without this
+# per-item cap, a tag longer than 64 characters isn't rejected with a
+# clean 422 here, it sails through create_case()/update_case() straight to
+# the INSERT/UPDATE and crashes with an unhandled 500.
+_CaseTag = Annotated[str, Field(max_length=64)]
+
 
 class CaseCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: Optional[str] = Field(default=None, max_length=_MAX_DESCRIPTION_LENGTH)
     severity: CaseSeverity = CaseSeverity.MEDIUM
-    tags: list[str] = Field(default_factory=list)
+    tags: list[_CaseTag] = Field(default_factory=list)
 
 
 class CaseUpdateRequest(BaseModel):
@@ -27,7 +34,7 @@ class CaseUpdateRequest(BaseModel):
     description: Optional[str] = Field(default=None, max_length=_MAX_DESCRIPTION_LENGTH)
     severity: Optional[CaseSeverity] = None
     status: Optional[CaseStatus] = None
-    tags: Optional[list[str]] = None
+    tags: Optional[list[_CaseTag]] = None
 
 
 class CaseIOCAddRequest(BaseModel):
