@@ -43,10 +43,30 @@ def _derive_key_from_jwt_secret(jwt_secret: str) -> bytes:
 def _fernet() -> Fernet:
     settings = get_settings()
     if settings.encryption_master_key:
-        key = settings.encryption_master_key.encode("utf-8")
-    else:
-        key = _derive_key_from_jwt_secret(settings.jwt_secret_key)
-    return Fernet(key)
+        try:
+            return Fernet(settings.encryption_master_key.encode("utf-8"))
+        except ValueError:
+            # Real bug found live: .env.example ships ENCRYPTION_MASTER_KEY
+            # with a non-empty placeholder ("replace-with-a-different-long-
+            # random-string") that isn't valid Fernet key material. A user
+            # who follows the README's Quick Start (which only calls out
+            # replacing JWT_SECRET_KEY) never touches this value, so on a
+            # completely fresh install every credential encrypt/decrypt call
+            # raised ValueError -- which, upstream, silently failed every
+            # single IOC investigation with no user-facing explanation.
+            # Falling back to the JWT-derived key here, loudly logged, is
+            # consistent with decrypt_secret()'s own "never crash on bad key
+            # material, degrade safely and say why" philosophy below.
+            logger.error(
+                "ENCRYPTION_MASTER_KEY is set but is not valid Fernet key "
+                "material (expected 32 url-safe base64-encoded bytes) -- "
+                "falling back to a key derived from JWT_SECRET_KEY instead "
+                "of crashing. If this is the unedited .env.example "
+                "placeholder, either clear ENCRYPTION_MASTER_KEY (safe -- "
+                "the JWT-derived fallback is used automatically) or set a "
+                "real generated value."
+            )
+    return Fernet(_derive_key_from_jwt_secret(settings.jwt_secret_key))
 
 
 def encrypt_secret(plaintext: str) -> str:
