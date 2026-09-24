@@ -43,7 +43,12 @@ export default function BasketPage() {
   };
 
   const handleRemove = async (id: string) => {
-    await removeFromBasket(id);
+    try {
+      await removeFromBasket(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove item");
+      return;
+    }
     setItems((prev) => prev?.filter((i) => i.id !== id) ?? null);
     setSelected((prev) => {
       const next = new Set(prev);
@@ -53,7 +58,12 @@ export default function BasketPage() {
   };
 
   const handleClear = async () => {
-    await clearBasket();
+    try {
+      await clearBasket();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear basket");
+      return;
+    }
     setItems([]);
     setSelected(new Set());
   };

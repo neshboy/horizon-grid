@@ -41,7 +41,12 @@ export default function CaseDetailPage() {
 
   const handleStatusChange = async (status: string) => {
     if (!caseId) return;
-    await updateCase(caseId, { status });
+    try {
+      await updateCase(caseId, { status });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update status");
+      return;
+    }
     reload();
   };
 

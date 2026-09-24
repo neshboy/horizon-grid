@@ -37,9 +37,11 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
 
   const refreshAll = () => {
-    getUserStats().then(setStats).catch(() => {});
-    getRoles().then(setRoles).catch(() => {});
-    getAuditLog(50).then(setAuditLog).catch(() => {});
+    const onFail = (label: string) => (err: unknown) =>
+      setError(err instanceof Error ? `Failed to load ${label}: ${err.message}` : `Failed to load ${label}`);
+    getUserStats().then(setStats).catch(onFail("user stats"));
+    getRoles().then(setRoles).catch(onFail("roles"));
+    getAuditLog(50).then(setAuditLog).catch(onFail("audit log"));
   };
 
   useEffect(() => {
