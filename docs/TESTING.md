@@ -4,8 +4,8 @@ This document describes the actual test suite in the repo: what exists, how to r
 the Windows-specific gotchas you will hit if you run it locally rather than in CI/Docker.
 
 There is **no pytest.ini, pyproject.toml, setup.cfg, tox.ini, or conftest.py** anywhere in the
-repo. Pytest runs with default discovery and configuration. There is also no frontend test
-config file (no `vitest.config.*` / `jest.config.*`).
+repo. Pytest runs with default discovery and configuration. The frontend has a minimal
+`frontend/vitest.config.ts` (no `jest.config.*` exists).
 
 ## Backend test suite
 
@@ -14,13 +14,14 @@ Tests live under `backend/app/tests/`, structured as a proper Python package
 
 ```
 backend/app/tests/
-├── unit/          # 9 test files, no network/DB/Redis required
-└── integration/   # 3 test files, 2 of which need Docker services
+├── unit/          # 65 test files, no network/DB/Redis required
+└── integration/   # 34 test files, all but one of which need Docker services
 ```
 
 ### Unit tests (`backend/app/tests/unit/`)
 
-No database, Redis, or provider credentials required. Run unconditionally.
+No database, Redis, or provider credentials required. Run unconditionally. The table below
+covers a selection of the 65 files; the rest follow the same no-infra pattern.
 
 | File | Covers |
 |---|---|
@@ -37,6 +38,8 @@ No database, Redis, or provider credentials required. Run unconditionally.
 | `test_whois_rdap.py` | WHOIS half of `app/providers/whois_rdap.py`'s `WhoisRdapProvider`; pins a fix where socket-level failures (timeout, connection refused) were mapped to `NO_DATA` identically to a genuine "no WHOIS record" response |
 
 ### Integration tests (`backend/app/tests/integration/`)
+
+A selection of the 34 files (most require Postgres and/or Redis):
 
 | File | Covers | Infra required |
 |---|---|---|
@@ -65,12 +68,13 @@ flowchart TD
     E1 -- yes --> E3["Runs: real Postgres via ASGI transport,\nfake provider, stubbed AI client"]
 ```
 
-### There is no test for auth's HTTP endpoints
+### Auth's HTTP endpoints have dedicated tests
 
-There is no dedicated unit or integration test that hits `POST /api/v1/auth/register` or
-`POST /api/v1/auth/login` directly. Auth is only exercised indirectly, by constructing `User`
-rows and tokens directly inside `test_lookup_stream_persistence.py`'s fixtures. **NOT
-IMPLEMENTED.**
+`POST /api/v1/auth/register` (`test_auth_registration.py`), `POST /api/v1/auth/login`
+(`test_auth_login_rate_limit.py`, `test_auth_login_disabled_account_rate_limit.py`,
+`test_auth_login_redis_outage.py`, `test_auth_login_timing_side_channel.py`), and
+`POST /api/v1/auth/logout` (`test_auth_logout.py`) each have dedicated integration tests
+under `backend/app/tests/integration/` that hit the routes directly.
 
 ## Running the backend tests
 
@@ -124,12 +128,12 @@ is available but unused. **NOT IMPLEMENTED** as a documented workflow.
 
 ## Frontend test suite
 
-**There is no frontend test suite.** `frontend/package.json` defines `"test": "vitest run"`
-and lists `vitest@2.1.1` as a devDependency, but there are zero `*.test.*` / `*.spec.*` files
-anywhere under `frontend/app`, `frontend/components`, or `frontend/lib`, and no
-`vitest.config.*` exists. Running `npm test` invokes vitest against an empty test suite --
-this is configured-but-unused test infrastructure, **NOT IMPLEMENTED** as an actual test
-suite.
+**There is a small frontend test suite.** `frontend/package.json` defines `"test": "vitest run"`
+and lists `vitest@^4.1.10` as a devDependency. `frontend/vitest.config.ts` configures a Node
+test environment (no jsdom/React rendering) with the `@/*` path alias from `tsconfig.json`.
+Five `*.test.*` files exist: `frontend/lib/api.test.ts`, `frontend/lib/authedFetch.test.ts`,
+`frontend/lib/dashboardSummary.test.ts`, `frontend/lib/runEffectOnce.test.ts`, and
+`frontend/app/pentest/page.test.ts` -- all covering pure functions, not component rendering.
 
 ## Things to know (Windows-specific gotchas)
 
@@ -180,7 +184,8 @@ pytest-asyncio (in strict/function mode) gives each test function its own event 
 pool created in one test would otherwise be reused -- against a now-closed loop -- by the
 next test, raising `RuntimeError: Event loop is closed` deep inside asyncpg or redis-py.
 
-Both integration test files that touch real infra work around this explicitly:
+Most integration test files that touch real infra work around this explicitly (two
+representative examples):
 
 - `test_lookup_flow.py`'s `clean_redis_cache` fixture clears `app.core.cache`'s pool so each
   test gets a fresh Redis client.

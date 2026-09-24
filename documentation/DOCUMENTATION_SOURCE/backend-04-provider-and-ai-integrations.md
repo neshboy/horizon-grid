@@ -41,12 +41,12 @@ This chapter is the exhaustive technical reference for every external integratio
 
 ## 🔌 1. Shared Provider Contract
 
-Every provider subclasses `BaseProvider` (`app/providers/base.py:80-184`), which wraps `fetch()` with three short-circuits before any outbound call is made — disabled, unsupported IOC type, and not-configured (`base.py:97-146`) — and normalizes every outbound-call exception into one of a fixed set of `ProviderStatus` values. Two mappings are uniform across **all** real HTTP-based providers unless a connector explicitly overrides them:
+Every provider subclasses `BaseProvider` (`app/providers/base.py:132-261`), which wraps `fetch()` with three short-circuits before any outbound call is made — disabled, unsupported IOC type, and not-configured (`base.py:182-216`) — and normalizes every outbound-call exception into one of a fixed set of `ProviderStatus` values. Two mappings are uniform across **all** real HTTP-based providers unless a connector explicitly overrides them:
 
-- `httpx.HTTPStatusError` with status **429, 403, or 509** → `ProviderStatus.RATE_LIMITED` (`base.py:149-155`; 509 is called out at `base.py:152` as PhishTank's documented over-limit code, since it is not a widely-recognized rate-limit status elsewhere).
+- `httpx.HTTPStatusError` with status **429, 403, or 509** → `ProviderStatus.RATE_LIMITED` (`base.py:219-225`; 509 is called out at `base.py:222` as PhishTank's documented over-limit code, since it is not a widely-recognized rate-limit status elsewhere).
 - Any other non-2xx status raised via `response.raise_for_status()` → `ProviderStatus.ERROR`.
 
-Retries and timeouts are applied one layer above, in the orchestrator (`app/providers/orchestrator.py:26,47-61`): `asyncio.wait_for` per call, with `tenacity`-based retry limited to `httpx.ConnectError`, `httpx.ReadTimeout`, and `httpx.PoolTimeout` — a bad-status response is never retried, only a genuinely failed connection. Eighteen providers are registered in `app/providers/registry.py:29-46` — the seventeen IOC providers documented one by one in §2, plus the OSINT crawler described in §3.
+Retries and timeouts are applied one layer above, in the orchestrator (`app/providers/orchestrator.py:64-89`): `asyncio.wait_for` per call, with `tenacity`-based retry limited to the `RETRYABLE_EXCEPTIONS` tuple (`app/providers/base.py:45-51`) — `httpx.ConnectError`, `httpx.ConnectTimeout`, `httpx.ReadTimeout`, `httpx.WriteTimeout`, and `httpx.PoolTimeout` — a bad-status response is never retried, only a genuinely failed connection. Eighteen providers are registered in `app/providers/registry.py:31-50` — the seventeen IOC providers documented one by one in §2, plus the OSINT crawler described in §3.
 
 ## 🔍 2. IOC Providers, One by One
 
@@ -104,7 +104,7 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 - **Credential**: `requires_key=False` — works unauthenticated at roughly 5 requests/30s; an optional `api_key` → `settings.nvd_api_key`, sent as header `apiKey`, raises the ceiling to roughly 50 requests/30s (`:22,27-28,32-35`).
 - **Endpoint**: base `https://services.nvd.nist.gov/rest/json/cves/2.0`; `GET` with `params={"cveId":...}` (`:23,37`).
 - **Normalized data**: `verdict` (derived from CVSS severity), `cve_id`, `cvss_score`/`cvss_severity`/`cvss_vector` (CVSS v3.1 preferred, then v3.0, then v2; "Primary" scoring source preferred when multiple exist, `:80-93`), `description`, `vuln_status`, `cwes`, `references`, `configurations`, `first_seen` (published)/`last_seen` (lastModified) (`:106-137`).
-- **Errors**: 404 → `NO_DATA`; an empty `vulnerabilities` list → `NO_DATA`; other statuses fall through to the shared mapping (`:38-62`).
+- **Errors**: HTTP 404 → `ProviderStatus.ERROR`, not `NO_DATA` — NVD's real API only returns 404 for a request-level problem (an invalid/expired `apiKey` or a malformed `cveId`), never for a genuinely nonexistent CVE, which returns HTTP 200 with an empty `vulnerabilities` list instead (`:38-58`); that empty-list case is what maps to `NO_DATA` (`:62-73`); other statuses fall through to the shared mapping.
 
 ### 2.9 CISA Known Exploited Vulnerabilities — `cisa_kev`
 - **File**: `app/providers/cisa_kev.py`. Category `VULNERABILITY`. IOC type: `cve` (`:26-29`).
@@ -135,10 +135,10 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 - **Errors**: 400 or 404 → `NO_DATA` (`:53-62`); other statuses fall through to the shared mapping.
 
 ### 2.13 Spamhaus DBL/ZEN — `spamhaus`
-- **File**: `app/providers/stubs/spamhaus.py`. Category `THREAT_INTEL`. IOC types: `ipv4`, `domain` (`:54-57`).
-- **Credential**: `requires_key=False`, `configured=True` (`:58-59`).
-- **Mechanism**: this connector makes **no HTTP call at all** — it performs plain DNS A-record lookups via `loop.getaddrinfo()` against `*.zen.spamhaus.org` (IP, octet-reversed) or `*.dbl.spamhaus.org` (domain) (`:61-76`).
-- **Normalized data**: `verdict` ("clean" if NXDOMAIN/no answer, "malicious" if any A-record hit that isn't a query-error code, "unknown" if every returned code is a query-error code), `listed` (bool), `list` (`"ZEN"` or `"DBL"`), `query`, and on a real listing, `return_codes` plus `listing_reason` (decoded from the published Spamhaus ZEN/DBL return-code tables) (`:81-131`).
+- **File**: `app/providers/stubs/spamhaus.py`. Category `THREAT_INTEL`. IOC types: `ipv4`, `domain` (`:75-78`).
+- **Credential**: `requires_key=False`, `configured=True` (`:79-80`).
+- **Mechanism**: this connector makes **no HTTP call at all** — it performs plain DNS A-record lookups via `loop.getaddrinfo()` against `*.zen.spamhaus.org` (IP, octet-reversed) or `*.dbl.spamhaus.org` (domain) (`:82-100`).
+- **Normalized data**: `verdict` ("clean" if NXDOMAIN/no answer, "malicious" if any A-record hit that isn't a query-error code, "unknown" if every returned code is a query-error code), `listed` (bool), `list` (`"ZEN"` or `"DBL"`), `query`, and on a real listing, `return_codes` plus `listing_reason` (decoded from the published Spamhaus ZEN/DBL return-code tables) (`:102-168`).
 - **"Errors"**: `socket.gaierror` (NXDOMAIN) is caught and treated as "not listed" — a normal clean result, not an error. Because there is no HTTP call, the 429/403/509 rate-limit mapping described in §1 does not apply to this connector.
 
 > [!NOTE]
@@ -165,9 +165,9 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 - **Errors**: the poll endpoint returns HTTP 404 while the scan is still processing (expected, not an error) and HTTP 200 with the full result once ready; 401/403 on either the submit or poll request are treated as "bad API key," not rate limiting — deliberately not routed through `BaseProvider.run()`'s generic mapping (which treats 403 as `RATE_LIMITED` for every other connector, matching PhishTank's documented behavior) because urlscan.io's own 403 semantics are different. A scan not ready by the timeout → `ProviderStatus.TIMEOUT`, never a fabricated result from an incomplete scan.
 
 ### 2.17 Google Safe Browsing — `google_safe_browsing`
-- **File**: `app/providers/google_safe_browsing.py`. Category `THREAT_INTEL`. IOC types: `url`, `domain` (`:31-33`).
-- **Credential**: `requires_key=True`; field `api_key`, sent as the `key` query parameter on the Lookup API v4 call (`:33`). Not offered on either installer's setup wizard (§ below) — configured after install from the app's own Providers page.
-- **Endpoint**: `POST https://safebrowsing.googleapis.com/v4/threatMatches:find?key=<API_KEY>`, checking against `MALWARE`, `SOCIAL_ENGINEERING`, `UNWANTED_SOFTWARE`, and `POTENTIALLY_HARMFUL_APPLICATION` threat types (`_THREAT_TYPES`).
+- **File**: `app/providers/google_safe_browsing.py`. Category `THREAT_INTEL`. IOC types: `url`, `domain` (`:45-46`).
+- **Credential**: `requires_key=True`; field `api_key`, sent as the `x-goog-api-key` **header** — deliberately not the `?key=` query-string form Google's docs also show, mirroring the Gemini connector's rationale that httpx logs full request URLs (including query strings) at INFO level (`:80,108`). Not offered on either installer's setup wizard (§ below) — configured after install from the app's own Providers page.
+- **Endpoint**: `POST https://safebrowsing.googleapis.com/v4/threatMatches:find` (the API key travels in the `x-goog-api-key` header, not a `?key=` query string), checking against `MALWARE`, `SOCIAL_ENGINEERING`, `UNWANTED_SOFTWARE`, and `POTENTIALLY_HARMFUL_APPLICATION` threat types (`_THREAT_TYPES`).
 - **Normalized data**: a "clean" verdict only when the response is a genuine HTTP 200 with an empty/missing `matches` field — this is the *only* input path that can produce a safe result. Every other outcome (non-200 status, network error/timeout, or a response that doesn't parse the way the API contract promises) returns early via the module's own `_error()` helper, which always sets `data={"verdict": "unknown", ...}` — there is no code path from "the request failed" to a result that looks clean, a deliberately pinned invariant (module docstring; covered by `test_google_safe_browsing.py`'s `test_*_never_looks_like_safe` tests).
 
 ## 🌐 3. Internet Intelligence Collector (OSINT Crawler-as-Provider) — `internet_intelligence`
@@ -188,36 +188,36 @@ Retries and timeouts are applied one layer above, in the orchestrator (`app/prov
 
 ## 🤖 4. AI Backends
 
-All eleven backend clients expose an identical async method, `call_claude_json(system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None) -> dict`, which is what lets `app/ai/service.py` swap backends with zero branching logic (`service.py:43-53,56-99`). Defaults for every credential/model/URL below live in `app/core/config.py:44-80`; at call time, `_build_client()` (`service.py:56-99`) constructs a **fresh** client per call using whichever credentials the active runtime-config row (or an explicit override) supplies — proving these constructor parameters are live override points a caller genuinely exercises, not dead code.
+All eleven backend clients expose an identical async method, `call_claude_json(system_prompt, user_prompt, json_schema, tool_name="emit_result", max_tokens=None) -> dict`, which is what lets `app/ai/service.py` swap backends with zero branching logic (`service.py:52-62,96-208`). Defaults for every credential/model/URL below live in `app/core/config.py:74-158`; at call time, `_build_client()` (`service.py:96-208`) constructs a **fresh** client per call using whichever credentials the active runtime-config row (or an explicit override) supplies — proving these constructor parameters are live override points a caller genuinely exercises, not dead code.
 
 ### 4.1 Ollama — `ollama_client.py`
-- **Endpoint**: `POST {base_url}/api/chat`; default `base_url` = `http://host.docker.internal:11434` (`:15-17`, `config.py:76`, used at `:91`).
+- **Endpoint**: `POST {base_url}/api/chat`; default `base_url` = `http://host.docker.internal:11434` (`:15-17`, `config.py:146`, used at `:163`).
 - **Auth**: none — local server.
-- **Default model**: `settings.ollama_model = "llama3.2:3b"` (`config.py:77`).
-- **Structured output**: the request's `format` field is set to the JSON Schema itself (grammar-constrained decoding, not tool-calling), after flattening `$ref`/`$defs` via `inline_refs()` since Ollama's grammar compiler doesn't reliably resolve refs (`:6-10,30,76`).
-- **Constructor overrides**: `OllamaClient(base_url=None, model=None, max_tokens=None)` — all three fall back to `get_settings()` values when omitted (`:39-52`).
-- **Errors**: `httpx.ConnectError` → `RuntimeError("Could not reach Ollama...")`; `httpx.TimeoutException` after 120s → `RuntimeError`; HTTP status ≥400 → `RuntimeError` with status and body; a non-JSON or non-dict response body → `RuntimeError` (`:89-126`).
+- **Default model**: `settings.ollama_model = "llama3.2:3b"` (`config.py:147`).
+- **Structured output**: the request's `format` field is set to the JSON Schema itself (grammar-constrained decoding, not tool-calling), after flattening `$ref`/`$defs` via `inline_refs()` since Ollama's grammar compiler doesn't reliably resolve refs (`:6-10,30,201`).
+- **Constructor overrides**: `await OllamaClient.create(base_url=None, model=None, max_tokens=None, timeout_seconds=None)` is the only supported construction path — direct `OllamaClient(...)` construction now raises `RuntimeError` unless invoked internally by `create()`, which awaits an SSRF/DNS-pinning safety check (`app/core/url_safety.py`) before returning (`:75-177`); all overrides fall back to `get_settings()` values when omitted.
+- **Errors**: `httpx.ConnectError` → `RuntimeError("Could not reach Ollama...")`; `httpx.TimeoutException` after `settings.ollama_timeout_seconds` (default 300s) → `RuntimeError`; HTTP status ≥400 → `RuntimeError` with status and body; a non-JSON or non-dict response body → `RuntimeError` (`:228-265`).
 
 ### 4.2 Anthropic — `anthropic_client.py`
 - **Endpoint**: `POST https://api.anthropic.com/v1/messages` (`_API_BASE`, `:21`).
 - **Auth**: header `x-api-key`, plus `anthropic-version: 2023-06-01` (`:22,54-57`).
-- **Default model**: `settings.anthropic_model_id = "claude-sonnet-4-5-20250929"` (`config.py:62`).
+- **Default model**: `settings.anthropic_model_id = "claude-sonnet-4-5-20250929"` (`config.py:92`).
 - **Structured output**: a forced single tool call — `tools:[{name, description, input_schema: json_schema}]` with `tool_choice:{"type":"tool","name":tool_name}`; the response is parsed from the `tool_use` content block's `input` field. No schema flattening is needed — Anthropic resolves `$ref`/`$defs` natively (`:49-53,65-86`).
 - **Constructor overrides**: `AnthropicClient(api_key=None, model_id=None, max_tokens=None)` (`:26-35`).
 - **Errors**: HTTP status ≥400 → `RuntimeError`; a missing `tool_use` block in the response → `RuntimeError` (`:78-87`).
 
 ### 4.3 AWS Bedrock — `bedrock_client.py`
-- **Endpoint**: boto3's `bedrock-runtime` client `.converse()` API — an SDK call, not raw HTTP (`:62-66,109-115`); the synchronous boto3 call is run via `asyncio.to_thread` (`:84-86`).
-- **Auth**: two schemes — a bearer token via the `AWS_BEARER_TOKEN_BEDROCK` environment variable (set from `bedrock_api_key`/`settings.bedrock_api_key`, `:46,53-58`), or classic SigV4 IAM access-key/secret (`settings.aws_access_key_id`/`aws_secret_access_key`, `:47-48,59-61`). `is_configured` requires the bearer token **or** both IAM values (`:50,68-70`).
-- **Default model / region**: `settings.bedrock_model_id = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"` (`config.py:52`); default region `settings.aws_region = "us-east-1"` (`config.py:48`).
-- **Structured output**: forced tool call via the Converse API's `toolConfig` (`toolSpec.inputSchema.json = json_schema`, `toolChoice:{"tool":{"name":tool_name}}`); the response is parsed from `output.message.content[].toolUse.input` (`:96-124`).
-- **Constructor overrides**: `BedrockClaudeClient(bedrock_api_key=None, aws_access_key_id=None, aws_secret_access_key=None, aws_region=None, model_id=None, max_tokens=None)` (`:34-42`).
-- **Errors**: `ClientError`/`BotoCoreError` → `RuntimeError`; no matching `toolUse` block in the response → `RuntimeError` (`:116-124`).
+- **Endpoint**: boto3's `bedrock-runtime` client `.converse()` API — an SDK call, not raw HTTP (`:62-70,179-190`); the synchronous boto3 call is run via `asyncio.to_thread` (`:123-125`).
+- **Auth**: two schemes — a bearer token via the `AWS_BEARER_TOKEN_BEDROCK` environment variable (set from `bedrock_api_key`/`settings.bedrock_api_key`, `:65,79`), or classic SigV4 IAM access-key/secret (`settings.aws_access_key_id`/`aws_secret_access_key`, `:66-67,80-81`). `is_configured` requires the bearer token **or** both IAM values (`:83,107-109`).
+- **Default model / region**: `settings.bedrock_model_id = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"` (`config.py:82`); default region `settings.aws_region = "us-east-1"` (`config.py:78`).
+- **Structured output**: forced tool call via the Converse API's `toolConfig` (`toolSpec.inputSchema.json = json_schema`, `toolChoice:{"tool":{"name":tool_name}}`); the response is parsed from `output.message.content[].toolUse.input` (`:135-146,173-177`).
+- **Constructor overrides**: `BedrockClaudeClient(bedrock_api_key=None, aws_access_key_id=None, aws_secret_access_key=None, aws_region=None, model_id=None, max_tokens=None)` (`:63-70`).
+- **Errors**: `ClientError`/`BotoCoreError` → `RuntimeError`; no matching `toolUse` block in the response → `RuntimeError` (`:173-177,188-190`).
 
 ### 4.4 Google Gemini — `gemini_client.py`
 - **Endpoint**: `POST {_API_BASE}/models/{model_id}:generateContent`, `_API_BASE = "https://generativelanguage.googleapis.com/v1beta"` (`:29,77`).
 - **Auth**: the API key is passed via the `x-goog-api-key` **header** (`:80`), deliberately not the `?key=...` query-string form Google's docs also support — httpx logs the full request URL at INFO level, which would otherwise put the real key in plain text in every application log line (`:72-76`).
-- **Default model**: `settings.gemini_model_id = "gemini-2.0-flash"` (`config.py:57`).
+- **Default model**: `settings.gemini_model_id = "gemini-2.0-flash"` (`config.py:87`).
 - **Structured output**: `generationConfig.responseMimeType = "application/json"` plus an OpenAPI-3.0-style `responseSchema`, ref-flattened via `inline_refs()` because Gemini's schema dialect does not resolve JSON-Schema `$ref`/`$defs` (`:10-15,60-69`); the response text is parsed with `json.loads()` (`:91-94`).
 - **Constructor overrides**: `GeminiClient(api_key=None, model_id=None, max_tokens=None)` (`:33-42`).
 - **Errors**: HTTP status ≥400 → `RuntimeError`; no `candidates` or no text in the response → `RuntimeError`; invalid JSON text → `RuntimeError` (`:77-94`).
@@ -225,7 +225,7 @@ All eleven backend clients expose an identical async method, `call_claude_json(s
 ### 4.5 Groq — `groq_client.py`
 - **Endpoint**: `POST {_API_BASE}/chat/completions`, `_API_BASE = "https://api.groq.com/openai/v1"` — an OpenAI-compatible chat-completions API (`:44,112`); model discovery via `GET {_API_BASE}/models` (`:152-156`).
 - **Auth**: header `Authorization: Bearer <GROQ_API_KEY>` (`:108`).
-- **Default model**: `settings.groq_model_id = "llama-3.3-70b-versatile"` (`config.py:69`; also the module-level `DEFAULT_MODEL` at `:60`). A separate `FALLBACK_MODELS` list (`:55-59`) exists **only** to populate the setup wizard's model dropdown when live discovery fails — it is never used to validate a real inference call.
+- **Default model**: `settings.groq_model_id = "llama-3.3-70b-versatile"` (`config.py:99`; also the module-level `DEFAULT_MODEL` at `:60`). A separate `FALLBACK_MODELS` list (`:55-59`) exists **only** to populate the setup wizard's model dropdown when live discovery fails — it is never used to validate a real inference call.
 - **Structured output**: forced tool-calling (`tools:[{"type":"function","function":{name, description, parameters: flat_schema}}]`, `tool_choice:{"type":"function","function":{"name":tool_name}}`) rather than the OpenAI `response_format` JSON mode — the module docstring's stated rationale is that `response_format` isn't guaranteed to be honored by every hosted model (`:20-31,96-107`). The schema is ref-flattened defensively via `inline_refs()` (`:39,87`); the response is parsed from `choices[0].message.tool_calls[].function.arguments` (a JSON string) (`:128-137`).
 - **Constructor overrides**: `GroqClient(api_key=None, model_id=None, max_tokens=None)` (`:64-73`).
 - **Errors**: `httpx.TimeoutException` after 60s → `RuntimeError`; HTTP status ≥400 → `RuntimeError`; no `choices` in the response → `RuntimeError`; no matching tool call → `RuntimeError`; invalid JSON in `arguments` → `RuntimeError` (`:110-137`).
@@ -276,9 +276,9 @@ All eleven backend clients expose an identical async method, `call_claude_json(s
 
 ## 🔀 5. Cross-Cutting Mechanisms
 
-- **Per-investigation credential overrides (IOC providers)**: `app/core/runtime_context.py:38-47` — `get_credential(provider_id, field, fallback)` returns a per-investigation `ContextVar` override when one has been set (via `set_provider_overrides()` at `orchestrator.py:113`), else falls back to the `.env`-derived `Settings` value. Every real provider's `fetch()` calls this — e.g. `abuseipdb.py:29`, `virustotal.py:44`, `otx.py:46`, `nvd.py:32`, `censys.py:40-41`, `hybrid_analysis.py:45`, `phishtank.py:29`, `urlhaus.py:31`, `threatfox.py:38`, `malwarebazaar.py:31`.
-- **AI backend resolution order**: `app/ai/service.py:_get_ai_client` (`:102-145`) resolves the active backend in this order on **every call**: an explicit `backend_override` (used by the reanalyze/comparison feature) → the DB-backed active runtime config (`app/core/runtime_config.py`) → the legacy `settings.ai_backend` default of `"ollama"` (`config.py:80`).
-- **Live connection tests** (candidate credentials only, never `get_settings()`): IOC providers are tested in `app/providers/connection_test.py:51-208` (VirusTotal, AbuseIPDB, OTX, the abuse.ch family via ThreatFox's `query_status`, NVD, Hybrid Analysis, Censys, PhishTank); urlscan.io and Google Safe Browsing are tested the same way despite having no wizard entry. AI backends are tested in `app/ai/connection_test.py` — a dedicated `_check_*` function exists for all eleven (Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter, Anthropic, Gemini, Ollama, Bedrock), not just the original five; the module's own docstring records the investigation finding that motivated dedicated per-backend checks in the first place: none of the original five backends' generic error handling reliably distinguished "bad key" from "bad request" from "service down" without one. Both endpoints — `POST /api/v1/providers/{id}/test` and `POST /api/v1/ai/test` — make one real, minimal outbound call with the credentials from the request body and never persist them; see the *Runtime Configuration and Credential Lifecycle* chapter for how this relates to the separate, saved runtime-config path.
+- **Per-investigation credential overrides (IOC providers)**: `app/core/runtime_context.py:38-47` — `get_credential(provider_id, field, fallback)` returns a per-investigation `ContextVar` override when one has been set (via `set_provider_overrides()` at `orchestrator.py:150`), else falls back to the `.env`-derived `Settings` value. Every real provider's `fetch()` calls this — e.g. `abuseipdb.py:29`, `virustotal.py:44`, `otx.py:46`, `nvd.py:32`, `censys.py:40-41`, `hybrid_analysis.py:45`, `phishtank.py:29`, `urlhaus.py:31`, `threatfox.py:38`, `malwarebazaar.py:31`.
+- **AI backend resolution order**: `app/ai/service.py:_get_ai_client` (`:211-283`) resolves the active backend in this order on **every call**: an explicit `backend_override` (used by the reanalyze/comparison feature) → the DB-backed active runtime config (`app/core/runtime_config.py`) → the legacy `settings.ai_backend` default of `"ollama"` (`config.py:158`).
+- **Live connection tests** (candidate credentials only, never `get_settings()`): IOC providers are tested in `app/providers/connection_test.py:57-247` (VirusTotal, AbuseIPDB, OTX, the abuse.ch family via ThreatFox's `query_status`, NVD, Hybrid Analysis, Censys, PhishTank); urlscan.io and Google Safe Browsing are tested the same way despite having no wizard entry. AI backends are tested in `app/ai/connection_test.py` — a dedicated `_check_*` function exists for all eleven (Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter, Anthropic, Gemini, Ollama, Bedrock), not just the original five; the module's own docstring records the investigation finding that motivated dedicated per-backend checks in the first place: none of the original five backends' generic error handling reliably distinguished "bad key" from "bad request" from "service down" without one. Both endpoints — `POST /api/v1/providers/{id}/test` and `POST /api/v1/ai/test` — make one real, minimal outbound call with the credentials from the request body and never persist them; see the *Runtime Configuration and Credential Lifecycle* chapter for how this relates to the separate, saved runtime-config path.
 
 ## 📇 6. Quick-Reference Table
 
@@ -301,7 +301,7 @@ All eleven backend clients expose an identical async method, `call_claude_json(s
 | `censys` | passive_dns | Bearer token + `X-Organization-ID` | ipv4/ipv6 | 429/403/509 |
 | `internet_intelligence` | osint | none | domain/ipv4/malware_family/threat_actor/campaign/cve/file_name | per-sub-source (see §3) |
 | `urlscan` | sandbox | header `API-Key` | url/domain | 401/403 = bad key, not rate limit; else `TIMEOUT` at 60s |
-| `google_safe_browsing` | threat_intel | query param `key` | url/domain | any non-200/error → `unknown`, never `RATE_LIMITED`-mapped as "safe" |
+| `google_safe_browsing` | threat_intel | header `x-goog-api-key` | url/domain | any non-200/error → `unknown`, never `RATE_LIMITED`-mapped as "safe" |
 
 | AI backend | Endpoint style | Auth | Structured-output technique |
 |---|---|---|---|

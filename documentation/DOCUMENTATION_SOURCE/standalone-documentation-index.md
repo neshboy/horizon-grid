@@ -1,6 +1,6 @@
 # 📚 HORIZON GRID Documentation Index
 
-**Application Version:** 0.3.8
+**Application Version:** 0.3.14
 **Documentation Package Last Updated:** 27 August 2026
 **Status:** Release Ready with Known Limitations (see Final Release QA Report and `MISSION_CRITICAL_CERTIFICATION_REPORT.md`)
 

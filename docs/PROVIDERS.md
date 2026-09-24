@@ -48,17 +48,18 @@ engine and the AI service, both of which run after every provider has reported b
 
 | Component | Location | Behavior |
 |---|---|---|
-| `ProviderCategory` enum | `base.py:21-28` | `THREAT_INTEL`, `SANDBOX`, `PASSIVE_DNS`, `CERTIFICATE_INTEL`, `WHOIS`, `VULNERABILITY`, `OSINT` |
-| `ProviderStatus` enum | `base.py:31-38` | `OK`, `ERROR`, `TIMEOUT`, `RATE_LIMITED`, `NOT_CONFIGURED`, `UNSUPPORTED_IOC`, `NO_DATA` |
-| `ProviderResult` dataclass | `base.py:41-73` | Normalized envelope every provider returns: `provider_id`, `provider_name`, `category`, `status`, `ioc_value`, `ioc_type`, `data`, `raw`, `source_url`, `error_message`, `latency_ms`, `fetched_at`, `from_cache`. `.to_dict()` serializes enums via `.value`. |
-| `BaseProvider.run()` | `base.py:93-153` | Short-circuits to `UNSUPPORTED_IOC` if `not self.supports(ioc_type)`; to `NOT_CONFIGURED` if `requires_key and not configured`. Catches `httpx.HTTPStatusError`: status 429/403/509 -> `RATE_LIMITED` (509 is PhishTank's documented over-limit code), any other status -> `ERROR`. Any other exception -> `ERROR`. |
-| Retry/timeout policy | `orchestrator.py:45-58` | Per attempt: `asyncio.wait_for(timeout=settings.provider_timeout_seconds)` (default 20s). Retries only on `httpx.ConnectError`, `httpx.ReadTimeout`, `httpx.PoolTimeout`, via `tenacity.AsyncRetrying(stop_after_attempt(provider_max_retries + 1), wait_exponential(multiplier=0.5, max=4))` (default 2 retries). Individual connectors implement **no** retry logic themselves — this is enforced solely by the orchestrator, per `base.py`'s own docstring. |
-| Redis result cache | `core/cache.py:24-39`, used in `orchestrator.py:32-43,80-83` | Key: `provider_cache:{provider_id}:{ioc_type}:{sha256(ioc_value)}` — the IOC value itself is SHA-256-hashed before being placed in the key. Only `status == OK` results are cached, with `EX=settings.provider_cache_ttl_seconds` (default 3600s). |
+| `ProviderCategory` enum | `base.py:54-67` | `THREAT_INTEL`, `SANDBOX`, `PASSIVE_DNS`, `CERTIFICATE_INTEL`, `WHOIS`, `VULNERABILITY`, `OSINT`, `SECURITY_ASSESSMENT` |
+| `ProviderStatus` enum | `base.py:70-81` | `OK`, `ERROR`, `TIMEOUT`, `RATE_LIMITED`, `NOT_CONFIGURED`, `UNSUPPORTED_IOC`, `NO_DATA`, `DISABLED` |
+| `ProviderResult` dataclass | `base.py:83-129` | Normalized envelope every provider returns: `provider_id`, `provider_name`, `category`, `status`, `ioc_value`, `ioc_type`, `data`, `raw`, `source_url`, `error_message`, `latency_ms`, `fetched_at`, `from_cache`. `.to_dict()` serializes enums via `.value`. |
+| `BaseProvider.run()` | `base.py:149-254` | Short-circuits to `DISABLED` if an administrator has disabled the provider via runtime config; to `UNSUPPORTED_IOC` if `not self.supports(ioc_type)`; to `NOT_CONFIGURED` if `requires_key` and the effective (override-aware) `configured` value is falsy. Catches `httpx.HTTPStatusError`: status 429/403/509 -> `RATE_LIMITED` (509 is PhishTank's documented over-limit code), any other status -> `ERROR`. Any other exception -> `ERROR`. |
+| Retry/timeout policy | `orchestrator.py:64-109` | Per attempt: `asyncio.wait_for(timeout=settings.provider_timeout_seconds + 1)` (default 20s, plus a 1s buffer so httpx's own internal timeout wins the race and stays retryable). Retries only on `httpx.ConnectError`, `httpx.ConnectTimeout`, `httpx.ReadTimeout`, `httpx.WriteTimeout`, `httpx.PoolTimeout`, via `tenacity.AsyncRetrying(stop_after_attempt(provider_max_retries + 1), wait_exponential(multiplier=0.5, max=4))` (default 2 retries). Individual connectors implement **no** retry logic themselves — this is enforced solely by the orchestrator, per `base.py`'s own docstring. |
+| Redis result cache | `core/cache.py:66-92`, used in `orchestrator.py:38-62,111-122` | Key: `provider_cache:{provider_id}:{ioc_type}:{sha256(ioc_value)}` — the IOC value itself is SHA-256-hashed before being placed in the key. Only `status == OK` results are cached, with `EX=settings.provider_cache_ttl_seconds` (default 3600s). |
 
 **Not implemented:** no per-provider `RateLimiter` (the Redis-backed fixed-window
 limiter in `core/cache.py`) is instantiated anywhere in `providers/*.py` or
-`providers/stubs/*.py`. That class is only used in `api/routes/lookup.py` to rate-limit
-lookup *creation* per user (`lookup_rate_limit_max_calls=10` per 60s window), not to
+`providers/stubs/*.py`. That class is used in `api/routes/lookup.py` to rate-limit
+lookup *creation* per user (`lookup_rate_limit_max_calls=10` per 60s window) and in
+`api/routes/auth.py` to rate-limit login/registration attempts, not to
 self-throttle any individual connector. There is also no per-provider circuit breaker —
 all resilience logic lives in the orchestrator as described above.
 
@@ -189,7 +190,7 @@ misconfigured key must never look like a clean verdict.
 | **Free or Paid** | Free. Docstring: works without a key at ~5 req/30s; with `NVD_API_KEY` set, ~50 req/30s. |
 | **Data Returned** | CVE detail, best-available CVSS metric, derived severity |
 | **Failure Behavior** | Standard `BaseProvider` HTTP-error handling (no CVE-specific NO_DATA override documented) |
-| **Code quirk** | `_best_metric()` prefers CVSS v3.1 over v3.0 over v2, and within a metric list prefers the entry with `type == "Primary"` (`nvd.py:78-91`); severity -> verdict mapping: `CRITICAL`/`HIGH` -> `malicious`, `MEDIUM`/`LOW` -> `suspicious`, else `unknown`. |
+| **Code quirk** | `_best_metric()` prefers CVSS v3.1 over v3.0 over v2, and within a metric list prefers the entry with `type == "Primary"` (`nvd.py:91-104`); severity -> verdict mapping: `CRITICAL`/`HIGH` -> `malicious`, `MEDIUM`/`LOW` -> `suspicious`, else `unknown`. |
 
 ## CISA Known Exploited Vulnerabilities (KEV)
 
@@ -233,15 +234,43 @@ misconfigured key must never look like a clean verdict.
 | **Failure Behavior** | Socket failures during the WHOIS call raise real exceptions that map to `TIMEOUT`/`ERROR` rather than being silently swallowed |
 | **Code quirk** | `DOMAIN` lookups run the blocking `python-whois` library off the event loop via `asyncio.to_thread`, deliberately passing `ignore_socket_errors=False` — overriding the library's own default of `True` — precisely so socket errors don't get silently absorbed into unparseable text that would otherwise look like a clean `NO_DATA` result. `IPV4`/`IPV6`/`ASN` instead query RDAP against `https://rdap.org`, which bootstraps to whichever Regional Internet Registry actually holds the record. |
 
+## urlscan.io
+
+| Field | Value |
+|---|---|
+| **Provider Name** | urlscan.io |
+| **provider_id** | `urlscan` |
+| **Purpose** | Live sandbox scan submission and polling for a URL or domain |
+| **Supported IOC Types** | `URL`, `DOMAIN` |
+| **Authentication** | Header `API-Key`; env var `URLSCAN_API_KEY` |
+| **Free or Paid** | Not stated explicitly in code — requires a urlscan.io API key |
+| **Data Returned** | Verdict, score, categories/brands, final URL/domain/IP/ASN/server, resolved IPs, contacted domains, and screenshot URL, assembled from the polled scan result |
+| **Failure Behavior** | HTTP 401/403 -> `ERROR` (bad API key — handled explicitly rather than falling through to `BaseProvider.run()`'s generic 403-as-`RATE_LIMITED` mapping); HTTP 429 -> `RATE_LIMITED`; scan not ready within the combined submit+poll budget -> `TIMEOUT` |
+| **Code quirk** | Submits via `POST /api/v1/scan/`, then polls `GET /api/v1/result/{uuid}/` every 3s against a 60-second combined wall-clock budget (`_TIMEOUT_SECONDS=60`); `DOMAIN` IOCs get an `http://` scheme prepended before submission since `IOCType.DOMAIN` values are bare hostnames (`urlscan_io.py:39-58`). |
+
+## Google Safe Browsing
+
+| Field | Value |
+|---|---|
+| **Provider Name** | Google Safe Browsing |
+| **provider_id** | `google_safe_browsing` |
+| **Purpose** | Lookup API v4 threat-match check for a URL or domain |
+| **Supported IOC Types** | `URL`, `DOMAIN` |
+| **Authentication** | Header `x-goog-api-key`; env var `GOOGLE_SAFE_BROWSING_API_KEY` |
+| **Free or Paid** | Not stated explicitly in code — requires a Google API key |
+| **Data Returned** | Matched threat types (`MALWARE`, `SOCIAL_ENGINEERING`, `UNWANTED_SOFTWARE`, `POTENTIALLY_HARMFUL_APPLICATION`) and a derived verdict |
+| **Failure Behavior** | Only a genuine HTTP 200 with an absent/empty `matches` field maps to a `clean` verdict; every other outcome (non-200 status, network error, malformed body) returns `verdict: "unknown"` — never something that could look like a clean scan |
+| **Code quirk** | The API key is sent via the `x-goog-api-key` header rather than the documented `?key=` query parameter, because httpx logs the full request URL (including query strings) at INFO level and a query-param key would leak into application logs on every request (`google_safe_browsing.py:78-109`). |
+
 ---
 
 ## Stub Connectors
 
 These implement the identical `BaseProvider` interface and are fully wired into the
 registry and orchestrator, but the platform ships without valid credentials for the
-ones that require a key. Per the top-level README, "adding a new provider is a
-two-line change" — activating these is just a matter of populating the relevant `.env`
-variable.
+ones that require a key. As with every provider in the registry (see this document's
+introduction), they're already imported and appended in `registry.py` — activating
+these is just a matter of populating the relevant `.env` variable.
 
 ## Hybrid Analysis (Falcon Sandbox) — stub
 
@@ -299,9 +328,9 @@ variable.
 | **Failure Behavior** | Standard `BaseProvider` HTTP-error handling |
 | **Code quirk** | Verdict is hardcoded to `"unknown"` always (`censys.py:76`) — Censys supplies asset/exposure data, not a malicious/clean verdict, unlike every other threat-intel connector in this platform. |
 
-**Note on the `stubs/` naming:** the `.env.example` comment groups Hybrid Analysis,
-Censys, and PhishTank under "Paid providers (stub connectors)", but Spamhaus (also in
-`stubs/`) requires no key and is always free/configured, and PhishTank itself is
+**Note on the `stubs/` naming:** the `.env.example` comment groups Hybrid Analysis and
+Censys under "Paid providers (stub connectors)", but Spamhaus and PhishTank (also in
+`stubs/`) both require no key and are always free/configured — PhishTank itself is
 explicitly free/no-key in its own docstring. The directory name `stubs/` does not
 consistently mean "paid" — it groups connectors that ship without a working default
 credential, not connectors that are inherently paid.
@@ -320,7 +349,7 @@ credential, not connectors that are inherently paid.
 | **Free or Paid** | Free — all four underlying sources are unauthenticated. |
 | **Data Returned** | Deduplicated `{title, url, snippet, published_at, source}` hits merged from all four crawler sources, each retaining its original source URL for attribution |
 | **Failure Behavior** | Individual source failures are tolerated (the module runs all four sources concurrently and continues if one fails) |
-| **Code quirk** | Category is `OSINT` (the only provider using that category); it is registered from `app.crawler`, not `app.providers`, and is the 16th and last entry in the registry's `_ALL_PROVIDERS` list. |
+| **Code quirk** | Category is `OSINT` (the only provider using that category); it is registered from `app.crawler`, not `app.providers`, and is the 18th and last entry in the registry's `_ALL_PROVIDERS` list. |
 
 The crawler itself uses a separate, non-Redis, process-local `AsyncMinIntervalLimiter`
 (`backend/app/crawler/sources/rate_limit.py:17-43`) to self-throttle its GitHub (6.0s
@@ -342,12 +371,14 @@ ABUSEIPDB_API_KEY=<your-key-here>
 OTX_API_KEY=<your-key-here>
 NVD_API_KEY=<your-key-here>            # optional: raises NVD rate limit if set
 ABUSECH_AUTH_KEY=<your-key-here>       # shared by URLhaus, ThreatFox, MalwareBazaar
+URLSCAN_API_KEY=<your-key-here>
+GOOGLE_SAFE_BROWSING_API_KEY=<your-key-here>
+PHISHTANK_API_KEY=<your-key-here>      # optional: raises PhishTank rate limits
 
 # --- Paid providers (stub connectors -- add key to activate) ---
 HYBRID_ANALYSIS_API_KEY=<your-key-here>
 CENSYS_PERSONAL_ACCESS_TOKEN=<your-key-here>
 CENSYS_ORGANIZATION_ID=<your-org-id-here>
-PHISHTANK_API_KEY=<your-key-here>      # optional: raises PhishTank rate limits
 ```
 
 Provider execution tuning (also in `.env` / `config.py`, defaults shown):
@@ -365,9 +396,14 @@ any shared `.env` file, and keep actual secrets out of version control.
 
 ## Health endpoint
 
-`GET /providers/health` (prefix `/providers`, gated by `require_permission("lookup:read")`,
-`backend/app/api/routes/providers.py:9-11`) returns `get_provider_health()`
-(`backend/app/providers/registry.py:53-64`) — a list of, for every registered provider:
+`GET /providers/health` (prefix `/providers`, gated by `require_permission("dashboard:read")`,
+`backend/app/api/routes/providers.py:11-12`) returns `get_provider_health_history()`
+(`backend/app/core/dashboard.py:672`) — a real, DB-backed computation over
+`ProviderResultRecord` rows, not the static `get_provider_health()` stub in
+`backend/app/providers/registry.py`, which that route no longer calls. It returns a
+list of, for every registered provider, the same static fields shown below plus four
+windowed health blocks (`1h`, `24h`, `7d`, `30d`), each with `status`, `success_rate`,
+`avg_latency_ms`, `consecutive_failures`, and `rate_limited_count`:
 
 ```json
 {
@@ -376,7 +412,11 @@ any shared `.env` file, and keep actual secrets out of version control.
   "category": "threat_intel",
   "configured": true,
   "requires_key": true,
-  "supported_types": ["domain", "ipv4", "ipv6", "md5", "sha1", "sha256", "sha512", "url"]
+  "supported_types": ["domain", "ipv4", "ipv6", "md5", "sha1", "sha256", "sha512", "url"],
+  "1h": {"status": "healthy", "success_rate": 100.0, "avg_latency_ms": 240, "consecutive_failures": 0, "rate_limited_count": 0},
+  "24h": {"...": "..."},
+  "7d": {"...": "..."},
+  "30d": {"...": "..."}
 }
 ```
 
@@ -401,6 +441,8 @@ for the full REST/SSE API reference this endpoint is part of.
 | `cisa_kev` | vulnerability | false | yes | Free, public catalog |
 | `mitre_attack` | threat_intel | false | yes | Free, public STIX bundle |
 | `whois_rdap` | whois | false | yes | No key |
+| `urlscan` | sandbox | true | no (needs `URLSCAN_API_KEY`) | Submit + poll live scan, 60s combined budget |
+| `google_safe_browsing` | threat_intel | true | no (needs `GOOGLE_SAFE_BROWSING_API_KEY`) | Lookup API v4, key sent via header not query string |
 | `hybrid_analysis` | sandbox | true | no (needs `HYBRID_ANALYSIS_API_KEY`) | Paid/free-tier key per docstring |
 | `spamhaus` | threat_intel | false | yes | DNS-only, no HTTP call |
 | `phishtank` | threat_intel | false | yes | `PHISHTANK_API_KEY` optional, boosts rate limit only |

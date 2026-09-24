@@ -9,7 +9,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 - [💻 Frontend unavailable](#-frontend-unavailable)
 - [🔧 Backend unavailable](#-backend-unavailable)
 - [🔌 Port already in use](#-port-already-in-use)
-- [🔑 "API key not provided" / Test Connection always fails on an already-saved credential](#-api-key-not-provided--test-connection-always-fails-on-an-already-saved-credential)
+- [🔑 Test Connection always fails on an already-saved credential](#-test-connection-always-fails-on-an-already-saved-credential)
 - [🚦 Provider timeout / rate-limited](#-provider-timeout--rate-limited)
 - [🤖 AI unavailable](#-ai-unavailable)
 - [🐘 Database unavailable](#-database-unavailable)
@@ -53,11 +53,11 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **How to Check:** The Setup Wizard checks this live, per field, as you configure ports -- entering a value the machine currently has bound shows "In use -- try `<next free port>`" right next to the field, computed by literally checking `Get-NetTCPConnection -LocalPort <port> -State Listen` on the host. Outside the wizard, the same check is a plain `netstat -ano | findstr :<port>` (or `Get-NetTCPConnection -LocalPort <port>`) to see what already holds it.
 
-**Fix:** Either stop whatever else is using the port, or configure this install to use a different one -- the wizard's own suggested next-free-port (a linear scan upward, capped at 50 attempts) is a safe default. `Check-Prerequisites.ps1` (run automatically before installation) also checks free ports up front, but a conflict there produces a "Continue anyway?" prompt rather than a hard abort -- don't reflexively click through it without checking what's actually listening.
+**Fix:** Either stop whatever else is using the port, or configure this install to use a different one -- the wizard's own suggested next-free-port (a linear scan upward, capped at 50 attempts) is a safe default. `Check-Prerequisites.ps1` (run automatically before installation) also checks free ports up front, but tracks a port conflict as a non-hard failure -- it never triggers the installer's "Continue installing anyway?" prompt (that only fires for a genuine hard failure like a missing Docker Desktop or insufficient disk space), so the installer proceeds past a port conflict silently and leaves it for the wizard's own port-conflict page to catch -- don't assume it was already resolved just because installation continued.
 
 **Prevention:** If running multiple installs or environments on one machine (e.g. a dev tree and an installed copy simultaneously), give each a fully distinct set of host ports up front rather than relying on the conflict detection to catch it after the fact.
 
-## 🔑 "API key not provided" / Test Connection always fails on an already-saved credential
+## 🔑 Test Connection always fails on an already-saved credential
 
 **Symptom:** A provider or AI backend was configured and saved successfully (it shows "Configured" on the Manage Providers page), but clicking **Test Connection** on that same row reports an authentication failure -- as if no key were set at all.
 
@@ -116,7 +116,7 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **How to Check:** The error message itself distinguishes these two cases directly. If unsure whether an account exists at all, an administrator can check the Admin/user management page (ADMINISTRATION nav group, admin-only).
 
-**Fix:** For `Invalid email or password`, double-check for typos, caps-lock, or whether the account was ever actually created -- the very first account ever registered on a fresh install automatically becomes the Administrator; every later registration becomes an Analyst by default. For `Account disabled`, only an administrator re-enabling the account resolves this -- there is no self-service path.
+**Fix:** For `Invalid email or password`, double-check for typos, caps-lock, or whether the account was ever actually created -- the very first account ever registered on a fresh install automatically becomes the Administrator, and self-registration is closed after that: every later account must be created by an administrator from the Administration page (Analyst by default unless the administrator assigns a different role), not through the public registration form. For `Account disabled`, only an administrator re-enabling the account resolves this -- there is no self-service path.
 
 **Prevention:** Use the Setup Wizard's own re-run ("Configuration" shortcut) rather than trying to register a duplicate admin account if credentials are simply forgotten -- re-running the wizard on an existing install prompts for the existing admin email/password rather than creating a new one.
 
@@ -124,9 +124,9 @@ Every scenario below was either deliberately induced and observed, or organicall
 
 **Symptom:** A `403 Forbidden` response, with a message in the shape `Role '<role>' lacks permission '<permission>'` (e.g. `Role 'viewer' lacks permission 'lookup:create'`).
 
-**Cause:** The signed-in user's role genuinely doesn't include the permission the attempted action requires. This is not a bug -- it's the RBAC system doing exactly what it's supposed to. The most common real case: a **Viewer** account (deliberately broad read-only access -- dashboard, provider health, lookups, evidence, cases, security assessments, all readable) attempting something Viewers are intentionally excluded from: creating an investigation, exporting results, running a security assessment, or touching provider/AI/user configuration (all of those require Analyst or Admin).
+**Cause:** The signed-in user's role genuinely doesn't include the permission the attempted action requires. This is not a bug -- it's the RBAC system doing exactly what it's supposed to. The most common real case: a **Viewer** account (deliberately broad read-only access -- dashboard, provider health, lookups, evidence, cases, security assessments, all readable) attempting something Viewers are intentionally excluded from: creating an investigation, exporting results, or running a security assessment (all of those require Analyst or Admin) -- or touching provider/AI/user configuration, which requires Admin specifically (not even Analyst).
 
-**How to Check:** The error message itself names both the role and the exact missing permission string, so there's no guessing which one is short. Compare against the three-role permission matrix (ADMIN has everything; ANALYST has lookup/evidence/analysis/hunting/copilot/basket/case/security-assessment/dashboard permissions; VIEWER has read-only lookup/evidence/case/security-assessment/dashboard access only) documented in full in the Security Architecture chapter.
+**How to Check:** The error message itself names both the role and the exact missing permission string, so there's no guessing which one is short. Compare against the three-role permission matrix (ADMIN has everything; ANALYST has lookup/evidence/analysis/hunting/copilot/basket/case/security-assessment/pentest/dashboard permissions; VIEWER has read-only lookup/evidence/case/security-assessment/pentest/dashboard access only) documented in full in the Security Architecture chapter.
 
 **Fix:** Either have an administrator grant the user the Analyst or Admin role (if their actual job requires the action), or recognize that Viewer is working as intended and use an Analyst/Admin account for that specific action instead.
 

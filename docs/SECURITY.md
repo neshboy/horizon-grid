@@ -24,6 +24,7 @@ registered in `backend/app/main.py`):
 | POST | `/api/v1/auth/login` | No | Returns access + refresh token pair |
 | POST | `/api/v1/auth/refresh` | No (bearer refresh token in body) | Rotates both tokens |
 | GET | `/api/v1/auth/me` | Yes | Returns current user, including the real stored `full_name` |
+| POST | `/api/v1/auth/logout` | Yes | Bumps `token_version`, immediately invalidating every other outstanding access/refresh token for this user (self-service "log out everywhere") |
 
 ### Token mechanics
 
@@ -123,10 +124,17 @@ static `ROLE_PERMISSIONS` dict and raises `403` with
 | `case:close` | ✅ | ✅ | ❌ |
 | `security_assessment:create` | ✅ | ✅ | ❌ |
 | `security_assessment:read` | ✅ | ✅ | ✅ |
+| `dashboard:read` | ✅ | ✅ | ✅ |
+| `pentest:create` | ✅ | ✅ | ❌ |
+| `pentest:read` | ✅ | ✅ | ✅ |
+| `pentest:validate` | ✅ | ✅ | ❌ |
+| `pentest:admin` | ✅ | ❌ | ❌ |
+| `pentest:exploit` | ✅ | ❌ | ❌ |
 
-Admin has all 17 permissions. Analyst has 14 (everything except
-`provider:manage`, `user:manage`, `audit:read`). Viewer has 4 (read-only:
-`lookup:read`, `evidence:read`, `case:read`, `security_assessment:read`).
+Admin has all 23 permissions. Analyst has 18 (everything except
+`provider:manage`, `user:manage`, `audit:read`, `pentest:admin`,
+`pentest:exploit`). Viewer has 6 (read-only: `lookup:read`, `evidence:read`,
+`case:read`, `security_assessment:read`, `dashboard:read`, `pentest:read`).
 
 `security_assessment:create` (`ADMIN`/`ANALYST` — the same tier as `lookup:create`, since it sends
 real active-check traffic to a real target) and `security_assessment:read` (`ADMIN`/`ANALYST`/
@@ -149,17 +157,21 @@ value. See [API_DOCUMENTATION.md](API_DOCUMENTATION.md)'s §3.5 for the full adm
 
 | Route file | Permissions enforced |
 |---|---|
-| `lookup.py` | `lookup:create`, `lookup:read` (×2) |
-| `providers.py` | `lookup:read` (on `/providers/health`) |
-| `analysis.py` | `evidence:read`, `analysis:generate` (×7), `copilot:query` |
+| `lookup.py` | `lookup:create` (×2), `lookup:read` (×4), `lookup:export` |
+| `providers.py` | `dashboard:read` (on `/providers/health`), `provider:manage` (on `/providers/{provider_id}/test`) |
+| `analysis.py` | `evidence:read`, `analysis:generate` (×8), `copilot:query` |
 | `hunting.py` | `hunting:generate` (×2) |
 | `pivot.py` | `lookup:read` |
 | `basket.py` | `basket:manage` (×5) |
 | `cases.py` | `case:read` (×2), `case:create`, `case:write` (×4), `case:close` |
-| `runtime.py` | `provider:manage` (×11), `lookup:read` (on `/runtime/ai-active` GET), `audit:read` (on `/runtime/audit-log`) |
+| `runtime.py` | `provider:manage` (×7), `lookup:read` (×2 — on `/runtime/ai-providers` and `/runtime/ai-active` GETs), `audit:read` (on `/runtime/audit-log`) |
 | `admin.py` | `user:manage` (×7 — list/stats/roles/create/update/set-active/reset-password) |
-| `security_assessment.py` | `security_assessment:read` (×3 — profiles/tool-health/list-runs/get-run), `security_assessment:create` (×1 — run) |
-| `auth.py` | none (register/login/refresh are unauthenticated; `/me` requires only a valid access token, no specific permission) |
+| `security_assessment.py` | `security_assessment:read` (×4 — profiles/tool-health/list-runs/get-run), `security_assessment:create` (×2 — run/cancel) |
+| `dashboard.py` | `dashboard:read` (×4 — kpis/activity-timeline/geo-activity/executive-summary) |
+| `pentest.py` | `pentest:read` (×7), `pentest:create` (×8), `pentest:admin` (×2 — kill-switch engage/disengage), `pentest:validate` (on finding validate) |
+| `pentest_exploit.py` | `pentest:read` (on `/pentest/msf/health`), `pentest:exploit` (×5) |
+| `ai_config.py` | `provider:manage` (on `/ai/{backend}/models`; `/ai/test` also requires it once the first admin account exists, but allows unauthenticated calls before then — same bootstrap window as `/auth/register`) |
+| `auth.py` | none (register/login/refresh are unauthenticated; `/me` and `/logout` require only a valid access token, no specific permission) |
 
 ### Multi-admin support and last-administrator protection
 
@@ -198,24 +210,35 @@ and expiry only), so `token_version` (above) exists specifically to close that g
 
 ## 3. Rate Limiting
 
-There is **one** rate limiter in the codebase, and it applies to **one**
-endpoint: `POST /api/v1/lookup/stream` (`backend/app/api/routes/lookup.py`).
+There are **three** rate limiters in the codebase, all built on the same
+fixed-window `RateLimiter` class (`backend/app/core/cache.py`): one on
+`POST /api/v1/lookup/stream`, and one each on `POST /api/v1/auth/login` and
+`POST /api/v1/auth/register` (`backend/app/api/routes/auth.py`).
 
 - Implementation: fixed-window counter in Redis (`backend/app/core/cache.py`,
-  `RateLimiter` class), keyed as `rate_limit:lookup_create:<user_id>` — scoped
-  per authenticated user, enforced across all backend workers (not per-process).
+  `RateLimiter` class), enforced across all backend workers (not per-process).
+  The lookup limiter is keyed as `rate_limit:lookup_create:<user_id>` (scoped
+  per authenticated user); the login/register limiters are each keyed as
+  `rate_limit:login:<email>` / `rate_limit:register:<email>` (scoped per
+  attempted email address, not per IP — this app has no reverse-proxy-aware
+  trusted-IP configuration to safely extract a real client IP from).
 - Rationale (from code comment): each lookup fans out to every provider plus
-  the crawler plus multiple AI calls, so this bounds cost/load per user.
+  the crawler plus multiple AI calls, so this bounds cost/load per user. The
+  login/register limiters are a fixed-window throttle rather than a hard
+  account lockout, deliberately: a lockout would itself let an attacker lock
+  out a real admin by repeatedly failing their login on purpose.
 - Exceeding the limit returns `429` with a descriptive `detail` message.
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `lookup_rate_limit_max_calls` | `10` | Max lookups per window |
 | `lookup_rate_limit_window_seconds` | `60` | Window length, seconds |
+| `login_rate_limit_max_attempts` | `10` | Max login/registration attempts per window, per attempted email |
+| `login_rate_limit_window_seconds` | `60` | Window length, seconds |
 
-**NOT IMPLEMENTED**: no rate limiting or account-lockout exists on
-`/auth/login` or `/auth/register` — repeated failed login attempts are not
-throttled or locked out anywhere in the code.
+A correct password against an active account is never itself throttled by
+the login limiter — only failed attempts (wrong password/unknown email) and
+attempts against a disabled account consume it.
 
 ## 4. CORS
 
@@ -281,7 +304,14 @@ omitted — see `.env.example` for the full template):
 | AI backend — Bedrock | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BEDROCK_API_KEY` |
 | AI backend — Gemini | `GEMINI_API_KEY` |
 | AI backend — Anthropic direct | `ANTHROPIC_API_KEY` |
-| Threat-intel providers | `VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, `OTX_API_KEY`, `NVD_API_KEY`, `ABUSECH_AUTH_KEY` |
+| AI backend — Groq | `GROQ_API_KEY` |
+| AI backend — OpenAI | `OPENAI_API_KEY` |
+| AI backend — Kimi | `KIMI_API_KEY` |
+| AI backend — DeepSeek | `DEEPSEEK_API_KEY` |
+| AI backend — xAI | `XAI_API_KEY` |
+| AI backend — Mistral | `MISTRAL_API_KEY` |
+| AI backend — OpenRouter | `OPENROUTER_API_KEY` |
+| Threat-intel providers | `VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, `OTX_API_KEY`, `NVD_API_KEY`, `ABUSECH_AUTH_KEY`, `URLSCAN_API_KEY`, `GOOGLE_SAFE_BROWSING_API_KEY` |
 | Stub/paid providers | `HYBRID_ANALYSIS_API_KEY`, `CENSYS_PERSONAL_ACCESS_TOKEN`, `CENSYS_ORGANIZATION_ID`, `PHISHTANK_API_KEY` |
 
 Use `<configure securely>` as a placeholder in any shared `.env` template or
@@ -300,15 +330,11 @@ this is a threat-intel workbench, and the auth model is intentionally minimal.
   anyone can forge valid access/refresh tokens for any user/role. **Action:**
   always set a long, random `JWT_SECRET_KEY` in `.env` before any
   non-local deployment.
-- **No self-service "log out everywhere"**: a user cannot themselves revoke their own
-  other-device sessions — `token_version` (§1) is only ever bumped by an *administrator's*
-  password reset (`POST /api/v1/admin/users/{id}/reset-password`), not by any self-service
-  action. A refresh token an attacker has stolen (but the legitimate user hasn't otherwise
-  triggered a reset for) remains valid and reusable until it naturally expires
-  (`refresh_token_expire_days`, default 7 days); client-side `logout()` only clears
-  `localStorage` and does not invalidate the token server-side.
-- **No login rate limiting / brute-force protection**: `/auth/login` and
-  `/auth/register` have no per-IP or per-account throttling or lockout.
+- **No per-IP brute-force throttling / no hard account lockout**: `/auth/login` and
+  `/auth/register` are rate-limited per attempted email address (§3), but there is no
+  per-IP throttling (this app has no reverse-proxy-aware trusted-IP configuration to
+  safely extract a real client IP from) and no hard lockout after repeated failures —
+  only a fixed-window throttle that resets itself.
 - **No MFA/2FA**: no TOTP, SMS, or other second factor exists anywhere in the
   backend or frontend.
 - **No self-service password reset / account recovery**: no forgot-password endpoint,
@@ -332,3 +358,4 @@ this is a threat-intel workbench, and the auth model is intentionally minimal.
 - [DEPLOYMENT.md](DEPLOYMENT.md) — docker-compose / network topology
 - [ADMIN_GUIDE.md](ADMIN_GUIDE.md) — operational guidance for administrators
 - [SECURITY_ASSESSMENT_TOOLKIT.md](SECURITY_ASSESSMENT_TOOLKIT.md) — active-check tools, profiles, and scope boundaries
+- [PENTEST_SUITE.md](PENTEST_SUITE.md) — the separate, scope-enforced pentest module (`pentest:*` permissions above), including its gated exploit-execution capability

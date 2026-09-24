@@ -103,9 +103,9 @@ this is the developer's primary, non-disposable machine.
 - Diagnostics bundle, generated against a real running deployment and
   extracted for inspection, contains **zero** unredacted secrets across all
   13 files (container logs for all 8 services, `.env`-redacted summary,
-  container status, prerequisites, system info) — the one pattern match was
-  the redaction marker itself catching Neo4j's own "changed password" log
-  line, confirmed correct behavior, not a leak.
+  setup log, container status, prerequisites, system info) — the one
+  pattern match was the redaction marker itself catching Neo4j's own
+  "changed password" log line, confirmed correct behavior, not a leak.
 - RBAC: every route across `providers.py`, `cases.py`, `basket.py`,
   `hunting.py`, `analysis.py`, `lookup.py`, `pivot.py` requires a specific
   permission; a non-privileged (analyst) token is correctly blocked (403,
@@ -425,7 +425,7 @@ independently confirmed:
 
 ## Provider Findings
 
-- All 8 real (non-stub) provider connectors exercised live during the
+- All 9 real (non-stub) provider connectors exercised live during the
   investigation test: VirusTotal, AbuseIPDB, OTX, ThreatFox/URLhaus/
   MalwareBazaar (shared abuse.ch key), NVD, Hybrid Analysis, Spamhaus,
   WHOIS/RDAP, crt.sh — real HTTP calls, real responses, correctly

@@ -46,7 +46,7 @@ Before any files are copied, a `[Code]`-section step in `installer.iss` runs `Ch
 
 ## 📁 File Layout: Program Files vs. ProgramData
 
-The installer follows the standard Windows split between read-mostly program binaries and writable per-machine application data (`windows/scripts/Common.ps1`, lines 28-40):
+The installer follows the standard Windows split between read-mostly program binaries and writable per-machine application data (`windows/scripts/Common.ps1`, lines 8-25):
 
 | Location | Purpose | Contents |
 |---|---|---|
@@ -74,7 +74,7 @@ Secrets themselves are generated using a CSPRNG (cryptographically secure pseudo
 Notes on individual pages:
 
 - **Admin Account** — collects the credentials for the operator account the installer will register once the stack is up. Per the platform's own registration logic, the *first* account ever registered against a fresh database is automatically granted the admin role, with no manual database edit required; every registration attempt after that is rejected with `403 Forbidden` rather than silently creating a lesser account. That bootstrap behavior is what makes it safe for this page to simply be "create the admin account" with no separate role picker.
-- **Provider Configuration** — presents exactly 8 of the platform's 18 registered intelligence providers, each with a live "Test" button that calls `POST /api/v1/providers/{id}/test` against the running backend: VirusTotal, AbuseIPDB, OTX, the combined abuse.ch group (URLhaus/ThreatFox/MalwareBazaar — one free Auth-Key covers all three), NVD, Hybrid Analysis, Censys, and PhishTank. The wizard's own inline notes match the backend's behavior exactly for the cases checked: Censys requires both a Personal Access Token and an Organization ID, the abuse.ch key is shared across three connectors, and NVD works without a key at a lower rate limit. The remaining 10 backend providers are deliberately absent from this page for two different reasons: 6 (Certificate Transparency lookups, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, and the internal OSINT crawler) require no credential to collect at all, so there is nothing for this page to configure and no corresponding test handler exists for them either; the other 2 (urlscan.io, Google Safe Browsing) **do** require a credential but are still absent from the wizard on both platforms identically — both are configured after install from the app's own Providers page instead.
+- **Provider Configuration** — presents exactly 8 of the platform's 18 registered intelligence providers, each with a live "Test" button that calls `POST /api/v1/providers/{id}/test` against the running backend: VirusTotal, AbuseIPDB, OTX, the combined abuse.ch group (URLhaus/ThreatFox/MalwareBazaar — one free Auth-Key covers all three), NVD, Hybrid Analysis, Censys, and PhishTank. The wizard's own inline notes match the backend's behavior exactly for the cases checked: Censys requires both a Personal Access Token and an Organization ID, the abuse.ch key is shared across three connectors, and NVD works without a key at a lower rate limit. The remaining 8 backend providers are deliberately absent from this page for two different reasons: 6 (Certificate Transparency lookups, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, and the internal OSINT crawler) require no credential to collect at all, so there is nothing for this page to configure and no corresponding test handler exists for them either; the other 2 (urlscan.io, Google Safe Browsing) **do** require a credential but are still absent from the wizard on both platforms identically — both are configured after install from the app's own Providers page instead.
 - **Port Review** — lets the operator confirm/adjust the host ports the stack will bind, following on from the prerequisite check's "ports free" verification.
 
 ## 🏁 What "Start Installation" Actually Executes
@@ -83,7 +83,7 @@ Clicking "Start Installation" on the Summary/Install page runs, in order:
 
 1. Writes `.env` via `Write-EnvFile.ps1`, using the values collected across the previous pages plus CSPRNG-generated secrets.
 2. Runs `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build` — the production overlay swaps in production start commands and drops the development bind-mounts.
-3. Polls the backend's `/health` endpoint for up to 3 minutes, waiting for the stack to come up.
+3. Polls the backend's `/health/detailed` endpoint for up to 3 minutes, waiting for the stack to come up.
 4. Registers the admin account by calling `POST /api/v1/auth/register` with the credentials from the Admin Account page, then logs in.
 
 Nothing here is a distinct "installer-native" install step beyond orchestrating the same Docker Compose commands and HTTP calls an operator could run by hand — the wizard's value is sequencing and validating them, not replacing them.
@@ -96,12 +96,13 @@ The installer's `[Icons]` section creates the following (plus an optional deskto
 |---|---|
 | Open Platform | Runs `Open-Platform.ps1` (also the default desktop icon action): checks stack health first, starts Docker Desktop if it isn't already running, starts the stack, then opens the browser to the platform. |
 | Configuration | Re-runs the Setup Wizard. On an existing install this sets an upgrade flag (`$State.IsUpgrade`) that changes the wizard's behavior — see Upgrade/Reconfigure below. |
-| Start Platform | Runs `Service-Start.ps1`: `docker compose up -d`, then polls `/health`. |
+| Start Platform | Runs `Service-Start.ps1`: `docker compose up -d`, then polls `/health/detailed`. |
 | Stop Platform | Runs `Service-Stop.ps1`: `docker compose stop` (no `-v` flag, so container data/volumes are preserved, not deleted). |
-| Restart Platform | Listed in the installer's icon set; the facts available do not detail its script-level implementation beyond the name (presumably a stop-then-start sequence, not confirmed). |
-| Service Status | Listed in the installer's icon set; specific implementation not detailed in the source material beyond the name. |
+| Restart Platform | Runs `Service-Restart.ps1`: `docker compose restart`, then polls `/health/detailed` for up to 2 minutes. |
+| Service Status | Runs `Service-Status.ps1`: prints `docker compose ps`, backend/frontend health-check results, and whether Docker Desktop itself is running. |
 | Backup Database Now | Manually triggers an on-demand database backup using the same `pg_dump`-against-the-running-postgres-container mechanism (`Backup-Database.ps1`) that runs automatically before an upgrade (see below). |
-| Diagnostics | Listed in the installer's icon set; specific implementation not detailed in the source material beyond the name. |
+| Restore Database | Runs `Restore-Database.ps1`: destructively replaces the current database with a chosen (or most recent) `pg_dump` backup; requires typing `RESTORE` to confirm unless `-Force` is passed. |
+| Diagnostics | Runs `Diagnostics.ps1`: builds a redacted diagnostic zip bundle on the Desktop (container status/logs, setup log, prerequisite-check output, system info), with secrets scrubbed before anything is written to disk. |
 | Documentation | Opens the installed documentation (`docs/`, `README.md`) copied in at install time. |
 | Uninstall | Invoked via `[Code]` in `installer.iss`; offers "Remove Application" (keeps `ProgramData` and Docker volumes intact) versus "Remove Everything" (requires typing `DELETE` to confirm; runs `docker compose down -v` and deletes `ProgramData`). |
 
@@ -115,7 +116,7 @@ Re-running the Setup Wizard from the **Configuration** shortcut on a machine tha
 From there the wizard proceeds through the same page flow (Welcome → Admin Account → … → Summary/Install → Finish) and "Start Installation" re-runs the same `docker compose ... up -d --build` / health-poll sequence described above.
 
 > [!NOTE]
-> The source material does not specify whether the final admin-account registration call is skipped or altered on an upgrade path versus a fresh install — this detail is **not confirmed** and should not be assumed either way without checking the wizard script directly.
+> Confirmed in `Setup-Wizard.ps1`: on an upgrade, if the Admin Account page's email/password fields are left blank (the default "keep it unchanged" path), the final registration/login call is skipped entirely; if credentials are re-entered instead, the same `POST /api/v1/auth/register` call runs, is rejected as already-registered, and the wizard falls back to signing in with those credentials.
 
 ## 📝 Summary
 

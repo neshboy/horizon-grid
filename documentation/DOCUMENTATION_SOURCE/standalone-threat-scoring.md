@@ -32,7 +32,7 @@ Confidence:    54%
 These are two different questions with two different answers:
 
 - **Threat score (`overall_risk_score`, `malicious_probability`)** asks: *how malicious does the evidence look?* An 87 means the evidence, taken at face value, points strongly toward malicious.
-- **Confidence (`confidence_score`)** asks: *how much should you trust that number?* A 54% means the evidence behind that 87 is thinner or more conflicted than you'd want before acting on it alone — for example, a single uncorroborated source, or two sources that disagree with each other.
+- **Confidence (`confidence_score`)** asks: *how much should you trust that number?* A 54% means the evidence behind that 87 is more conflicted than you'd want before acting on it alone — for example, two sources that disagree with each other.
 
 A high score with low confidence is a real, correct, and useful combination — it means "this looks bad, but verify it before treating it as certain," not "the platform doesn't know what it's doing." A future analyst should always read both numbers together, never the score alone.
 
@@ -112,9 +112,9 @@ A real live investigation during this project's own testing, with AlienVault OTX
 ```
 voting_provider_count: 1        mean_provider_vote: 1.0
 provider_corroboration_factor: 0.40   -> provider_component: 26.0
-correlation_qualifying_fraction: 0.575  -> correlation_component: 20.1
-overall_risk_score / malicious_probability: 46.1   (severity: medium)
-confidence_score: 28.4  (pulled down by the single-source corroboration cap)
+correlation_qualifying_fraction: 0.275  -> correlation_component: 9.6
+overall_risk_score / malicious_probability: 35.6   (severity: medium)
+confidence_score: 35.6  (matches the score exactly here — see below)
 ```
 
-Read together: the evidence leans toward malicious (46.1, medium), but the confidence (28.4%) correctly signals this rests on one uncorroborated source — exactly the kind of result an analyst should verify further before acting on, and exactly the distinction this document opened with.
+Read together: the evidence leans toward malicious (35.6, medium), and here confidence lands at that same 35.6% rather than below it — a lone source and a single correlation edge scale the risk score and the confidence score down by the identical corroboration factor, so solitude by itself does not open a score/confidence gap. As explained above, that gap is opened specifically by disagreement between sources, not by there being only one of them.

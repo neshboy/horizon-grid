@@ -30,8 +30,9 @@ flowchart TD
     J --> K["Export (Markdown/JSON client-side)"]
 ```
 
-Everything left of "Export" is real and working. The single gap is noted in
-[Step 9](#9-export-what-works-and-what-does-not).
+Everything, including Export, is real and working — see
+[Step 9](#9-export-what-works-and-what-does-not) for the permission
+PDF/CSV export requires.
 
 ---
 
@@ -76,10 +77,11 @@ the sidebar shows this raw stream if you need to see exactly what arrived
 and when.
 
 Re-visiting a completed lookup later via `/lookup/{id}` re-fetches the
-same data with a plain `GET /api/v1/lookup/{id}` (no SSE) — but note that
-endpoint does **not** return correlation edges, so the Relationship Graph
-on that page is always empty; only the original `/lookup/new` stream view
-shows the live graph payload.
+same data with a plain `GET /api/v1/lookup/{id}` (no SSE) — that endpoint
+also rebuilds and returns correlation edges (from the persisted
+`correlation_edges` table), so the Relationship Graph on that page is
+populated on revisit too, not only on the original `/lookup/new` stream
+view.
 
 ---
 
@@ -101,7 +103,7 @@ Each `provider_result` SSE event renders as a card (`ProviderCardGrid` /
 - Non-`ok` providers show "No AI summary" — a failed/errored provider
   contributes **zero** correlation nodes/edges and zero evidence.
 
-Use `GET /api/v1/providers/health` (permission `lookup:read`) if a
+Use `GET /api/v1/providers/health` (permission `dashboard:read`) if a
 provider looks suspiciously absent — see [PROVIDERS.md](PROVIDERS.md) for
 the provider roster.
 
@@ -343,15 +345,14 @@ chosen format — the format selector here additionally offers `yara`.
 |---|---|---|
 | Markdown | Built entirely client-side from the already-fetched Final Assessment (executive/technical summary, threat assessment, verdict rationale, evidence, MITRE mappings, actions, IR recommendations, detection rules) | **Works** |
 | JSON | `JSON.stringify()` of the in-browser assessment object, downloaded as a Blob | **Works** |
-| PDF | Calls `POST /api/v1/lookup/{id}/export?format=pdf` | **NOT IMPLEMENTED** — no such backend route exists anywhere in `backend/app/api/routes/`. The button will always fail and the UI shows *"Export format not yet available."* |
-| CSV | Calls `POST /api/v1/lookup/{id}/export?format=csv` | **NOT IMPLEMENTED** — same missing route, same fallback message |
+| PDF | Calls `POST /api/v1/lookup/{id}/export?format=pdf` | **Works** — server-rendered via ReportLab |
+| CSV | Calls `POST /api/v1/lookup/{id}/export?format=csv` | **Works** — server-rendered, one metadata block plus one row per provider result |
 
-There is also a `lookup:export` permission string defined in the role
-table for `admin`/`analyst`, but it is never checked by any route — it is
-configured but currently unused, presumably reserved for the missing
-export endpoint. **Do not rely on server-side PDF/CSV export for
-reporting today** — use Markdown or JSON, or copy content out of the UI
-manually.
+Both are gated on the `lookup:export` permission (role table for
+`admin`/`analyst` only — `viewer` holds `lookup:read` but not
+`lookup:export`). A viewer's Export PDF/CSV buttons will fail with a
+permission error; use Markdown or JSON export instead, or have an
+admin/analyst pull the report.
 
 ---
 
@@ -360,16 +361,17 @@ manually.
 | Action | Permission required |
 |---|---|
 | Start a lookup | `lookup:create` |
-| View a lookup / list lookups / pivots / provider health | `lookup:read` |
+| View a lookup / list lookups / pivots | `lookup:read` |
+| View provider health | `dashboard:read` |
 | View evidence ledger | `evidence:read` |
 | Run any "Ask AI" explanation (WHY?, Challenge, etc.) or Copilot | `analysis:generate` / `copilot:query` |
 | Generate hunting queries / detection rules | `hunting:generate` |
 | Manage your basket | `basket:manage` |
 | Read / create / edit / close cases | `case:read` / `case:create` / `case:write` / `case:close` |
 
-`viewer` role has only `lookup:read`, `evidence:read`, `case:read` — a
-viewer can read everything above but cannot start lookups, run AI
-explanations, hunt, or touch the basket/cases. See
+`viewer` role has only `lookup:read`, `evidence:read`, `case:read`,
+`dashboard:read` — a viewer can read everything above but cannot start
+lookups, run AI explanations, hunt, or touch the basket/cases. See
 [ARCHITECTURE.md](ARCHITECTURE.md) for role/permission internals.
 
 ---
@@ -380,7 +382,6 @@ explanations, hunt, or touch the basket/cases. See
   — this data only appears inline within a lookup's evidence/correlation
   data.
 - No bulk-upload / batch-lookup page.
-- No server-side PDF/CSV export (see [Section 9](#9-export-what-works-and-what-does-not)).
 - No Neo4j-backed graph traversal — the "Neo4j mirror" mentioned in some
   backend code comments was never implemented; the correlation graph you
   see is rebuilt from Postgres every time.

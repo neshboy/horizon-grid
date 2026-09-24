@@ -120,7 +120,7 @@ instead of a cloud AI API.
   as a fact in its prompt, and the backend mechanically overwrites the AI's
   own risk numbers with the scoring engine's output before persisting, so the
   score displayed is always the deterministic one.
-- Covered by a 22-test unit suite (`backend/app/tests/unit/test_scoring_engine.py`)
+- Covered by a 24-test unit suite (`backend/app/tests/unit/test_scoring_engine.py`)
   exercising corroboration weighting, conflicting-verdict confidence collapse,
   and severity banding.
 
@@ -277,7 +277,7 @@ afterward (full detail in the Mission-Critical Operations Manual):
 | Code/package signing | Not code-signed — SmartScreen will warn; click "Run anyway" | Not signed (standard for `.deb` packages) |
 | Uninstall (keep data) | "Remove Application" — stops containers, no volume deletion | `apt remove horizon-grid` — stops containers, no volume deletion |
 | Uninstall (delete everything) | "Remove Everything" — requires typing `DELETE`; deletes volumes and all config/data | `apt purge horizon-grid` — force-removes containers/volumes and deletes all config/data |
-| Current version | `0.3.10` | `0.3.10` |
+| Current version | `0.3.14` | `0.3.14` |
 
 ## 🏗️ Architecture
 
@@ -410,9 +410,8 @@ npm run build
 ```
 
 > [!NOTE]
-> `npm test` (vitest) is wired up in `frontend/package.json`, but no test
-> files exist yet under `frontend/app`, `frontend/components`, or
-> `frontend/lib` — this is a placeholder, not a passing suite.
+> `npm test` (vitest) is wired up in `frontend/package.json`; 5 test files
+> (30 tests) currently exist under `frontend/app` and `frontend/lib`.
 
 ## 📄 License
 

@@ -42,7 +42,7 @@ An administrator resetting a user's password increments that user's `token_versi
 **Bootstrap and account creation.** The very first user ever created on an instance is automatically granted `ADMIN`; every registration attempt after that is rejected outright (`403`, "Self-registration is closed"). There is no seed script and no default account -- this bootstrap rule, exercised by the Windows Setup Wizard at install time, is the platform's only path to an initial administrator. Every account after that first one is created by an existing administrator from the Administration page, who picks its role up front.
 
 > [!NOTE]
-> **What is honestly not yet in place:** no self-service "log out everywhere" (only an admin-driven password reset triggers revocation -- a user cannot invalidate their own other sessions without changing their password), no rate limiting on `/auth/register`, no account lockout on either endpoint, and no multi-factor authentication. `/auth/login` itself did gain a real per-account rate limiter in a later mission-critical-reliability review (v0.2.3) -- see §12. None of the remaining gaps are silently glossed over either.
+> **What is honestly not yet in place:** no self-service "log out everywhere" (only an admin-driven password reset triggers revocation -- a user cannot invalidate their own other sessions without changing their password), no account lockout on either endpoint, and no multi-factor authentication. `/auth/login` itself did gain a real per-account rate limiter in a later mission-critical-reliability review (v0.2.3); `/auth/register` has since gained an identical per-email rate limiter of its own -- see §12. None of the remaining gaps are silently glossed over either.
 
 ## 🔐 2. Authorization: Role-Based Access Control
 
@@ -101,7 +101,7 @@ On Windows installs, the legacy `.env` path is hardened at the filesystem level:
 
 ## 🧹 4. Input Validation and IOC Handling
 
-`LookupCreateRequest.value` -- the raw string a user submits for investigation -- is an unconstrained string on the server side. IOC-type detection (`app/ioc/detector.py`) is regex-based *classification* (deciding whether a string looks like an IPv4 address, a SHA256 hash, a domain, a CVE ID, and so on), not sanitization: it exists to route a value to the right providers, not to reject or clean dangerous input. This is a load-bearing design fact worth stating plainly, because it means downstream consumers of a raw IOC value -- exports, the AI prompt, provider connectors -- are each individually responsible for treating that value as untrusted, and this document's remaining sections (§6, §7) are exactly the record of where that responsibility was and wasn't discharged correctly. Registration's `RegisterRequest.password` has a server-enforced 8-character minimum (and a 72-byte maximum, matching bcrypt's own effective limit) but no complexity rule beyond length.
+`LookupCreateRequest.value` -- the raw string a user submits for investigation -- carries only a length constraint (1-2048 characters) on the server side; nothing about its content or character set is restricted. IOC-type detection (`app/ioc/detector.py`) is regex-based *classification* (deciding whether a string looks like an IPv4 address, a SHA256 hash, a domain, a CVE ID, and so on), not sanitization: it exists to route a value to the right providers, not to reject or clean dangerous input. This is a load-bearing design fact worth stating plainly, because it means downstream consumers of a raw IOC value -- exports, the AI prompt, provider connectors -- are each individually responsible for treating that value as untrusted, and this document's remaining sections (§6, §7) are exactly the record of where that responsibility was and wasn't discharged correctly. Registration's `RegisterRequest.password` has a server-enforced 8-character minimum (and a 72-byte maximum, matching bcrypt's own effective limit) but no complexity rule beyond length.
 
 ## 🚧 5. Server-Side Request Forgery (SSRF) Protection
 
@@ -109,8 +109,10 @@ One place in this codebase makes a server-side HTTP call to a host fully chosen 
 
 ```python
 # app/core/url_safety.py
-def assert_safe_outbound_url(url: str) -> None:
-    """Raises ValueError if `url` is not safe to fetch server-side."""
+async def assert_safe_outbound_url(url: str) -> str:
+    """Raises ValueError if `url` is not safe to fetch server-side. Returns
+    one resolved, validated IP address literal for the caller to actually
+    connect to."""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(...)
@@ -124,7 +126,7 @@ def assert_safe_outbound_url(url: str) -> None:
             )
 ```
 
-Two design choices here are deliberate, not accidental gaps. First, only `http`/`https` schemes are permitted at all -- rejecting `file://`, `gopher://`, and every other scheme outright. Second, the function resolves the hostname and inspects every returned address rather than pattern-matching the URL string, which is what actually closes a DNS-rebinding-style bypass (a hostname that resolves differently at check time versus fetch time cannot be reasoned about safely from the string alone). Third, and most deliberately: it does **not** block loopback or RFC 1918 private-IP ranges. That is not an oversight -- Ollama's entire legitimate use case is a local or LAN model server (this platform's own default `OLLAMA_BASE_URL` points at `host.docker.internal`), so blocking private ranges would break real, intended functionality rather than stop a real attack. What it specifically blocks is link-local address space (`169.254.0.0/16`, `fe80::/10`), which has no legitimate Ollama use case and is where essentially every major cloud provider's instance-metadata service lives (`169.254.169.254`) -- the single highest-value SSRF target this particular code path could otherwise be tricked into reaching. This is a narrowly scoped, honestly-reasoned control for the one outbound-URL surface that exists today, not a generic egress firewall.
+Two design choices here are deliberate, not accidental gaps. First, only `http`/`https` schemes are permitted at all -- rejecting `file://`, `gopher://`, and every other scheme outright. Second, the function resolves the hostname, inspects every returned address, and hands back the exact resolved address for the caller to connect to (via a `pin_resolved_host()` helper) instead of letting the real request re-resolve the hostname a second time -- which is what actually closes a DNS-rebinding-style bypass (a hostname that resolves differently at check time versus fetch time cannot be reasoned about safely from the string alone, and a second, independent re-resolution at connect time would silently reopen that exact gap). Third, and most deliberately: it does **not** block loopback or RFC 1918 private-IP ranges outright. That is not an oversight -- Ollama's entire legitimate use case is a local or LAN model server (this platform's own default `OLLAMA_BASE_URL` points at `host.docker.internal`), so blocking private ranges would break real, intended functionality rather than stop a real attack. What it specifically blocks unconditionally is link-local address space (`169.254.0.0/16`, `fe80::/10`), which has no legitimate Ollama use case and is where essentially every major cloud provider's instance-metadata service lives (`169.254.169.254`) -- the single highest-value SSRF target this particular code path could otherwise be tricked into reaching. A private/loopback destination is additionally restricted to Ollama's own default port (11434), closing a confirmed-live internal-port-scanning/fingerprinting vector (pointing `base_url` at this deployment's own sibling containers on their real ports and reading back a distinguishing error) without breaking the one legitimate local/LAN Ollama shape this check exists to permit; public/global addresses are not port-restricted. This is a narrowly scoped, honestly-reasoned control for the one outbound-URL surface that exists today, not a generic egress firewall.
 
 ## 📤 6. Export Security: CSV and PDF Injection Protections
 
@@ -173,7 +175,8 @@ def _correlation_fraction(edges):
     total_confidence = sum(edge.confidence for edge in qualifying)
     distinct_providers = {p for edge in qualifying for p in edge.provenance.split(",")}
     corroboration = _corroboration_factor(len(distinct_providers))
-    return _clip(100.0 * total_confidence * corroboration / _CORRELATION_SATURATION) / 100.0
+    evidence_fraction = min(1.0, total_confidence / _CORRELATION_SATURATION)
+    return evidence_fraction * corroboration
 ```
 
 A single provider's edges -- however many distinct fabricated-looking values they contain -- are now capped at 40% of the correlation component's strength, identical to a lone provider vote. Genuine corroboration from two or more independent providers scales back up toward full strength, and is deliberately **not** penalized by this fix -- the goal is closing the "one source, many distinct unmerged claims" flood, not punishing real multi-provider agreement, which already carried its own confidence boost from the correlation engine before this component ever sees it.
@@ -184,7 +187,7 @@ One further, smaller item disclosed in the same review: `_provider_votes()` woul
 
 ## 🚦 9. Rate Limiting
 
-Exactly one rate limiter exists anywhere in this codebase: a Redis fixed-window limiter, keyed per authenticated user, applied solely to `POST /lookup/stream` -- the endpoint that launches a new investigation:
+The first rate limiter added to this codebase was a Redis fixed-window limiter, keyed per authenticated user, applied solely to `POST /lookup/stream` -- the endpoint that launches a new investigation:
 
 ```python
 # app/api/routes/lookup.py
@@ -197,7 +200,7 @@ limiter = RateLimiter(
 
 The reasoning is stated directly in the route's own rejection message: each lookup fans out to every configured provider plus, potentially, an OSINT crawler and multiple AI calls, so this is a cost/load control on the single most expensive operation in the platform, not a generic API throttle. Both the call limit and window are configurable settings; the enforcement itself is per-user (keyed on the authenticated user's ID), not per-IP or global, which means it cannot be used to throttle one user's traffic by exhausting a shared bucket.
 
-A second limiter exists on `/auth/login` (added in a later mission-critical-reliability review, v0.2.3): a per-account limiter keyed by email, defaulting to 10 attempts per 60 seconds, both configurable, returning `429` once exceeded -- a real defense against credential-stuffing/brute-force attempts against one specific account. `/auth/register` still has no rate limiting of any kind, and there is no rate limiting anywhere else in the API. This is stated plainly in §12 rather than left implicit.
+A second limiter exists on `/auth/login` (added in a later mission-critical-reliability review, v0.2.3): a per-account limiter keyed by email, defaulting to 10 attempts per 60 seconds, both configurable, returning `429` once exceeded -- a real defense against credential-stuffing/brute-force attempts against one specific account. `/auth/register` now has an identical per-email limiter of its own (keyed on the attempted registration address, using the same settings), closing what was previously a gap; there is no rate limiting anywhere else in the API. This is stated plainly in §12 rather than left implicit.
 
 ## 📋 10. Audit Logging
 
@@ -221,7 +224,7 @@ Browser-originated cross-origin requests are gated by a private-network-shaped C
 
 This platform's own release process treats "known limitation, disclosed" as a materially different thing from "silently accepted risk." The following are pulled directly from the most recent release's QA report and the security appendices' own "Recommended (not yet implemented)" lists -- none of these are hidden, and none of them were found to be actively exploited in a running instance:
 
-- **No rate limiting on `/auth/register`, and no account lockout on either authentication endpoint.** `/auth/login` itself gained a real per-account rate limiter in a later mission-critical-reliability review (v0.2.3, §1, §9).
+- **No account lockout on either authentication endpoint.** Both `/auth/login` (per-account rate limiter added in a later mission-critical-reliability review, v0.2.3) and `/auth/register` (per-email rate limiter added since) now throttle repeated attempts, but neither locks an account out after repeated failures (§1, §9).
 - **No self-service session revocation.** A user cannot invalidate their own other sessions without an administrator-driven password reset (§1).
 - **No multi-factor authentication and no server-side password complexity rule** beyond an 8-character minimum.
 - **The "Test Connection" button never falls back to an already-saved credential** (§3) -- a deliberate security property, not a bug, but confirmed during the most recent release's QA cycle to be a real point of user confusion the first time it's encountered; now documented explicitly for exactly that reason.
@@ -297,21 +300,23 @@ not an inference: if a real session opens, that finding is promoted to `CONFIRME
 confidence, because an opened session is a directly observed outcome, not a
 text-parsed guess.
 
-> [!CAUTION]
-> **Disclosed limitation, not yet hardened:** the global pentest kill switch
-> (`is_global_kill_switch_engaged()`) is an in-memory, process-local flag, not backed by
-> the database or a shared store. This is correct today only because the shipped
-> deployment (`docker-compose.yml`/`docker-compose.prod.yml`) runs a single backend
-> process with no `--workers` flag; if this were ever scaled to multiple worker
-> processes or replicas, engaging the kill switch in the process handling that request
-> would not propagate to the others. Flagged here as a latent deployment-topology risk
-> found during adversarial review, not a currently exploitable one.
+> [!NOTE]
+> **Previously disclosed limitation, since fixed.** The global pentest kill switch
+> (`is_global_kill_switch_engaged()`) used to be an in-memory, process-local flag with no
+> durable backing -- correct only because the shipped deployment (`docker-compose.yml`/
+> `docker-compose.prod.yml`) runs a single backend process with no `--workers` flag, and a
+> latent risk if this were ever scaled to multiple worker processes or replicas (e.g. the
+> k8s manifest's multi-replica backend deployment). It is now persisted to a dedicated
+> `pentest_global_kill_switch` table, reloaded at backend startup, and re-synced into every
+> replica's own in-memory copy on a short interval, so an engage/disengage from any one
+> replica becomes platform-wide within one interval and survives a process restart instead
+> of silently reverting to disengaged.
 
 ## 📑 Summary
 
 | Area | Strongest control in place | Most significant disclosed gap |
 |---|---|---|
-| Authentication | JWT + bcrypt; `token_version`-based instant revocation on password reset/role change/disable; per-account rate limiter on `/auth/login` (v0.2.3) | No self-service logout-everywhere; no rate limiting on `/auth/register` |
+| Authentication | JWT + bcrypt; `token_version`-based instant revocation on password reset/role change/disable; per-account rate limiter on `/auth/login` (v0.2.3) and `/auth/register` | No self-service logout-everywhere; no account lockout on either endpoint |
 | Authorization | Single-source `ROLE_PERMISSIONS` matrix, one shared dependency, race-safe last-admin protection | No per-case/per-lookup ACL (deliberate, team-shared scope) |
 | Credentials | Fernet-at-rest encryption; masked-only API display, never round-tripped | Default encryption key is derived from `jwt_secret_key`, not independent, unless set explicitly |
 | SSRF | `assert_safe_outbound_url()` blocks link-local/metadata addresses on the one fully-operator-chosen outbound URL | Scoped to Ollama's `base_url` only -- the one surface that needs it today |
@@ -319,6 +324,6 @@ text-parsed guess.
 | AI / scoring | Score computed before any AI call, mechanically re-applied to AI output; correlation-flood corroboration discount closes a real found vulnerability, now live-verified end-to-end | The residual, non-blocking `NaN`/`Infinity` vote-parsing hardening item (§8) |
 | Rate limiting | Redis fixed-window limiter on the one genuinely expensive endpoint (`/lookup/stream`) | No coverage on authentication endpoints |
 | Audit logging | Actor-attributed, append-only log of every credential/config/user-management/login event, admin-only read | No case/basket/lookup activity coverage; test-result rows lack actor attribution |
-| Pentest / Exploit Validation | Five independent gates before any real exploit runs; RHOSTS always the real target (adversarially verified); `pentest:exploit` (ADMIN-only) gates both running a module and reading past transcripts | Global kill switch is in-memory/process-local -- correct only under the shipped single-process deployment |
+| Pentest / Exploit Validation | Five independent gates before any real exploit runs; RHOSTS always the real target (adversarially verified); `pentest:exploit` (ADMIN-only) gates both running a module and reading past transcripts; global kill switch is DB-backed and synced across replicas | -- |
 
 None of the items in §12 are release-blocking on their own; they are the concrete, code-verified list a production hardening pass would work through next, stated plainly rather than smoothed into marketing language.

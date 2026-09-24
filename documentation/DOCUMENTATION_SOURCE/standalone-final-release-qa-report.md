@@ -115,7 +115,7 @@ Also worth noting, not a defect: the "Test Connection" button's behavior of requ
 
 ## 11. 📚 Documentation Results
 
-Documentation source files updated to describe every new user-facing feature (Executive Dashboard, Provider Health page, the 2 new providers, real load-tested performance characteristics, the disclosed AI-concurrency limitation) in the existing evidence-based narrative style. Fresh screenshots of the new UI are pending the installed copy's containers coming back up (see §22) — the doc source files use `[FIGURE: ...]` placeholders ready to be filled in via the existing screenshot pipeline once that's possible.
+Documentation source files updated to describe every new user-facing feature (Executive Dashboard, Provider Health page, the 2 new providers, real load-tested performance characteristics, the disclosed AI-concurrency limitation) in the existing evidence-based narrative style. Fresh screenshots of the new UI are pending the installed copy's containers coming back up (see §14) — the doc source files use `[FIGURE: ...]` placeholders ready to be filled in via the existing screenshot pipeline once that's possible.
 
 ## 12. 🧪 Test Statistics (most recent full runs)
 

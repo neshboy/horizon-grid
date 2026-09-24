@@ -186,7 +186,7 @@ These are the reputation, blocklist, and community-intelligence sources — the 
 - **IOC types supported:** url, domain (a bare domain is submitted with an `http://` scheme added, since the API's `threatEntries.url` field expects a full URL).
 - **API key required:** Yes.
 - **Configure:** Providers page → IOC Providers → Google Safe Browsing, one field: **Api Key**.
-- **Test Connection:** Sends the exact same `threatMatches:find` request the real connector uses, against `http://google.com/`, with the candidate key as a query parameter; 200 = valid, 400/401/403 = "rejected the request — check your API key," 429 = quota exceeded.
+- **Test Connection:** Sends the exact same `threatMatches:find` request the real connector uses, against `http://google.com/`, with the candidate key in the `x-goog-api-key` header (not a query parameter, deliberately — see the deep dive below); 200 = valid, 400/401/403 = "rejected the request — check your API key," 429 = quota exceeded.
 - **Provider Health:** Standard four-window tracking.
 - **What it returns / how it appears:** `verdict` (`clean`, `malicious`, or `unknown` — see the deep dive below for exactly which inputs are allowed to produce each), `matches` (the raw threat-match entries when malicious), `threat_types` (e.g. `MALWARE`, `SOCIAL_ENGINEERING`), `match_count`.
 - **Error & failure handling:** See the deep dive below — this is one of the two providers built with an explicit, tested guarantee that a failure can never look like a clean/safe result.

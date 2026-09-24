@@ -28,7 +28,7 @@ This document describes the Linux packaging layer for HORIZON GRID: how the `.de
 
 # 📐 Packaging Architecture Decision
 
-HORIZON GRID on Linux is distributed as a `.deb` package (`horizon-grid_0.3.8_amd64.deb`) that installs a systemd unit and a `horizon-grid` CLI, including a terminal setup wizard. This is the direct Linux analog of the Windows installer + WinForms wizard + Docker Compose combination that already exists for that platform.
+HORIZON GRID on Linux is distributed as a `.deb` package (`horizon-grid_0.3.14_amd64.deb`) that installs a systemd unit and a `horizon-grid` CLI, including a terminal setup wizard. This is the direct Linux analog of the Windows installer + WinForms wizard + Docker Compose combination that already exists for that platform.
 
 **Why not an AppImage.** This was a deliberate decision, confirmed with the user before packaging work began. HORIZON GRID is a multi-container Docker Compose platform — Postgres, Redis, Neo4j, OpenSearch, a FastAPI backend, a Next.js frontend, and two Celery workers — accessed via a web browser, not a single GUI executable. An AppImage exists to wrap one GUI binary; that packaging model does not fit an application whose actual runtime is a set of orchestrated containers. Wrapping only, say, a launcher binary in an AppImage while the real workload runs in Docker Compose would misrepresent what is actually being packaged.
 
@@ -59,7 +59,7 @@ The `.deb` is built by a Linux-specific build script that stages the application
 
 **Why it doesn't vendor dependencies.** The package does not bundle `node_modules`, Python pip dependencies, or pre-built Docker images. All of those install the same way on every platform: inside the containers, the first time `docker compose up --build` runs. This is why the package is small (~6.2 MB / ~5.95 MiB) despite the application being substantial — the same reason the ~69 MB Windows installer doesn't contain Docker images either. Both installers ship orchestration and configuration, not the workload's runtime dependencies.
 
-**A real bug found and fixed in this build process:** the build script's `rsync` of `backend/` initially swept up two host-only Python virtualenvs (`.venv`, `.venv_test` — about 21,700 files combined) that have no place in a shipped package, since dependencies install inside the container at image-build time, exactly as on Windows. This was fixed by excluding both directories in the Linux build script. Separately — and not fixed in this pass, since it lives in a Windows-side file outside the scope of this Linux effort — the Windows installer's `installer.iss` `Excludes` list has the same latent gap and could pick up the same two folders if they happen to exist on the machine building that installer. This is flagged here as a discovered, non-blocking hardening item for the Windows installer specifically.
+**A real bug found and fixed in this build process:** the build script's `rsync` of `backend/` initially swept up two host-only Python virtualenvs (`.venv`, `.venv_test` — about 21,700 files combined) that have no place in a shipped package, since dependencies install inside the container at image-build time, exactly as on Windows. This was fixed by excluding both directories in the Linux build script. The Windows installer's `installer.iss` `Excludes` list has since also been updated to exclude both `.venv` and `.venv_test`, closing the same latent gap on that platform.
 
 # 🔩 The systemd Unit
 
@@ -73,7 +73,7 @@ It is configured as `Type=oneshot` with `RemainAfterExit=yes`. This is the corre
 
 ## CLI commands
 
-`horizon-grid <command>` (most require `sudo`): `configure` (runs the setup wizard), `start`, `stop`, `restart`, `status`, `open` (start-if-needed and open the browser), `backup`, `diagnostics`, `check` (prerequisites), `uninstall` (prints `apt remove`/`purge` guidance), `version`.
+`horizon-grid <command>` (most require `sudo`): `configure` (runs the setup wizard), `start`, `stop`, `restart`, `status`, `open` (start-if-needed and open the browser), `backup`, `restore` (restores a backup; destructive, asks for confirmation), `diagnostics`, `watchdog` (runs one health check now; also run automatically every 5 minutes via `horizon-grid-watchdog.timer`), `check` (prerequisites), `uninstall` (prints `apt remove`/`purge` guidance), `version`.
 
 ## Wizard flow
 
@@ -198,7 +198,7 @@ To reproduce the `.deb` build on another machine:
 2. Run the Linux build script from the `linux/` directory of the source tree. It stages `backend/`, `frontend/`, `docker-compose.yml`, `docker-compose.prod.yml`, and `docs/` into the package layout under `/opt/horizon-grid/app/`, along with the systemd unit, desktop file, and `postinst`/`postrm` scripts.
 3. Confirm the build excludes host-only Python virtualenvs (`.venv`, `.venv_test`) from `backend/` — this exclusion is already present in the Linux build script as a fix for the bug described above; if reproducing or modifying the script, verify this exclusion is still in place before packaging.
 4. Do not attempt to vendor `node_modules`, pip dependencies, or pre-built Docker images into the package — these are intentionally left to install inside the containers on first `docker compose up --build`, matching the Windows installer's own approach and keeping the package small.
-5. After building, verify the resulting `.deb`'s size is in the same ~6 MB range as `horizon-grid_0.3.8_amd64.deb` (~5.95 MiB); a much larger artifact likely indicates a vendored-dependency or virtualenv regression.
+5. After building, verify the resulting `.deb`'s size is in the same ~6 MB range as `horizon-grid_0.3.14_amd64.deb` (~5.95 MiB); a much larger artifact likely indicates a vendored-dependency or virtualenv regression.
 6. Before testing, ensure the target test environment has Docker Compose v2 available — installing only `docker.io` from distro repos will not provide `docker compose`; use Docker's official convenience script (`curl -fsSL https://get.docker.com | sh`) as described above.
 7. For end-to-end verification, follow the same real-install methodology used in this effort: real `apt install`, run `horizon-grid configure` to drive the setup wizard through a real `docker compose up -d --build`, and exercise the CLI commands (`status`, `backup`, `diagnostics`, `stop`/`start`, `remove`/`purge`) against the resulting install. If testing `apt purge`/`apt remove` cleanup logic specifically with the real default project name, do so inside an isolated environment (e.g., a dedicated Docker-in-Docker daemon) to avoid colliding with any other running instance on a shared host, exactly as done in this session's testing.
-8. Version numbers (package version, `MyAppVersion`, backend, frontend) must be kept in lockstep across platforms — the current release is `0.3.8` on both Windows and Linux, with no version drift.
+8. Version numbers (package version, `MyAppVersion`, backend, frontend) must be kept in lockstep across platforms — the current release is `0.3.14` on both Windows and Linux, with no version drift.

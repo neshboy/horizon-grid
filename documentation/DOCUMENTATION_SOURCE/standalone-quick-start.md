@@ -119,9 +119,9 @@ Click submit. The platform detects the indicator type, queries every provider yo
 
 ## 🗂️ Step 9: Read the Provider Results
 
-As each provider finishes, a card appears with that provider's own verdict. Watch for exactly this kind of pattern, because it's real and it's instructive: **Spamhaus** may show a verdict of malicious — but if you read the reason it gives, it's a query-permission error ("public/open resolver not permitted to query Spamhaus"), not an actual detection of anything harmful. Meanwhile **AbuseIPDB** shows zero abuse reports, and **VirusTotal** reports it clean.
+As each provider finishes, a card appears with that provider's own verdict. Watch for exactly this kind of pattern, because it's real and it's instructive: **Spamhaus** may show an Error status with an Unknown verdict — not because anything was detected, but because of a query-permission error ("public/open resolver not permitted to query Spamhaus") that the reason text calls out directly. Meanwhile **AbuseIPDB** shows zero abuse reports, and **VirusTotal** reports it clean.
 
-[FIGURE: 17-investigation-benign-ip-result.png | Provider result cards arriving live for 8.8.8.8 — Spamhaus flags it malicious for an unrelated DNS-policy reason, while AbuseIPDB and VirusTotal both report it clean.]
+[FIGURE: 17-investigation-benign-ip-result.png | Provider result cards arriving live for 8.8.8.8 — Spamhaus reports an Error/Unknown result for an unrelated DNS-policy reason, while AbuseIPDB and VirusTotal both report it clean.]
 
 > [!IMPORTANT]
 > This is the single most important habit to build on day one: **a provider's verdict label is not the whole story — read the reason underneath it.** Providers disagreeing with each other is normal, expected behavior, not a bug, and it's exactly why the next two steps matter so much.
@@ -131,7 +131,7 @@ As each provider finishes, a card appears with that provider's own verdict. Watc
 Once every provider has reported in, the page shows a **Threat Score** — a single number from 0 to 100 with a plain-language severity label (none/low/medium/high/critical) — and, right next to it, a separate **Confidence** percentage. It is genuinely easy to assume these are the same kind of number measured twice. They are not, and mixing them up is the single most common misreading of this platform.
 
 - **Threat Score** asks: *how malicious does the evidence look?* It's built from two things added together — how much the providers that responded actually agree the indicator is bad, and any malicious-looking relationships the correlation engine found (shared malware families, MITRE ATT&CK techniques, exploited CVEs). One provider flagging something, with nobody else agreeing, only ever pulls this number up a limited amount on its own — it takes several independent providers agreeing to push it toward its maximum.
-- **Confidence** asks a completely different question: *how much should you trust that score?* This number is calculated from how much the providers agreed with **each other** — not from how bad the finding looks. If your providers all point the same direction, confidence stays high. If they're split — exactly like the 8.8.8.8 example above, where Spamhaus disagrees with AbuseIPDB and VirusTotal — confidence drops, specifically *because* of that disagreement, even if the Threat Score itself is still sitting at a moderate or high number.
+- **Confidence** asks a completely different question: *how much should you trust that score?* This number is calculated from how much the providers that returned an actual verdict agreed with **each other** — not from how bad the finding looks. If your providers all point the same direction, confidence stays high; if they're split, confidence drops, specifically *because* of that disagreement, even if the Threat Score itself is still sitting at a moderate or high number. (A provider that can't offer a real verdict at all — like Spamhaus's query-permission error on 8.8.8.8 in the step above — doesn't count as a vote either way, so it doesn't move Confidence by itself.)
 
 > [!NOTE]
 > A real, correct result can legitimately look like "Threat Score: high, Confidence: low" — and that combination means exactly what it sounds like: *the evidence leans toward malicious, but it's thin or conflicted, so verify it yourself before treating it as settled.* It is not the platform contradicting itself. For the exact formula behind both numbers, including a real worked example with the underlying arithmetic, see the **Threat Scoring** guide.
@@ -140,11 +140,11 @@ Once every provider has reported in, the page shows a **Threat Score** — a sin
 
 ## 📝 Step 11: Read the AI's Assessment
 
-Scroll down to the **Final Assessment** section. This is the AI's consolidated read on the whole investigation, written only after every provider has reported back — and for a case like 8.8.8.8, a good AI assessment will say so directly: something to the effect of "considered malicious by Spamhaus, but its reputation as clean is supported by AbuseIPDB and VirusTotal," rather than quietly picking a side. Every Final Assessment also carries a small badge naming exactly which AI backend and model produced it (for example, `ollama / llama3.2:3b`), so you always know what generated a given explanation.
+Scroll down to the **Final Assessment** section. This is the AI's consolidated read on the whole investigation, written only after every provider has reported back — and for a case like 8.8.8.8, a good AI assessment will say so directly: something to the effect of "Spamhaus couldn't return a real verdict due to a DNS query-permission error, and its reputation as clean is otherwise supported by AbuseIPDB and VirusTotal," rather than quietly picking a side. Every Final Assessment also carries a small badge naming exactly which AI backend and model produced it (for example, `ollama / llama3.2:3b`), so you always know what generated a given explanation.
 
 Don't stop at the prose, though. The same page includes an **Evidence Ledger** — a plain list of the concrete, individually-numbered facts the AI's explanation is supposed to be traceable back to — plus a set of tools built specifically so you don't have to just trust the summary: **"Why?"** (asks the AI to justify the verdict against real evidence), **"Challenge This Verdict"** (asks the AI to argue against its own conclusion), and **"False Positive Check."** Get in the habit of using at least one of these on your first few investigations until the pattern feels familiar.
 
-[FIGURE: 18-investigation-benign-ip-full.png | The full investigation page for 8.8.8.8: the Final Assessment's Executive Summary explaining the Spamhaus-vs-AbuseIPDB/VirusTotal disagreement, alongside the Evidence Ledger and Verdict Analysis tools.]
+[FIGURE: 18-investigation-benign-ip-full.png | The full investigation page for 8.8.8.8: the Final Assessment's Executive Summary explaining the Spamhaus query-error result alongside AbuseIPDB/VirusTotal's clean verdicts, alongside the Evidence Ledger and Verdict Analysis tools.]
 
 ## 📤 Step 12: Export Your First Report
 
@@ -157,12 +157,12 @@ In the sidebar of the investigation page, open the export controls. You'll see f
 
 ## 🩺 Step 13: Check Provider Health
 
-Now that you've run at least one real investigation, open **Provider Health** in the top navigation (under the Operations group). This page answers a different question than any single investigation does: *is every provider actually working right now, across the whole platform, not just in this one lookup?* Each row shows status — Healthy, Degraded, Down, or Unknown — across four separate time windows (1 hour, 24 hours, 7 days, 30 days), built from real, database-backed outcomes of every call that provider has actually made.
+Now that you've run at least one real investigation, open **Provider Health** in the top navigation (under the Operations group). This page answers a different question than any single investigation does: *is every provider actually working right now, across the whole platform, not just in this one lookup?* Each row shows status — Operational, Degraded, Offline, or Unknown — across four separate time windows (1 hour, 24 hours, 7 days, 30 days), built from real, database-backed outcomes of every call that provider has actually made.
 
 > [!NOTE]
-> One honest guarantee worth knowing up front: a provider you haven't exercised yet in a given window always shows **Unknown**, never **Healthy** — silence isn't evidence of health. And a provider that correctly reports "nothing found" for a given indicator (which is normal — no single provider's dataset covers every indicator) counts as a healthy, successful outcome, not a failure.
+> One honest guarantee worth knowing up front: a provider you haven't exercised yet in a given window always shows **Unknown**, never **Operational** — silence isn't evidence of health. And a provider that correctly reports "nothing found" for a given indicator (which is normal — no single provider's dataset covers every indicator) counts as a healthy, successful outcome, not a failure.
 
-[FIGURE: dashboard-provider-health.png | The Provider Health page, showing real per-provider status across four time windows, with Healthy/Degraded/Down/Unknown always paired with a distinct icon and label, not color alone.]
+[FIGURE: dashboard-provider-health.png | The Provider Health page, showing real per-provider status across four time windows, with Operational/Degraded/Offline/Unknown always paired with a distinct icon and label, not color alone.]
 
 You can also check the backend by itself is up, at any time, without logging in at all, by opening `http://localhost:8000/health` directly in a browser — it returns a short, raw reply like `{"status":"ok","service":"HORIZON GRID"}`.
 

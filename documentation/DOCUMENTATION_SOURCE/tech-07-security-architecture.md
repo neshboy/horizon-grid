@@ -93,19 +93,16 @@ Every datastore container's port mapping in `docker-compose.yml` — Postgres, R
 
 ## 🚦 Rate Limiting
 
-The codebase implements exactly **one** rate limiter: a Redis fixed-window limiter that applies solely to `POST /lookup/stream` (the IOC lookup endpoint), defaulting to 10 calls per 60 seconds per authenticated user — both figures are configurable.
+The codebase implements a Redis fixed-window rate limiter (`app/core/cache.py`'s `RateLimiter`) at three separate call sites. The original: `POST /lookup/stream` (the IOC lookup endpoint), defaulting to 10 calls per 60 seconds per authenticated user — both figures are configurable.
 
-`/auth/login` has a second limiter, added in a later mission-critical-reliability review (v0.2.3): a per-account Redis fixed-window limiter keyed by email (`login:{email}`, not source IP), defaulting to 10 attempts per 60 seconds, both configurable, returning `429` once exceeded. `/auth/register` still has no rate limiting of any kind.
+`/auth/login` has a second limiter, added in a later mission-critical-reliability review (v0.2.3): a per-account Redis fixed-window limiter keyed by email (`login:{email}`, not source IP), defaulting to 10 attempts per 60 seconds, both configurable, returning `429` once exceeded. `/auth/register` now has an equivalent per-address limiter (`register:{email}`), sharing the same configurable 10-attempts-per-60-seconds defaults and also returning `429` once exceeded.
 
 ## 🔀 CORS Behavior
 
-Cross-Origin Resource Sharing is configured in `backend/app/main.py` and its behavior depends entirely on the `debug` setting:
-
-- When `settings.debug` is `True` (the default), `allow_origins` is set to `["http://localhost:3000"]`.
-- When `debug` is `False`, `allow_origins` is set to `[]` — an empty list, meaning **zero** cross-origin browser requests are permitted.
+Cross-Origin Resource Sharing is configured in `backend/app/main.py` and no longer depends on the `debug` setting. `allow_origins` is always `[]` (empty); in its place, an `allow_origin_regex` (`PRIVATE_NETWORK_ORIGIN_REGEX`) permits any `http://` origin on `localhost`, `127.0.0.1`, or an RFC 1918 private range (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), on any port. Per the code's own comment, this relaxes only the browser's same-origin policy for those hosts — the real authorization boundary behind it is JWT auth (`app/auth/rbac.py`), not origin matching.
 
 > [!NOTE]
-> There is no `CORS_ORIGINS` environment variable or other configuration knob to adjust this. Practically, this means a `DEBUG=false` production deployment cannot serve a browser frontend from any other origin than the backend itself without a source-code change.
+> There is no `CORS_ORIGINS` environment variable or other configuration knob to adjust this. Practically, this means the backend accepts cross-origin browser requests from any private-network host on any port regardless of the `debug` setting, relying on JWT auth rather than CORS as the actual access-control boundary.
 
 ## 📝 Other Input-Handling Notes
 
@@ -119,7 +116,6 @@ Two related facts are worth surfacing here because they feed directly into the h
 Based only on the facts established above:
 
 - **Default JWT secret is a known literal.** `jwt_secret_key` defaults to `"change-me-in-production"` if the operator never sets it explicitly — any instance that ships with this unedited has a predictable signing key.
-- **No rate limiting on `/auth/register`.** `/auth/login` gained a real per-account rate limiter in v0.2.3 (see Rate Limiting above); registration has no throttling against repeated attempts.
 - **No server-side password complexity rule beyond length.** The backend enforces an 8-character minimum for every account (`app/schemas/auth.py`), but no digit/symbol/case requirement on top of that.
 - **Backend and frontend ports are not loopback-restricted by default.** Datastores (Postgres, Redis, Neo4j, OpenSearch) are bound to `127.0.0.1` only; the backend API and frontend web app publish on all host interfaces by default, unless the operator adds their own network restriction.
 - **Runtime-credential encryption key defaults to a derived, not independently-generated, secret.** Unless an operator explicitly sets `encryption_master_key`, the Fernet key protecting runtime-configured provider/AI credentials (see Secrets Management above) is deterministically derived via HKDF from `jwt_secret_key` rather than generated and stored separately. That is a reasonable defense-in-depth default — it means every existing install already has a working encryption key — but it is not equivalent to HSM-grade key separation: compromise of `jwt_secret_key` would also expose the derived encryption key.

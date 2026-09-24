@@ -5,9 +5,14 @@ Every setting the backend reads lives in exactly one place:
 `pydantic-settings` `Settings` class. It loads values from process
 environment variables first, falling back to a `.env` file in the repo root
 (`env_file=".env"`), and finally to the Python defaults shown below. There
-is no other settings module, no per-provider config file, and no database
-table of settings — this is the single source of truth every provider
-connector and the AI service reads from.
+is no other settings *module* and no per-provider config *file* — this is
+the single source of truth every provider connector and the AI service fall
+back to. Provider credentials and the active AI backend can additionally be
+overridden at runtime, without editing `.env` or restarting anything, via a
+database-backed `ProviderRuntimeConfig` table (`backend/app/models/runtime_config.py`,
+seeded from these same `Settings` values on first boot) managed through the
+admin-only Manage Providers UI at `/providers` — see
+[ADMIN_GUIDE.md](ADMIN_GUIDE.md).
 
 Related docs: [ARCHITECTURE.md](ARCHITECTURE.md) for how these settings are
 consumed by the request lifecycle, [INSTALL.md](INSTALL.md) for the
@@ -60,7 +65,8 @@ which is required.
 | `APP_NAME` | Display name used in the FastAPI title and `/health` response. | `HORIZON GRID` | No | `up -d` |
 | `ENVIRONMENT` | Free-text environment label (`development`, `production`, ...). Not read for branching logic beyond documentation/observability today. | `development` | No | `up -d` |
 | `DEBUG` | No longer read anywhere in the backend (confirmed via grep) -- CORS is now a fixed private-network-origin regex, not gated on this flag. Left in place for backward compatibility; safe to ignore. | `true` | No | -- |
-| `API_V1_PREFIX` | URL prefix every router (`auth`, `lookup`, `providers`, `analysis`, `hunting`, `pivot`, `basket`, `cases`) is mounted under. | `/api/v1` | No | `up -d` |
+| `API_V1_PREFIX` | URL prefix every router (`auth`, `lookup`, `providers`, `ai_config`, `analysis`, `hunting`, `pivot`, `basket`, `cases`, `runtime`, `admin`, `security_assessment`, `pentest`, `pentest_exploit`, `dashboard`) is mounted under. | `/api/v1` | No | `up -d` |
+| `DETECTED_LAN_IP` | A point-in-time snapshot of this machine's LAN-facing IPv4 address, written to `.env` by the Windows wizard's `Get-LanIpAddress` (`windows/scripts/Common.ps1`) and read back via `settings.detected_lan_ip` by `backend/app/main.py`'s `/network-info`. Powers the frontend's Network Access panel display only; re-run the wizard's Configuration option if the network changes. | `None` | No | `up -d` |
 
 ## Auth / Security
 
@@ -101,12 +107,12 @@ Celery (see [ARCHITECTURE.md](ARCHITECTURE.md#celery-workers)).
 
 ## AI backends
 
-`AI_BACKEND` selects one of four interchangeable clients, all exposing the
+`AI_BACKEND` selects one of eleven interchangeable clients, all exposing the
 same `call_claude_json()` method (`app/ai/service.py:_get_ai_client()`).
 
 | Variable | Purpose | Default | Required? | Restart-required |
 |---|---|---|---|---|
-| `AI_BACKEND` | Selects the active AI client: `ollama` (default), `bedrock`, `gemini`, or `anthropic`. | `ollama` | No | `up -d` |
+| `AI_BACKEND` | Selects the active AI client: `ollama` (default), `anthropic`, `bedrock`, `gemini`, `groq`, `openai`, `kimi`, `deepseek`, `xai`, `mistral`, or `openrouter`. | `ollama` | No | `up -d` |
 
 ### Ollama (default — local, no API key)
 
@@ -115,6 +121,7 @@ same `call_claude_json()` method (`app/ai/service.py:_get_ai_client()`).
 | `OLLAMA_BASE_URL` | Base URL of a locally-hosted Ollama server. `host.docker.internal` resolves to the Docker host from inside the backend container (Docker Desktop Windows/Mac). | `http://host.docker.internal:11434` | Only if `AI_BACKEND=ollama` | `up -d` |
 | `OLLAMA_MODEL` | Model tag to request (must match what `ollama list` shows after `ollama pull <model>`). | `llama3.2:3b` | Only if `AI_BACKEND=ollama` | `up -d` |
 | `OLLAMA_MAX_TOKENS` | `num_predict` cap passed to Ollama's `/api/chat`. | `8192` | No | `up -d` |
+| `OLLAMA_TIMEOUT_SECONDS` | Wall-clock HTTP timeout for the Ollama call. Deliberately generous: CPU-only inference plus Ollama's idle-unload behavior (a full model reload, measured 60-80s, after any idle period) are both normal here. | `300` | No | `up -d` |
 
 ### AWS Bedrock (Claude)
 
@@ -147,6 +154,62 @@ granted model access in **Bedrock → Model access** for that region — see
 | `ANTHROPIC_MODEL_ID` | Anthropic model ID. | `claude-sonnet-4-5-20250929` | No | `up -d` |
 | `ANTHROPIC_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
 
+### Groq
+
+| Variable | Purpose | Default | Required? | Restart-required |
+|---|---|---|---|---|
+| `GROQ_API_KEY` | Key for Groq's OpenAI-compatible API (`api.groq.com`), sent to `/openai/v1/chat/completions`. | `None` | Only if `AI_BACKEND=groq` | `up -d` |
+| `GROQ_MODEL_ID` | Groq model ID. | `llama-3.3-70b-versatile` | No | `up -d` |
+| `GROQ_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
+
+### OpenAI
+
+| Variable | Purpose | Default | Required? | Restart-required |
+|---|---|---|---|---|
+| `OPENAI_API_KEY` | Key for OpenAI's chat-completions API (`api.openai.com/v1`). | `None` | Only if `AI_BACKEND=openai` | `up -d` |
+| `OPENAI_MODEL_ID` | OpenAI model ID. | `gpt-4o-mini` | No | `up -d` |
+| `OPENAI_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
+
+### Kimi (Moonshot AI)
+
+| Variable | Purpose | Default | Required? | Restart-required |
+|---|---|---|---|---|
+| `KIMI_API_KEY` | Key for Moonshot's chat-completions API (`api.moonshot.ai/v1`). | `None` | Only if `AI_BACKEND=kimi` | `up -d` |
+| `KIMI_MODEL_ID` | Kimi model ID. Deliberately avoids Moonshot's "thinking"-mode models (forced `tool_choice` 400s on those). | `kimi-k2.5` | No | `up -d` |
+| `KIMI_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
+
+### DeepSeek
+
+| Variable | Purpose | Default | Required? | Restart-required |
+|---|---|---|---|---|
+| `DEEPSEEK_API_KEY` | Key for DeepSeek's chat-completions API (`api.deepseek.com`). | `None` | Only if `AI_BACKEND=deepseek` | `up -d` |
+| `DEEPSEEK_MODEL_ID` | DeepSeek model ID. | `deepseek-v4-flash` | No | `up -d` |
+| `DEEPSEEK_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
+
+### xAI (Grok)
+
+| Variable | Purpose | Default | Required? | Restart-required |
+|---|---|---|---|---|
+| `XAI_API_KEY` | Key for xAI's chat-completions API (`api.x.ai/v1`). Not to be confused with Groq. | `None` | Only if `AI_BACKEND=xai` | `up -d` |
+| `XAI_MODEL_ID` | xAI model ID. | `grok-4.6` | No | `up -d` |
+| `XAI_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
+
+### Mistral AI
+
+| Variable | Purpose | Default | Required? | Restart-required |
+|---|---|---|---|---|
+| `MISTRAL_API_KEY` | Key for Mistral's chat-completions API (`api.mistral.ai/v1`). | `None` | Only if `AI_BACKEND=mistral` | `up -d` |
+| `MISTRAL_MODEL_ID` | Mistral model ID. | `mistral-small-2506` | No | `up -d` |
+| `MISTRAL_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
+
+### OpenRouter
+
+| Variable | Purpose | Default | Required? | Restart-required |
+|---|---|---|---|---|
+| `OPENROUTER_API_KEY` | Key for OpenRouter's meta-routing API (`openrouter.ai/api/v1`), a single OpenAI-compatible endpoint across many underlying model providers. | `None` | Only if `AI_BACKEND=openrouter` | `up -d` |
+| `OPENROUTER_MODEL_ID` | OpenRouter model ID (e.g. `openai/gpt-4o`). | `openai/gpt-4o` | No | `up -d` |
+| `OPENROUTER_MAX_TOKENS` | Max output tokens. | `8192` | No | `up -d` |
+
 If a backend's `is_configured` check fails (missing key/URL), `_get_ai_client()`
 raises before making any HTTP call, degrading provider/final summaries to
 "AI summarization unavailable" rather than reaching the UI unvalidated —
@@ -166,6 +229,8 @@ these settings in `__init__`; a provider whose key is unset returns
 | `OTX_API_KEY` | AlienVault OTX. Header `X-OTX-API-KEY`. | `None` | No | `up -d` |
 | `NVD_API_KEY` | NIST NVD CVE API v2.0. Works unauthenticated (~5 req/30s); setting this raises the rate limit (~50 req/30s) via the `apiKey` header. | `None` | No | `up -d` |
 | `ABUSECH_AUTH_KEY` | Single abuse.ch Auth-Key shared across three connectors — URLHaus, ThreatFox, MalwareBazaar — sent via the `Auth-Key` header. | `None` | No | `up -d` |
+| `URLSCAN_API_KEY` | urlscan.io sandbox scan (submit + poll). Header `API-Key`. | `None` | No | `up -d` |
+| `GOOGLE_SAFE_BROWSING_API_KEY` | Google Safe Browsing v4 Lookup API. Header `x-goog-api-key`. | `None` | No | `up -d` |
 
 ### Stub / paid connectors
 
@@ -179,14 +244,16 @@ connectors above; add the corresponding key(s) to activate.
 | `CENSYS_ORGANIZATION_ID` | Organization ID paired with the PAT above, sent as `X-Organization-ID`. | `None` | No — see above | `up -d` |
 | `PHISHTANK_API_KEY` | Optional `app_key` for PhishTank's `checkurl` API — PhishTank works unauthenticated (`requires_key = False`, always `configured = True`); setting this only raises rate limits. | `None` | No | `up -d` |
 
-Two provider connectors need **no** key at all and are always `configured =
-True`: **Spamhaus** (DBL/ZEN DNSBL, queried via plain DNS, no HTTP/API key)
-and **NVD** (`requires_key = False`, key only raises rate limit). **crt.sh**
-(`configured = True`) and the **Internet Intelligence Collector** OSINT
-crawler (`requires_key = False`) are likewise always active — see Crawler
-below. Full connector inventory and how to add a new provider are documented
-in [ARCHITECTURE.md](ARCHITECTURE.md#adding-a-new-provider) and
-[PROVIDERS.md](PROVIDERS.md).
+**Spamhaus** (DBL/ZEN DNSBL, queried via plain DNS, no HTTP/API key) and
+**NVD** (`requires_key = False`, key only raises rate limit) need **no**
+key at all and are always `configured = True`. **crt.sh** (`configured =
+True`), **CISA KEV**, **MITRE ATT&CK**, and **WHOIS/RDAP** (all three
+`requires_key = False`, `configured = True`), and the **Internet
+Intelligence Collector** OSINT crawler (`requires_key = False`) are
+likewise always active — see Crawler below. Full connector inventory and
+how to add a new provider are documented in
+[ARCHITECTURE.md](ARCHITECTURE.md) and
+[PROVIDERS.md](PROVIDERS.md#adding-a-new-provider).
 
 Not part of `Settings` / `.env`, mentioned for completeness: `GITHUB_TOKEN`
 is read directly via `os.getenv("GITHUB_TOKEN")` in
@@ -202,7 +269,7 @@ security news, best-effort paste-dump search).
 
 | Variable | Purpose | Default | Required? | Restart-required |
 |---|---|---|---|---|
-| `CRAWLER_USER_AGENT` | `User-Agent` header sent by every crawler source request. | `IOC-Intel-Platform/1.0 (+https://github.com/your-org/ioc-intel-platform)` | No | `up -d` |
+| `CRAWLER_USER_AGENT` | `User-Agent` header sent by every crawler source request. | `HorizonGrid/1.0` | No | `up -d` |
 | `CRAWLER_REQUEST_TIMEOUT_SECONDS` | Per-request HTTP timeout for each crawler source. | `15` | No | `up -d` |
 | `CRAWLER_MAX_RESULTS_PER_SOURCE` | Cap on findings kept per source before merge/dedupe; the collector's overall cap is this value × 4 sources. | `5` | No | `up -d` |
 
@@ -219,15 +286,20 @@ Applies to every provider connector uniformly via the orchestrator
 
 ## Rate limiting
 
-Per-user fixed-window limiter on the lookup-creation endpoint
-(`POST /api/v1/lookup/stream`) only, enforced via Redis so it holds across
-all backend workers (`app/core/cache.py:RateLimiter`, keyed
-`rate_limit:lookup_create:<user_id>`).
+Fixed-window limiters enforced via Redis so they hold across all backend
+workers (`app/core/cache.py:RateLimiter`). One is per-user, on the
+lookup-creation endpoint (`POST /api/v1/lookup/stream`, keyed
+`rate_limit:lookup_create:<user_id>`). A separate one is keyed per attempted
+email address and shared by `POST /api/v1/auth/login` and
+`POST /api/v1/auth/register` (keyed `rate_limit:login:<email>` /
+`rate_limit:register:<email>`).
 
 | Variable | Purpose | Default | Required? | Restart-required |
 |---|---|---|---|---|
 | `LOOKUP_RATE_LIMIT_MAX_CALLS` | Max lookup-stream requests allowed per user per window. | `10` | No | `up -d` |
 | `LOOKUP_RATE_LIMIT_WINDOW_SECONDS` | Window length in seconds. | `60` | No | `up -d` |
+| `LOGIN_RATE_LIMIT_MAX_ATTEMPTS` | Max login or registration attempts allowed per attempted email per window. | `10` | No | `up -d` |
+| `LOGIN_RATE_LIMIT_WINDOW_SECONDS` | Window length in seconds. | `60` | No | `up -d` |
 
 Exceeding the limit returns `HTTP 429` with a message stating the exact
 `max_calls`/`window_seconds` in effect.
@@ -245,7 +317,6 @@ platform," not just of the `Settings` class.
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `docker-compose.yml` (`frontend` service `environment:`, from `PUBLIC_API_URL` in `.env`), baked into the Next.js build | **Left empty by default.** When empty, `lib/api.ts`'s `getApiUrl()` derives the backend URL at runtime from whatever host the browser used to load the page (`window.location.hostname`) plus `NEXT_PUBLIC_BACKEND_PORT` -- this is what makes the platform work from `localhost` and from another device's LAN URL with the same build, no rebuild needed. Only set this explicitly for a reverse-proxy or other setup where the frontend and backend are not reachable at the same host. |
 | `NEXT_PUBLIC_BACKEND_PORT` | `docker-compose.yml` (`frontend` service `environment:`, from `HOST_PORT_BACKEND`) | The port `getApiUrl()` appends to the detected host when `NEXT_PUBLIC_API_URL` is unset. Not a secret -- safe to bake into the client bundle. |
-| `DETECTED_LAN_IP` | `.env`, written by the Windows wizard's `Get-LanIpAddress` (`windows/scripts/Common.ps1`) | A point-in-time snapshot of this machine's LAN-facing IPv4 address, detected on the Windows host at install/reconfigure time -- a container can never detect this itself (see `backend/app/main.py`'s `/network-info`). Powers the frontend's Network Access panel display only; re-run the wizard's Configuration option if the network changes. |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `docker-compose.yml` (`postgres` service `environment:`) | Postgres container's own bootstrap credentials — must stay consistent with the credentials embedded in `DATABASE_URL`. |
 | `NEO4J_AUTH` / `NEO4J_PLUGINS` | `docker-compose.yml` (`neo4j` service `environment:`) | Neo4j container bootstrap auth (`neo4j/changeme-neo4j`) and the `apoc` plugin. |
 | `DISABLE_SECURITY_PLUGIN`, `OPENSEARCH_JAVA_OPTS`, `discovery.type` | `docker-compose.yml` (`opensearch` service `environment:`) | Single-node OpenSearch container tuning; security plugin disabled for local dev. |

@@ -94,11 +94,15 @@ Censys organization ID is set in this environment — see
 
 ## Pages not shown here
 
-The full frontend route list is `/`, `/login`, `/register`, `/lookup/new`,
-`/lookup/[id]`, `/basket`, `/cases`, `/cases/[id]` — every one of them is
-captured above except `/register` (a plain sign-up form, functionally
-identical in layout to the login page in #2). There is no Threat Actor,
-Malware, Campaign, Watchlist, or Admin page to screenshot because none
+The full frontend route list is `/`, `/about`, `/admin`, `/login`,
+`/register`, `/lookup/new`, `/lookup/[id]`, `/basket`, `/cases`,
+`/cases/[id]`, `/dashboard`, `/dashboard/provider-health`, `/pentest`,
+`/pentest/[id]`, and `/providers` — only the eight pages captured above are
+shown in this doc (`/register` is a plain sign-up form, functionally
+identical in layout to the login page in #2; `/about`, `/admin`,
+`/dashboard`, `/dashboard/provider-health`, `/pentest`, `/pentest/[id]`,
+and `/providers` exist but aren't screenshotted here). There is no Threat
+Actor, Malware, Campaign, or Watchlist page to screenshot because none
 exist — see [DOCUMENTATION_GAPS.md](DOCUMENTATION_GAPS.md).
 
 ## Regenerating these screenshots
@@ -108,7 +112,11 @@ These were captured with Playwright against a locally running stack
 real route and calling `page.screenshot()`. If the UI changes and these go
 stale, the same approach works: spin up a headless Chromium, log in via the
 real `/login` form, navigate to each route, screenshot. There is no
-committed automation script for this in the repo (it was a one-off scratch
-script, not part of the codebase) — see
+committed script that regenerates these specific files (the capture above
+was a one-off scratch script, not part of the codebase), though
+`documentation/build/capture-doc-screenshots.js` is a committed Puppeteer
+script that does the equivalent capture (home, login, dashboard, admin,
+basket, cases, live investigation) for the separate `documentation/`
+package — see
 [TESTING.md](TESTING.md) for the project's actual (non-screenshot)
 automated test suite.

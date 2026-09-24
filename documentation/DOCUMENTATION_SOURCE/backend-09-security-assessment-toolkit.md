@@ -67,7 +67,10 @@ def _validate_scope(lookup, target_confirmation, authorization_confirmed) -> IOC
         raise UnscannableIOCTypeError(...)
     ioc_type = IOCType(lookup.ioc_type)
     if ioc_type == IOCType.CIDR:
-        network = ipaddress.ip_network(lookup.ioc_value, strict=False)
+        try:
+            network = ipaddress.ip_network(lookup.ioc_value, strict=False)
+        except ValueError as exc:
+            raise InvalidTargetError(...) from exc
         if network.num_addresses > _MAX_CIDR_ADDRESSES:  # 16, i.e. /28
             raise CIDRTooLargeError(...)
     return ioc_type
@@ -77,8 +80,11 @@ Order matters: authorization is checked *before* target matching, so an unconfir
 a clear "you must confirm authorization" error rather than a possibly-true-or-false target-mismatch
 claim. Every branch here is a plain `ValueError`-style exception the route layer maps to `400` —
 none of it reaches a tool, a subprocess, or a network call. This is deliberately the *only* place
-scope is checked; there is no second, looser path into `app/security_assessment/registry.py`'s
-tools from anywhere else in the codebase.
+this per-lookup toolkit's scope is checked. The one other caller of `app/security_assessment/
+registry.py`'s tools anywhere in the codebase is the separate Pentest Suite
+(`app/pentest/orchestrator.py`, documented in `backend-10-pentest-suite.md`), a standalone-assessment
+layer added later that reuses the same tool adapters through its own independent scope/authorization
+gate rather than routing through `_validate_scope()`.
 
 ## 3. 🧰 Structured Process Execution (Nmap)
 

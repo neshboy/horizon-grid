@@ -57,7 +57,7 @@ Mechanics, in order, on each hourly tick:
 
 1. `_recent_crawlable_iocs()` queries `ioc_lookups` for rows where `ioc_type` is one of the crawler-eligible types — `domain`, `ipv4`, `malware_family`, `threat_actor`, `campaign`, `cve`, `file_name` (must stay in sync with `app/crawler/collector.py`'s `_SUPPORTED_TYPES`, since free-text OSINT search on a raw hash or IP is treated as too noisy to be useful) — and `created_at` within the last **24 hours** (`_LOOKBACK_HOURS`). It over-fetches (`_MAX_IOCS_PER_RUN * 10` rows) and de-duplicates `(ioc_value, ioc_type)` pairs in Python (Postgres rejects `SELECT DISTINCT ... ORDER BY created_at` when `created_at` isn't in the select list), then caps the result at **25 IOCs per run** (`_MAX_IOCS_PER_RUN`) — a fixed bound so one beat tick never scales with lookup volume.
 2. No crawlable IOCs in the window → logs `"no recently-investigated crawlable IOCs, nothing to do"` and returns `0`. This is the expected outcome on a lightly-used instance, not an error.
-3. Otherwise it opens one shared `httpx.AsyncClient` (30s timeout, redirects followed) and calls `_crawl_one()` per target sequentially, each wrapped in its own `try/except` so one bad target cannot abort the run — logged as a warning and skipped.
+3. Otherwise it opens one shared `httpx.AsyncClient` (30s timeout, redirects followed) and fans `_crawl_one()` out across targets concurrently via `asyncio.gather`, bounded to **5 concurrent targets at once** by an `asyncio.Semaphore(5)` (rather than firing all up to 25 at once), each wrapped in its own `try/except` so one bad target cannot abort the run — logged as a warning and skipped.
 4. `_crawl_one()` calls `internet_intelligence_provider.run(...)` — the same `BaseProvider.run()` entry point live investigations use — and, only if the result status is `ProviderStatus.OK`, writes it into the same Redis cache via `set_cached_result(...)` with `settings.provider_cache_ttl_seconds` (default 3600s) as TTL. Non-`OK` results are discarded, not cached.
 
 Net effect: OSINT crawler results stay warm in the shared cache for IOCs users are actively investigating, so a second lookup within the TTL gets a cache hit instead of a fresh, rate-limit-sensitive crawl across GitHub/Reddit/RSS/Pastebin.
@@ -68,7 +68,7 @@ Concurrency note: the task function itself is synchronous (`def run_osint_crawl(
 
 | Task name | Trigger | Frequency | File |
 |---|---|---|---|
-| `app.workers.tasks.run_osint_crawl` | Celery Beat (`crawl-osint-sources-hourly` schedule entry) | Every 3600 seconds (1 hour) | `backend/app/workers/tasks.py:119-124` |
+| `app.workers.tasks.run_osint_crawl` | Celery Beat (`crawl-osint-sources-hourly` schedule entry) | Every 3600 seconds (1 hour) | `backend/app/workers/tasks.py:173-178` |
 
 That is the entire task registry. No other `@celery_app.task` decorator exists anywhere in the backend codebase — confirmed by the fact that `celery_app.py`'s `include=["app.workers.tasks"]` names the only module Celery is told to import tasks from, and that module defines exactly one.
 
@@ -78,8 +78,8 @@ Both `celery_worker` and `celery_beat` in `docker-compose.yml` build from the **
 
 | Container | Command | Role |
 |---|---|---|
-| `celery_worker` | `celery -A app.workers.celery_app worker --loglevel=info` | Executes tasks pulled from the broker queue. |
-| `celery_beat` | `celery -A app.workers.celery_app beat --loglevel=info` | Emits the scheduled `run_osint_crawl` message onto the broker every hour; does not execute tasks itself. |
+| `celery_worker` | `celery -A app.workers.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-4}` | Executes tasks pulled from the broker queue. |
+| `celery_beat` | `sh -c "sleep 3 && celery -A app.workers.celery_app beat --loglevel=info"` | Emits the scheduled `run_osint_crawl` message onto the broker every hour; does not execute tasks itself. |
 
 Both are started with `restart: unless-stopped`, and both depend on Redis being healthy (`depends_on: redis: condition: service_healthy`) before starting; `celery_worker` additionally depends on Postgres, since its one task reads `ioc_lookups`. Neither container runs `alembic upgrade head` — only the `backend` service's startup command does that, so the workers assume the schema is already current by the time they start.
 
@@ -101,7 +101,7 @@ All three URLs are injected identically into `backend`, `celery_worker`, and `ce
 
 ### Client construction
 
-`app/core/cache.py` builds its Redis connection lazily, once per process, via a module-level `_pool` global populated on first call to `get_redis()`: `aioredis.from_url(get_settings().redis_url, decode_responses=True)`. This is the async `redis.asyncio` client (package `redis==5.0.8` per `backend/requirements.txt`); `decode_responses=True` means every value this module handles is a Python `str`, not `bytes`. This client always talks to `/0` — it is unrelated to, and shares no connection with, Celery's own broker/backend clients (which Celery manages internally against `/1`/`/2`). There is exactly one `aioredis.Redis` client per backend/worker process, reused for the life of that process; it is never explicitly closed or recycled.
+`app/core/cache.py` builds its Redis connection lazily via a module-level `_pool` global populated on first call to `get_redis()`: `aioredis.from_url(get_settings().redis_url, decode_responses=True)`. This is the async `redis.asyncio` client (package `redis==5.0.8` per `backend/requirements.txt`); `decode_responses=True` means every value this module handles is a Python `str`, not `bytes`. This client always talks to `/0` — it is unrelated to, and shares no connection with, Celery's own broker/backend clients (which Celery manages internally against `/1`/`/2`). `get_redis()` also tracks the event loop the cached client was created under (`_pool_loop`) and transparently rebuilds it if the running loop ever differs from that — normally one `aioredis.Redis` client for the life of a backend/worker process, but recreated (not reused) across an event-loop change; it is never explicitly closed.
 
 ### Provider-result cache
 
@@ -115,10 +115,10 @@ The IOC value itself is SHA-256-hashed before being embedded in the key — `has
 
 The cache is consulted from exactly two call sites, both of which use the identical key scheme so a write from one is visible to a read from the other:
 
-1. **`app/providers/orchestrator.py`'s `_run_with_policy()`** — checked *before* any live HTTP call is attempted, for every applicable provider, on every investigation. A hit short-circuits the entire fetch/retry/timeout pipeline for that provider and is marked `result.from_cache = True` so the UI can distinguish a fresh answer from a cached one. A write only happens `if result.status == ProviderStatus.OK` — results with any other status (`NO_DATA`, `ERROR`, `TIMEOUT`, `RATE_LIMITED`, `NOT_CONFIGURED`, `UNSUPPORTED`) are never cached. This is a deliberate asymmetry worth knowing operationally: a provider that currently has no data for an IOC (`NO_DATA`) will be queried again, in full, on every subsequent lookup of that same IOC until it eventually returns `OK` — there is no negative-result caching.
+1. **`app/providers/orchestrator.py`'s `_run_with_policy()`** — checked *before* any live HTTP call is attempted, for every applicable provider, on every investigation. A hit short-circuits the entire fetch/retry/timeout pipeline for that provider and is marked `result.from_cache = True` so the UI can distinguish a fresh answer from a cached one. A write only happens `if result.status == ProviderStatus.OK` — results with any other status (`NO_DATA`, `ERROR`, `TIMEOUT`, `RATE_LIMITED`, `NOT_CONFIGURED`, `UNSUPPORTED_IOC`, `DISABLED`) are never cached. This is a deliberate asymmetry worth knowing operationally: a provider that currently has no data for an IOC (`NO_DATA`) will be queried again, in full, on every subsequent lookup of that same IOC until it eventually returns `OK` — there is no negative-result caching.
 2. **`app/workers/tasks.py`'s `_crawl_one()`** (the hourly OSINT job) — writes only, using the same `set_cached_result()` function and the same TTL setting, refreshing the crawler's entry in this same cache so a subsequent interactive lookup of that IOC can hit it.
 
-TTL for both call sites is `settings.provider_cache_ttl_seconds`, defaulting to **3600 seconds (1 hour)** (`app/core/config.py:103`). There is no cache-busting endpoint or manual invalidation path anywhere in the API surface — the only way a stale cached provider result is refreshed before its TTL expires is if a provider's underlying data changes and someone explicitly needs a fresh read, in which case the only lever available today is waiting out the TTL (there is no "force refresh" flag on `POST /api/v1/lookup/stream`).
+TTL for both call sites is `settings.provider_cache_ttl_seconds`, defaulting to **3600 seconds (1 hour)** (`app/core/config.py:183`). There is no cache-busting endpoint or manual invalidation path anywhere in the API surface — the only way a stale cached provider result is refreshed before its TTL expires is if a provider's underlying data changes and someone explicitly needs a fresh read, in which case the only lever available today is waiting out the TTL (there is no "force refresh" flag on `POST /api/v1/lookup/stream`).
 
 ### Rate limiting
 
@@ -133,13 +133,17 @@ class RateLimiter:
 
     async def allow(self) -> bool:
         r = get_redis()
-        current = await r.incr(self._key)
-        if current == 1:
-            await r.expire(self._key, self._window_seconds)
+        try:
+            current = await asyncio.wait_for(r.incr(self._key), timeout=_REDIS_CALL_TIMEOUT_SECONDS)
+            await asyncio.wait_for(
+                r.expire(self._key, self._window_seconds, nx=True), timeout=_REDIS_CALL_TIMEOUT_SECONDS
+            )
+        except (RedisError, asyncio.TimeoutError) as exc:
+            raise RateLimiterUnavailable(f"Redis unavailable for rate limiting: {exc!r}") from exc
         return current <= self._max_calls
 ```
 
-The constructor parameter is named `provider_id`, but this is a generic identifier for whatever the caller wants to key the window by — it is not restricted to provider identifiers. The one place this class is actually instantiated in the codebase is `app/api/routes/lookup.py`'s `POST /api/v1/lookup/stream` handler, which keys it **per authenticated user**, not per provider:
+Every Redis call is bounded by a timeout (`_REDIS_CALL_TIMEOUT_SECONDS`, 3.0s) and wrapped so a Redis error or timeout raises `RateLimiterUnavailable` instead of hanging or propagating a bare `redis.exceptions` error; `app/main.py` registers an exception handler for `RateLimiterUnavailable` that turns it into a clean `HTTP 503`. The constructor parameter is named `provider_id`, but this is a generic identifier for whatever the caller wants to key the window by — it is not restricted to provider identifiers. Besides its use in `app/api/routes/auth.py`'s login/registration throttling (keyed per attempted email), the call site relevant to this chapter is `app/api/routes/lookup.py`'s `POST /api/v1/lookup/stream` handler, which keys it **per authenticated user**, not per provider:
 
 ```python
 limiter = RateLimiter(
@@ -149,13 +153,13 @@ limiter = RateLimiter(
 )
 ```
 
-Defaults are `lookup_rate_limit_max_calls = 10` and `lookup_rate_limit_window_seconds = 60` (`config.py:106-107`) — at most 10 new lookups per user per rolling 60-second fixed window. `INCR` on a key that doesn't exist initializes it to `1`; the code sets the key's expiry only on that first increment (`if current == 1: await r.expire(...)`), the standard fixed-window pattern — a burst straddling a window boundary can momentarily exceed the nominal limit, a known fixed-window tradeoff the code does not correct for. Exceeding the limit returns `HTTP 429` with a detail message explaining why the limit exists: a single lookup fans out to every provider plus the crawler plus multiple AI calls, so the per-user cap bounds aggregate downstream cost/load, not just request count.
+Defaults are `lookup_rate_limit_max_calls = 10` and `lookup_rate_limit_window_seconds = 60` (`config.py:218-219`) — at most 10 new lookups per user per rolling 60-second fixed window. `INCR` on a key that doesn't exist initializes it to `1`; the code calls `EXPIRE ... NX` on every `allow()` (not just when the count is `1`), which is a no-op once a TTL already exists but self-heals a window that failed to get one earlier (e.g. a timeout on that first call) instead of leaving the key permanently un-expiring — this is still the standard fixed-window pattern, so a burst straddling a window boundary can momentarily exceed the nominal limit, a known fixed-window tradeoff the code does not correct for. Exceeding the limit returns `HTTP 429` with a detail message explaining why the limit exists: a single lookup fans out to every provider plus the crawler plus multiple AI calls, so the per-user cap bounds aggregate downstream cost/load, not just request count.
 
 Being Redis-backed, this limiter stays correct if the FastAPI backend is horizontally scaled to multiple replicas — the module's stated reason for not using an in-process counter. Contrast the crawler's own **separate** in-process limiter, `AsyncMinIntervalLimiter` (`app/crawler/sources/rate_limit.py`), which spaces out GitHub (6.0s) and Reddit (1.1s) search calls within the crawler's OSINT sub-sources using a plain `asyncio.Lock` + monotonic clock. It is intentionally not Redis-backed and not shared with `RateLimiter`, since it only needs to bound one process's own outbound rate to a third-party API, not enforce a global cross-replica cap.
 
 ## 🚧 Operational notes and gaps
 
-- **No dedicated automated tests target `app/core/cache.py` or `app/workers/tasks.py` directly.** No `test_cache*.py` or `test_workers*.py`/`test_tasks*.py` file exists under `backend/app/tests/`. Cache coverage is indirect, via provider/orchestrator tests exercising cache-hit/miss branches as a side effect; the hourly task has no unit test of its own.
+- **Dedicated automated tests do target `app/core/cache.py` and `app/workers/tasks.py` directly.** `backend/app/tests/unit/test_cache_redis_client_lifecycle.py` and `test_rate_limiter_redis_outage.py` exercise `get_redis()`'s event-loop-bound client recreation and `RateLimiter.allow()`'s Redis-outage handling; `backend/app/tests/unit/test_osint_crawl_task.py` and `backend/app/tests/integration/test_osint_crawl_task_survives_repeated_asyncio_run.py` unit-test the hourly `run_osint_crawl` task directly (mocking DB/Redis/network). Provider/orchestrator tests additionally exercise cache-hit/miss branches as a side effect.
 - **No cache metrics or hit/miss counters are exposed.** The only observability into cache behavior is the `from_cache` boolean on each `ProviderResult`, visible per-lookup — there is no aggregate hit-rate metric on the Prometheus `/metrics` endpoint.
 - **No Flower (or equivalent) Celery monitoring UI exists anywhere in this codebase** — task history/state is inspectable only via the result backend (`/2`) directly or worker/beat container logs.
 - **A Redis outage has two blast radii at once.** Because the cache/rate-limiter (`/0`) and the Celery broker/backend (`/1`, `/2`) share one physical Redis process, an outage fails both simultaneously — interactive lookups fail at `RateLimiter.allow()` before the cache is even consulted, and the hourly job fails to dispatch. No fallback path (fail-open limiter, in-memory cache) exists for a Redis-unavailable condition; Redis should be treated as a hard dependency of the lookup-creation endpoint, not merely a performance optimization.

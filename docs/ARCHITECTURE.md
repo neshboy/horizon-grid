@@ -19,24 +19,31 @@ flowchart TB
     end
 
     subgraph Backend["Backend API -- FastAPI (backend/app/main.py), localhost:8000"]
-        API["Routers: auth, lookup, providers,<br/>analysis, hunting, pivot, basket, cases<br/>(app/api/routes/)"]
+        API["Routers: auth, lookup, providers,<br/>ai_config, analysis, hunting, pivot, basket,<br/>cases, runtime, admin, security_assessment,<br/>pentest, pentest_exploit, dashboard<br/>(app/api/routes/)"]
         DET["IOC detector<br/>app/ioc/detector.py"]
-        ORCH["Provider orchestrator<br/>app/providers/orchestrator.py<br/>+ registry (15 connectors)"]
+        ORCH["Provider orchestrator<br/>app/providers/orchestrator.py<br/>+ registry (17 connectors)"]
         CRAWL["OSINT crawler-as-provider<br/>app/crawler/collector.py<br/>(GitHub, Reddit, RSS, Pastebin)"]
         CORR["Correlation engine<br/>app/correlation/engine.py<br/>(pure function, no I/O)"]
         EVID["Evidence builder<br/>app/evidence/builder.py<br/>(deterministic ledger)"]
         AI["AI service<br/>app/ai/service.py<br/>+ analysis_service.py, hunting_service.py"]
     end
 
-    subgraph AIBackends["AI backend (settings.ai_backend, pick one)"]
+    subgraph AIBackends["AI backend (settings.ai_backend, pick one of 11)"]
         OLLAMA["Ollama (default)<br/>local, no key"]
         BEDROCK["AWS Bedrock<br/>Converse API"]
         GEMINI["Google Gemini"]
         ANTHROPIC["Anthropic direct API"]
+        GROQ["Groq"]
+        OPENAI["OpenAI"]
+        KIMI["Kimi (Moonshot AI)"]
+        DEEPSEEK["DeepSeek"]
+        XAI["xAI"]
+        MISTRAL["Mistral AI"]
+        OPENROUTER["OpenRouter<br/>multi-provider router"]
     end
 
     subgraph Providers["External providers (backend/app/providers/*)"]
-        VT["VirusTotal, AbuseIPDB, OTX,<br/>URLhaus, ThreatFox, MalwareBazaar,<br/>crt.sh, NVD, CISA KEV, MITRE ATT&CK,<br/>WHOIS/RDAP, Hybrid Analysis, Spamhaus,<br/>PhishTank, Censys"]
+        VT["VirusTotal, AbuseIPDB, OTX,<br/>URLhaus, ThreatFox, MalwareBazaar,<br/>crt.sh, NVD, CISA KEV, MITRE ATT&CK,<br/>WHOIS/RDAP, urlscan.io, Google Safe Browsing,<br/>Hybrid Analysis, Spamhaus,<br/>PhishTank, Censys"]
     end
 
     subgraph Data["Datastores"]
@@ -67,6 +74,13 @@ flowchart TB
     AI --> BEDROCK
     AI --> GEMINI
     AI --> ANTHROPIC
+    AI --> GROQ
+    AI --> OPENAI
+    AI --> KIMI
+    AI --> DEEPSEEK
+    AI --> XAI
+    AI --> MISTRAL
+    AI --> OPENROUTER
     ORCH <-->|cache read/write| REDIS
     API <-->|reads/writes lookups,<br/>results, summaries,<br/>evidence, cases| PG
     CBEAT -->|enqueue| REDIS
@@ -84,7 +98,7 @@ infrastructure today** — `neo4j_uri`/`opensearch_url` exist as `Settings` fiel
 (`backend/app/core/config.py`), and both services start as containers, but **no code
 path anywhere in `backend/app/` calls a Neo4j driver or an OpenSearch client**.
 `correlation_edges` in Postgres is, in practice, the sole store for the correlation
-graph, despite a model docstring (`app/models/lookup.py:101-103`) describing edges as
+graph, despite a model docstring (`app/models/lookup.py:133-135`) describing edges as
 "mirrored into Neo4j." This is called out explicitly rather than drawn as an active
 path — see [DATA_MODEL.md](DATA_MODEL.md#known-gaps--not-implemented) for the
 model-level detail. **NOT IMPLEMENTED.**
@@ -101,14 +115,16 @@ routes to `/lookup/new?value=...`, which opens the SSE stream via `lib/api.ts`
 `EventSource` API, because `EventSource` cannot send an `Authorization` header and
 the stream endpoint requires a bearer token) and renders incoming events into state.
 `app/lookup/[id]/page.tsx` shows a previously-completed lookup via a plain `GET`.
-Other routes: `app/basket/`, `app/cases/`, `app/login/`, `app/register/`.
+Other routes: `app/basket/`, `app/cases/`, `app/login/`, `app/register/`, `app/admin/`,
+`app/dashboard/`, `app/pentest/`, `app/providers/`, `app/about/`.
 
 ### Backend API (FastAPI)
 
 `backend/app/main.py` builds the FastAPI app, mounts Prometheus instrumentation at
 `/metrics`, and includes routers under `settings.api_v1_prefix` (`/api/v1`):
-`auth`, `lookup`, `providers`, `analysis`, `hunting`, `pivot`, `basket`, `cases`
-(`backend/app/api/routes/`). A plain `GET /health` exists outside the versioned
+`auth`, `lookup`, `providers`, `ai_config`, `analysis`, `hunting`, `pivot`, `basket`,
+`cases`, `runtime`, `admin`, `security_assessment`, `pentest`, `pentest_exploit`,
+`dashboard` (`backend/app/api/routes/`). A plain `GET /health` exists outside the versioned
 prefix. OpenAPI/Swagger UI is auto-served at `/docs`. See [API.md](API.md) for the
 full route reference.
 
@@ -121,10 +137,11 @@ into an `IOCType` enum value, or the caller can override via `ioc_type_hint`.
 
 `backend/app/providers/base.py` defines the `BaseProvider` plugin contract.
 `backend/app/providers/registry.py` is the single place that imports every concrete
-connector and lists it in `_ALL_PROVIDERS` (15 connector modules, ordered as declared:
+connector and lists it in `_ALL_PROVIDERS` (17 connector modules, ordered as declared:
 VirusTotal, AbuseIPDB, OTX, URLhaus, ThreatFox, MalwareBazaar, crt.sh, NVD, CISA KEV,
-MITRE ATT&CK, WHOIS/RDAP, Hybrid Analysis, Spamhaus, PhishTank, Censys, plus the
-`internet_intelligence` crawler-as-provider as the 16th/last entry) — the orchestrator
+MITRE ATT&CK, WHOIS/RDAP, urlscan.io, Google Safe Browsing, Hybrid Analysis, Spamhaus,
+PhishTank, Censys, plus the
+`internet_intelligence` crawler-as-provider as the 18th/last entry) — the orchestrator
 never imports a concrete provider directly. `backend/app/providers/orchestrator.py`
 (`run_all_providers` / `run_all_providers_collected`) fans one IOC out to every
 provider whose `supported_types` includes the detected type, concurrently, over one
@@ -183,9 +200,10 @@ Copilot answers) cites by `evidence_id`, so the analysis endpoints can strip any
 
 `backend/app/ai/service.py` owns the two-step lookup-time prompting flow;
 `app/ai/analysis_service.py` and `app/ai/hunting_service.py` own the on-demand,
-evidence-grounded explanation/hunting endpoints. Four interchangeable backends are
-selected via `settings.ai_backend` (`ollama` default, `bedrock`, `gemini`,
-`anthropic`), all exposing an identical `call_claude_json()` method. Full prompting,
+evidence-grounded explanation/hunting endpoints. Eleven interchangeable backends are
+selected via `settings.ai_backend` (`ollama` default, `anthropic`, `gemini`,
+`bedrock`, `groq`, `openai`, `kimi`, `deepseek`, `xai`, `mistral`, or `openrouter`),
+all exposing an identical `call_claude_json()` method. Full prompting,
 grounding, and schema-validation detail is in [AI_ENGINE.md](AI_ENGINE.md).
 
 ### Auth / RBAC
@@ -209,7 +227,7 @@ beat: scheduled crawl refresh" below for the full task flow.
 
 | Store | Role | Status |
 |---|---|---|
-| **Postgres** | System of record: `users`, `ioc_lookups`, `provider_results`, `ai_summaries`, `correlation_edges`, `evidence_items`, `basket_items`, `cases`, `case_iocs`, `case_notes`, `case_reports`. Async via SQLAlchemy + `asyncpg`; schema managed by Alembic. | Active |
+| **Postgres** | System of record: `users`, `ioc_lookups`, `provider_results`, `ai_summaries`, `correlation_edges`, `evidence_items`, `basket_items`, `cases`, `case_iocs`, `case_notes`, `case_reports`, `final_assessment_records`, `provider_runtime_configs`, `config_audit_log`, `security_assessment_runs`, `security_assessment_findings`, `pentest_assessments`, `pentest_targets`, `pentest_findings`, `pentest_exploit_attempts`, `pentest_global_kill_switch`. Async via SQLAlchemy + `asyncpg`; schema managed by Alembic. | Active |
 | **Redis** | Provider result cache (`app/core/cache.py`, keyed `provider_cache:{provider_id}:{ioc_type}:{sha256(ioc_value)}`, TTL `provider_cache_ttl_seconds`, default 3600s); fixed-window rate limiter for lookup *creation* (`lookup_rate_limit_max_calls`, default 10/60s); Celery broker (db 1) and result backend (db 2). | Active |
 | **Neo4j** | `docker-compose.yml` runs a `neo4j:5-community` container and `Settings.neo4j_uri`/`neo4j_user`/`neo4j_password` exist, but **no Neo4j driver call exists anywhere in the codebase**. | **NOT IMPLEMENTED** — dead infra |
 | **OpenSearch** | `docker-compose.yml` runs an `opensearchproject/opensearch:2.17.0` container and `Settings.opensearch_url` exists, but **no OpenSearch client call exists anywhere in the codebase read for this platform**. | **NOT IMPLEMENTED** — dead infra |
@@ -243,10 +261,13 @@ sequenceDiagram
         API->>PG: INSERT provider_results row
         API-->>FE: event: provider_result {...}
         alt status == "ok"
-            API->>AI: summarize_provider(ioc_value, ioc_type, result)
-            API->>PG: INSERT ai_summaries row (provider_id set)
-            API-->>FE: event: provider_summary {...}
+            API->>AI: summarize_provider(ioc_value, ioc_type, result) (background task, not awaited)
         end
+    end
+
+    loop drain summary tasks via asyncio.as_completed, as each finishes
+        API->>PG: INSERT ai_summaries row (provider_id set)
+        API-->>FE: event: provider_summary {...}
     end
 
     API->>CORR: correlate(ioc_value, ioc_type, all provider_results)
@@ -275,11 +296,15 @@ Step by step:
    (`asyncio.as_completed` order, not registration order) and is persisted as a
    `ProviderResultRecord`.
 3. **`provider_summary` × N** — for every `provider_result` with `status == "ok"`,
-   `summarize_provider()` is called synchronously inside the same loop iteration
-   (before moving to the next provider event), persisted as an `AISummaryRecord`
-   (`provider_id` set), and streamed. Providers that returned anything other than
-   `ok` (error/timeout/rate_limited/not_configured/unsupported_ioc/no_data) get **no**
-   AI summary call at all.
+   `summarize_provider()` is dispatched as a background `asyncio` task the instant
+   that result arrives, rather than awaited inline, so it runs concurrently with the
+   next provider's fetch; every in-flight summary task is then drained via
+   `asyncio.as_completed()` once the provider loop above finishes, so all
+   `provider_summary` events stream after all `provider_result` events (in
+   AI-completion order, not tied to their originating provider's position),
+   persisted as an `AISummaryRecord` (`provider_id` set). Providers that returned
+   anything other than `ok` (error/timeout/rate_limited/not_configured/disabled/
+   unsupported_ioc/no_data) get **no** AI summary call at all.
 4. **`correlation`** — once every provider has reported, `correlate()` runs over the
    full result set; its edges are persisted as `CorrelationEdgeRecord` rows and the
    node/edge graph is streamed. This event's payload is **not** persisted verbatim —
@@ -321,7 +346,7 @@ flowchart LR
     BEAT["Celery beat<br/>(interval: 3600.0s)"] -->|enqueues| QUEUE[("Redis broker<br/>db 1")]
     QUEUE --> WORKER["Celery worker<br/>run_osint_crawl task"]
     WORKER -->|"1) SELECT recent ioc_lookups<br/>(crawlable types, last 24h,<br/>max 25 IOCs)"| PG[("Postgres")]
-    WORKER -->|"2) for each IOC: run internet_intelligence<br/>collector sequentially"| CRAWLER["Crawler sources<br/>(GitHub/Reddit/RSS/Pastebin)"]
+    WORKER -->|"2) for each IOC (up to 5 concurrently):<br/>run internet_intelligence collector"| CRAWLER["Crawler sources<br/>(GitHub/Reddit/RSS/Pastebin)"]
     CRAWLER -->|"3) if status==OK, write result"| CACHE[("Redis provider cache<br/>same cache the SSE<br/>lookup path reads")]
 ```
 
@@ -333,8 +358,9 @@ Flow (`backend/app/workers/tasks.py`):
    crawler's own `_SUPPORTED_TYPES`) and `created_at` is within the last 24 hours,
    ordered most-recent-first, deduplicated in Python, capped at 25 IOCs per run.
 2. `_run_osint_crawl_async()` opens one shared `httpx.AsyncClient` and calls
-   `_crawl_one()` **sequentially** per target (not concurrently); any per-target
-   exception is caught and logged so one bad target doesn't abort the run.
+   `_crawl_one()` with **bounded concurrency** per target (`asyncio.Semaphore(5)`,
+   at most 5 targets in flight at once rather than a bare `asyncio.gather`); any
+   per-target exception is caught and logged so one bad target doesn't abort the run.
 3. `_crawl_one()` runs the `internet_intelligence` provider for that IOC; if the
    result status is `OK`, it writes the result into the **same Redis provider-result
    cache** the interactive SSE lookup path reads from (`set_cached_result`) — so a
@@ -355,7 +381,10 @@ up recently, not to run new lookups from scratch.
 Defined in `backend/app/providers/base.py`. Every connector subclasses `BaseProvider`
 and sets `provider_id`, `provider_name`, `category` (`ProviderCategory`:
 `threat_intel`, `sandbox`, `passive_dns`, `certificate_intel`, `whois`,
-`vulnerability`, `osint`), `supported_types: set[IOCType]`, `requires_key: bool`, a
+`vulnerability`, `osint`, plus `security_assessment` — the last is used by active
+target-scanning tools under `app/security_assessment/` and, unlike the other
+values, is never registered in `registry.py` or run by the orchestrator fan-out),
+`supported_types: set[IOCType]`, `requires_key: bool`, a
 `configured: bool` computed from settings, and implements
 `async def fetch(self, ioc_value, ioc_type, client) -> ProviderResult`.
 

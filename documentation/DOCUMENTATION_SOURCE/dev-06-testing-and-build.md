@@ -1,6 +1,6 @@
 # Testing and the Build Pipeline
 
-This chapter documents three independent, non-overlapping pieces of tooling a maintainer needs to know: the backend's **pytest** suite (what exists, how it mocks the outside world, and the exact gotchas you will hit running it locally on this machine), the **Docker Compose / Windows Inno Setup** pipeline that turns the source tree into a running stack or an installable `.exe`, and the **documentation build pipeline** under `documentation/build/` that renders the very manual this chapter belongs to. There is no CI system anywhere in the repository -- no `.github/workflows/`, no `Makefile`, no other automation entry point was found -- so every command below is something a developer runs by hand.
+This chapter documents three independent, non-overlapping pieces of tooling a maintainer needs to know: the backend's **pytest** suite (what exists, how it mocks the outside world, and the exact gotchas you will hit running it locally on this machine), the **Docker Compose / Windows Inno Setup** pipeline that turns the source tree into a running stack or an installable `.exe`, and the **documentation build pipeline** under `documentation/build/` that renders the very manual this chapter belongs to. A CI system now exists under `.github/workflows/` (`backend-tests.yml`, `frontend-build.yml`, `build-release-artifacts.yml`, `dependency-audit.yml`), which runs most of the commands below automatically on push/PR/tag/schedule -- there is still no `Makefile` or other local automation entry point, so a developer reproducing any of it on their own machine still runs every command below by hand.
 
 ## 📋 Table of contents
 
@@ -20,14 +20,14 @@ This chapter documents three independent, non-overlapping pieces of tooling a ma
 
 ## 1. 🧪 Backend Test Suite Layout
 
-Tests live under `backend/app/tests/`, split into `unit/` and `integration/`, each a real Python package (`__init__.py` present). **There is no `pytest.ini`, `pyproject.toml`, `setup.cfg`, `tox.ini`, or `conftest.py` anywhere in the repository** -- confirmed by a direct search of the tree. Pytest therefore runs with bare default discovery: no custom markers, no `asyncio_mode=auto` (every async test is decorated explicitly with `@pytest.mark.asyncio`, pytest-asyncio's strict-mode requirement), and no coverage gate, even though `pytest-cov` is a pinned dependency (`requirements.txt:29`) -- it is never invoked with `--cov` anywhere in the source, so coverage measurement is available but unused.
+Tests live under `backend/app/tests/`, split into `unit/` and `integration/`, each a real Python package (`__init__.py` present). **There is no `pytest.ini`, `pyproject.toml`, `setup.cfg`, `tox.ini`, or `conftest.py` anywhere in the repository** -- confirmed by a direct search of the tree. Pytest therefore runs with bare default discovery: no custom markers, no `asyncio_mode=auto` (every async test is decorated explicitly with `@pytest.mark.asyncio`, pytest-asyncio's strict-mode requirement), and no coverage gate, even though `pytest-cov` is a pinned dependency (`requirements.txt:37`) -- it is never invoked with `--cov` anywhere in the source, so coverage measurement is available but unused.
 
 | Layer | Location | Files |
 |---|---|---|
-| Unit | `backend/app/tests/unit/` | 33 |
-| Integration | `backend/app/tests/integration/` | 15 |
+| Unit | `backend/app/tests/unit/` | 65 |
+| Integration | `backend/app/tests/integration/` | 34 |
 
-The suite has grown considerably past its original size as the Security Assessment Toolkit, Pentest Suite, scoring engine, admin console, and executive dashboard were added, each with their own dedicated test files. Per the current README, the unit layer alone (335 test functions) needs no infrastructure at all and passes standalone; the full suite (unit + integration together) is 380 passed, 39 skipped -- the skips being intentional, environment-gated tests (see §1.2), not failures.
+The suite has grown considerably past its original size as the Security Assessment Toolkit, Pentest Suite, scoring engine, admin console, and executive dashboard were added, each with their own dedicated test files. The unit layer alone (680 test functions) needs no infrastructure at all and passes standalone; the full suite (unit + integration together) collects 865 tests across both layers, with integration files that can't reach Postgres/Redis skipping outright rather than failing (see §1.2).
 
 ### 1.1 Unit tests (`backend/app/tests/unit/`)
 
@@ -36,7 +36,7 @@ No database, Redis, Docker, or network access is required for any file in this d
 | File | What it exercises |
 |---|---|
 | `test_abusech.py` | `app.providers.abusech.map_query_status` -- the shared abuse.ch `query_status` mapping used by URLhaus/ThreatFox/MalwareBazaar |
-| `test_ai_connection_test.py` | `app.ai.connection_test.test_ai_connection` for all 11 AI backends against **respx**-mocked HTTP: success, invalid-key/401, rate-limit/429, model-not-found/404, timeout, network error, plus backend-specific cases (Kimi's thinking-mode conflict, DeepSeek's 402, xAI's flat error body) (53 test functions) |
+| `test_ai_connection_test.py` | `app.ai.connection_test.test_ai_connection` for all 11 AI backends against **respx**-mocked HTTP: success, invalid-key/401, rate-limit/429, model-not-found/404, timeout, network error, plus backend-specific cases (Kimi's thinking-mode conflict, DeepSeek's 402, xAI's flat error body) (58 test functions) |
 | `test_ai_schemas.py` | `app.ai.schemas.MitreMapping`'s enum/regex-free `technique_id` field and `FinalAssessment`'s grounding validator |
 | `test_ai_service.py` | `app.ai.service.generate_final_assessment`'s no-real-evidence short-circuit -- the fix for a fabricated `highly_malicious` verdict against the EICAR hash with zero provider evidence |
 | `test_analysis_service.py` | `app.ai.analysis_service._strip_invalid_evidence_ids`, the guard that drops any AI-cited `evidence_id` not present in the real evidence set |
@@ -52,7 +52,7 @@ No database, Redis, Docker, or network access is required for any file in this d
 | `test_runtime_context.py` | `app.core.runtime_context`'s per-investigation `ContextVar` snapshot/override mechanics |
 | `test_whois_rdap.py` | The WHOIS half of `app.providers.whois_rdap.WhoisRdapProvider`, including socket-failure vs. genuine-no-record handling |
 
-Seventeen further unit test files were added as the platform grew past its original provider/AI/evidence core:
+Further unit test files were added as the platform grew past its original provider/AI/evidence core (a representative subset):
 
 | File | What it exercises |
 |---|---|
@@ -84,7 +84,7 @@ Seventeen further unit test files were added as the platform grew past its origi
 
 `test_lookup_flow.py` and `test_lookup_stream_persistence.py` each perform a live TCP reachability probe at import time and use `pytest.mark.skipif` to **skip the whole module** (not fail the run) when the required service isn't reachable -- so running the suite with no Docker services up still passes, it just silently exercises fewer files.
 
-Twelve further integration test files cover the features added since, all against a real Postgres (several also against Redis):
+Further integration test files cover the features added since, all against a real Postgres (several also against Redis) -- a representative subset:
 
 | File | Covers |
 |---|---|
@@ -111,7 +111,7 @@ Three patterns recur across the suite and are worth knowing before adding a new 
 
 **There is still no shared `conftest.py`.** Every infra-dependent integration file independently reimplements a near-identical Postgres/Redis-override and connection-pool-disposal fixture rather than sharing one -- a real, if minor, duplication now repeated across well over a dozen files, not just the original two.
 
-**Auth's HTTP endpoints now have dedicated coverage.** `test_auth_registration.py` covers the first-user-becomes-admin bootstrap rule and the `403` every subsequent `POST /api/v1/auth/register` gets, and `test_auth_login_rate_limit.py` covers brute-force rate limiting on `POST /api/v1/auth/login` -- both added since this chapter originally noted the gap. `POST /api/v1/auth/refresh` remains exercised only indirectly, via `User` rows and tokens constructed directly inside other integration files' fixtures.
+**Auth's HTTP endpoints now have dedicated coverage.** `test_auth_registration.py` covers the first-user-becomes-admin bootstrap rule and the `403` every subsequent `POST /api/v1/auth/register` gets, and `test_auth_login_rate_limit.py` covers brute-force rate limiting on `POST /api/v1/auth/login` -- both added since this chapter originally noted the gap. `POST /api/v1/auth/refresh` is now also exercised directly via real HTTP by `test_auth_logout.py` (confirming logout invalidates the refresh token too), beyond the `User` rows and tokens constructed directly inside other integration files' fixtures.
 
 ## 3. 🏃 Running the Backend Tests
 
@@ -141,7 +141,7 @@ A separate, code-level (not environment-dependent) gotcha remains live regardles
 
 ## 4. 💻 Frontend Tests
 
-`frontend/package.json` declares `"test": "vitest run"` and lists `vitest@4.1.10` as a devDependency, but a repository-wide search for `*.test.*` / `*.spec.*` under `frontend/` finds zero files, and no `vitest.config.*` exists either. Running `npm test` in `frontend/` executes Vitest against an empty suite. This is configured-but-unused tooling, not a working test suite -- see the Testing and Quality Assurance appendix for the fuller picture, including the separate manual QA pass that exercises the product end-to-end where automated frontend tests do not.
+`frontend/package.json` declares `"test": "vitest run"` and lists `vitest@4.1.10` as a devDependency, and `vitest.config.ts` now configures a minimal Node-only environment (no jsdom/React rendering) with the same `@/*` path alias as `tsconfig.json`. A repository-wide search for `*.test.*` / `*.spec.*` under `frontend/` finds five files (`frontend/lib/api.test.ts`, `frontend/lib/authedFetch.test.ts`, `frontend/lib/dashboardSummary.test.ts`, `frontend/lib/runEffectOnce.test.ts`, `frontend/app/pentest/page.test.ts`), covering 30 tests total. Running `npm test` in `frontend/` runs this real, if still narrow, regression suite -- see the Testing and Quality Assurance appendix for the fuller picture, including the separate manual QA pass that exercises the product end-to-end where automated frontend tests do not yet reach.
 
 ## 5. 🐳 Docker Compose Build Pipeline
 
@@ -161,13 +161,13 @@ There is no k8s CI/build integration confirmed in the source; `k8s/` exists as a
 
 ## 6. 🪟 Windows Installer Build
 
-`windows/installer.iss` (415 lines, Inno Setup 6 script) is compiled with:
+`windows/installer.iss` (426 lines, Inno Setup 6 script) is compiled with:
 
 ```
 ISCC.exe installer.iss
 ```
 
-producing `release\HORIZON-GRID-Setup-{version}.exe` (both the `OutputBaseFilename` and the version string come from the `#define MyAppVersion` at the top of the script, currently `"0.3.8"` -- identical to the version pinned in `linux/debian/control` for the `.deb` package). The `[Files]` section stages `backend/`, `frontend/`, both compose files, `docs/`, and `README.md` into the package (`k8s/` is not included -- it's a parallel, Compose-independent deployment path this installer doesn't drive), with explicit excludes on each side: `.venv,.venv_test,__pycache__,*.pyc,.pytest_cache,celerybeat-schedule,nul,_qa_*.py,cleanup_qa_*.py,qa_halluc_out_*.json` for `backend/` (the trailing `nul` exclude exists because a stray file literally named `nul` -- a reserved Windows device name, left behind by some earlier `> nul` redirect -- otherwise aborts Inno Setup's compressor, which can't read its file time; the `.venv`/`.venv_test`/`_qa_*`/`cleanup_qa_*`/`qa_halluc_out_*` excludes strip local dev virtualenvs and ad hoc QA scratch scripts/output that have no business in a shipped package) and `node_modules,.next,*.tsbuildinfo` for `frontend/`. The installer requires 64-bit-compatible Windows (`ArchitecturesAllowed=x64compatible`) and admin privileges (`PrivilegesRequired=admin`); the runtime behavior of the resulting installer (prerequisite checks, the WinForms setup wizard's page flow, Program Files/ProgramData layout, and Start Menu shortcuts) is covered in full in the Windows Deployment Architecture chapter and is not repeated here -- this section is scoped to how the installer artifact itself gets built.
+producing `release\HORIZON-GRID-Setup-{version}.exe` (both the `OutputBaseFilename` and the version string come from the `#define MyAppVersion` at the top of the script, currently `"0.3.14"` -- identical to the version pinned in `linux/debian/control` for the `.deb` package). The `[Files]` section stages `backend/`, `frontend/`, both compose files, `docs/`, and `README.md` into the package (`k8s/` is not included -- it's a parallel, Compose-independent deployment path this installer doesn't drive), with explicit excludes on each side: `.venv,.venv_test,__pycache__,*.pyc,.pytest_cache,celerybeat-schedule,nul,_qa_*.py,cleanup_qa_*.py,qa_halluc_out_*.json` for `backend/` (the trailing `nul` exclude exists because a stray file literally named `nul` -- a reserved Windows device name, left behind by some earlier `> nul` redirect -- otherwise aborts Inno Setup's compressor, which can't read its file time; the `.venv`/`.venv_test`/`_qa_*`/`cleanup_qa_*`/`qa_halluc_out_*` excludes strip local dev virtualenvs and ad hoc QA scratch scripts/output that have no business in a shipped package) and `node_modules,.next,*.tsbuildinfo` for `frontend/`. The installer requires 64-bit-compatible Windows (`ArchitecturesAllowed=x64compatible`) and admin privileges (`PrivilegesRequired=admin`); the runtime behavior of the resulting installer (prerequisite checks, the WinForms setup wizard's page flow, Program Files/ProgramData layout, and Start Menu shortcuts) is covered in full in the Windows Deployment Architecture chapter and is not repeated here -- this section is scoped to how the installer artifact itself gets built.
 
 ## 7. 📚 Documentation Build Pipeline (`documentation/build/`)
 
@@ -176,7 +176,7 @@ The documentation package you are reading is itself produced by a small Node.js 
 Two generations of build script coexist:
 
 - The original four (`assemble.js`, `build-html.js`, `render-pdf.js`, `build-docx.js`) read from a pre-baked cache, `sections.json`, which was assembled once from all `tech-*.md` and `user-*.md` files, and produce the combined `FINAL_PRODUCT_DOCUMENTATION.pdf`/`.docx`.
-- The newer, generic `build-doc-generic.js` reads `DOCUMENTATION_SOURCE/*.md` **fresh on every run** (no cache) and is driven by one of three small config files -- `config-user-manual.json`, `config-backend.json`, `config-source-code.json` -- each listing an ordered `files` array. This chapter, `dev-06-testing-and-build.md`, is entry 6 of 8 in `config-source-code.json`'s list, which builds `IOC_INTELLIGENCE_PLATFORM_SOURCE_CODE_DOCUMENTATION.pdf`/`.docx`. It is invoked per deliverable:
+- The newer, generic `build-doc-generic.js` reads `DOCUMENTATION_SOURCE/*.md` **fresh on every run** (no cache) and is driven by one of many small config files (25 exist as of this writing, e.g. `config-user-manual.json`, `config-backend.json`, `config-source-code.json`) -- each listing an ordered `files` array. This chapter, `dev-06-testing-and-build.md`, is entry 6 of 8 in `config-source-code.json`'s list, which builds `HORIZON_GRID_SOURCE_CODE_GUIDE.pdf`/`.docx`. It is invoked per deliverable:
 
 ```bash
 cd documentation/build
@@ -196,4 +196,4 @@ This scans every file matching `(tech|user|dev|backend)-\d+.*\.md` for ` ```merm
 
 ## 🧾 Summary
 
-The backend carries a real, substantial automated safety net -- 335 unit test functions across 33 files that need no infrastructure at all, plus 15 integration files that bring the full suite to 380 passed / 39 intentionally-skipped, using respx for HTTP mocking, monkeypatched AI-client accessors and hand-written fake providers to keep the suite offline and deterministic, and live-reachability `skipif` guards so infra-dependent tests degrade to "skipped" rather than "failed" when Postgres/Redis aren't up. That safety net sits on top of a locally uncommitted, undocumented virtualenv story that has drifted from `requirements.txt` before (though not as of this writing) and a pytest-discovery quirk that mistakes two production modules for test files -- both independently reproduced above. The frontend has test tooling configured and zero tests to run. Shipping the product itself runs through two independent, uncoordinated pipelines with no CI gluing them together: `docker compose ... up -d --build` (optionally with the `docker-compose.prod.yml` overlay) for the running stack, and `ISCC.exe installer.iss` for the Windows-installable artifact that automates driving that same Compose command. This very documentation set is produced by a third, separate pipeline again -- a small, explicitly-not-part-of-the-product Node toolchain under `documentation/build/` that renders each audience-specific chapter list into a two-pass, page-numbered PDF and a TOC-enabled DOCX.
+The backend carries a real, substantial automated safety net -- 680 unit test functions across 65 files that need no infrastructure at all, plus 34 integration files that bring the full suite to 865 collected tests, using respx for HTTP mocking, monkeypatched AI-client accessors and hand-written fake providers to keep the suite offline and deterministic, and live-reachability `skipif` guards so infra-dependent tests degrade to "skipped" rather than "failed" when Postgres/Redis aren't up. That safety net sits on top of a locally uncommitted, undocumented virtualenv story that has drifted from `requirements.txt` before (though not as of this writing) and a pytest-discovery quirk that mistakes two production modules for test files -- both independently reproduced above. The frontend now has a real, if still narrow, vitest suite (5 files, 30 tests) alongside its test tooling. Shipping the product itself runs through two independent pipelines, each now also wired into `.github/workflows/` CI rather than only run by hand: `docker compose ... up -d --build` (optionally with the `docker-compose.prod.yml` overlay) for the running stack, and `ISCC.exe installer.iss` for the Windows-installable artifact that automates driving that same Compose command (the latter also built automatically by `build-release-artifacts.yml` on a version-tag push). This very documentation set is produced by a third, separate pipeline again -- a small, explicitly-not-part-of-the-product Node toolchain under `documentation/build/` that renders each audience-specific chapter list into a two-pass, page-numbered PDF and a TOC-enabled DOCX.

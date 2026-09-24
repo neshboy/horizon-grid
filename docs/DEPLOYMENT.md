@@ -3,11 +3,14 @@
 Two deployment paths exist in this repo: **Docker Compose** (the only path that is
 fully wired up end-to-end and is what the rest of the docs assume) and a set of
 **Kubernetes manifests** under `k8s/base/` (a direct, hand-written translation of the
-compose file — not templated with Helm, and not wired to any CI/CD). There is **no
-CI/CD pipeline** in this repo (no `.github/workflows/`, no `Makefile`, no other
-pipeline config) — building and pushing images, and running `kubectl apply`, is a
-manual/operator step. TLS termination is likewise **NOT IMPLEMENTED** anywhere in the
-repo; it's explicitly left to the operator (see below).
+compose file — not templated with Helm, and not wired to any CI/CD). GitHub Actions
+workflows exist under `.github/workflows/` (backend/frontend tests on push/PR, a
+weekly dependency audit, and release-artifact builds for the Windows/Linux installers
+on a version tag), and there is no `Makefile` — but none of those workflows build or
+push a Docker image to a registry or run `kubectl apply`, so building/pushing images
+and running `kubectl apply` remain a manual/operator step. TLS termination is likewise
+**NOT IMPLEMENTED** anywhere in the repo; it's explicitly left to the operator (see
+below).
 
 For the environment variables referenced throughout this doc, see
 [CONFIGURATION.md](CONFIGURATION.md). For the auth/JWT and secrets-handling model, see
@@ -19,7 +22,7 @@ For the environment variables referenced throughout this doc, see
 |---|---|---|
 | Docker Compose (`docker-compose.yml`) | Fully working, dev-mode commands (`--reload`, `npm run dev`, bind-mounted source) | Local development, the only path exercised by the test suite / docs |
 | Kubernetes (`k8s/base/`) | Manifests exist and are internally consistent; **not** production-hardened out of the box (see gaps below) | Reference starting point for a real cluster deployment |
-| CI/CD pipeline | **NOT IMPLEMENTED** | N/A — build/push/apply is manual |
+| CI/CD pipeline | Tests/lint/dependency-audits run in GitHub Actions; installer release artifacts build on a version tag; **no** workflow builds/pushes a Docker image or runs `kubectl apply` | Image build/push and `kubectl apply` are manual |
 | TLS termination | **NOT IMPLEMENTED** (commented out in `k8s/base/ingress.yaml`) | Operator must supply cert-manager config or their own certs |
 
 ## 1. Docker Compose
@@ -34,10 +37,10 @@ All defined in `docker-compose.yml` at the repo root:
 | `redis` | `redis:7-alpine` | `6379:6379` | `redis-cli ping` (5s interval, 10 retries) | — |
 | `neo4j` | `neo4j:5-community` (+ `apoc` plugin) | `7475:7474` (HTTP), `7688:7687` (Bolt) | none defined | — |
 | `opensearch` | `opensearchproject/opensearch:2.17.0`, single-node, security plugin disabled | `9200:9200` | none defined | — |
-| `backend` | built from `backend/Dockerfile` | `8000:8000` | none defined (k8s manifests probe `/health`; compose does not) | `postgres` (healthy), `redis` (healthy) |
+| `backend` | built from `backend/Dockerfile` | `8000:8000` | `curl -f http://localhost:8000/health/detailed` (10s interval, 5 retries, 60s start period) | `postgres` (healthy), `redis` (healthy) |
 | `celery_worker` | same build as `backend` | — (no exposed ports) | none | `postgres` (healthy), `redis` (healthy) |
 | `celery_beat` | same build as `backend` | — (no exposed ports) | none | `redis` (healthy) |
-| `frontend` | built from `frontend/Dockerfile` | `3000:3000` | none | `backend` (started, not healthy) |
+| `frontend` | built from `frontend/Dockerfile` | `3000:3000` | none | `backend` (healthy) |
 
 Named volumes: `postgres_data`, `neo4j_data`, `opensearch_data`. There is no automated
 backup of these volumes — **NOT IMPLEMENTED**; back them up with whatever
@@ -57,16 +60,22 @@ docker compose up --build
 ```
 
 The `backend` container's command runs migrations automatically before starting the
-API — there is no separate migration step to run by hand:
+API — there is no separate migration step to run by hand (it also starts `msfrpcd`,
+the Metasploit RPC daemon backing the Pentest Suite's exploit-validation feature,
+bound to `127.0.0.1` only, in the background first):
 
 ```
-sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+sh -c "msfrpcd -f -P \"$MSF_RPC_PASSWORD\" -S -a 127.0.0.1 -p 55553 -U msf &
+       alembic upgrade head &&
+       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 ```
 
-`celery_worker` runs `celery -A app.workers.celery_app worker --loglevel=info`;
-`celery_beat` runs `celery -A app.workers.celery_app beat --loglevel=info` (this is the
-schedule source for the hourly OSINT crawl — see ARCHITECTURE.md). `frontend` runs
-`npm run dev` against the bind-mounted source tree.
+`celery_worker` runs `celery -A app.workers.celery_app worker --loglevel=info
+--concurrency=4` (overridable via `CELERY_WORKER_CONCURRENCY`);
+`celery_beat` runs `sh -c "sleep 3 && celery -A app.workers.celery_app beat
+--loglevel=info"` (the brief sleep avoids a schedule-file lock race on restart; this
+is the schedule source for the hourly OSINT crawl — see ARCHITECTURE.md). `frontend`
+runs `npm run dev` against the bind-mounted source tree.
 
 ### AI backend dependency (Ollama)
 
@@ -129,7 +138,12 @@ bind-mounted, Postgres/Neo4j/OpenSearch with default or hardcoded credentials
 (`ioc`/`ioc`, `neo4j`/`changeme-neo4j`), and OpenSearch's security plugin explicitly
 disabled. Treat this compose file as a development/demo environment; harden
 credentials, disable `--reload`/bind mounts, and re-enable OpenSearch security before
-exposing it beyond localhost. Note that "beyond localhost" here still means the
+exposing it beyond localhost. `docker-compose.prod.yml` (the override the Windows/Linux
+installers actually deploy with, via `docker compose -f docker-compose.yml -f
+docker-compose.prod.yml up -d --build`) already removes the bind mounts and swaps in
+production commands for `backend`/`celery_worker`/`celery_beat`/`frontend`, but does
+not change the default credentials or re-enable OpenSearch security. Note that "beyond
+localhost" here still means the
 trusted local network the LAN-access feature targets (see `docs/SECURITY.md` §4's
 CORS policy and `docs/INSTALL.md`'s "Accessing From Another Device" section) --
 not the public internet, which this platform is not designed to be exposed to
@@ -178,7 +192,8 @@ k8s/base/
   redis-deployment.yaml             # + Service
   neo4j-statefulset.yaml            # + headless Service + PVC
   opensearch-statefulset.yaml       # + headless Service + PVC
-  backend-deployment.yaml           # + Service, /health probes, resources
+  opensearch-networkpolicy.yaml     # restricts :9200 ingress to backend/celery pods
+  backend-deployment.yaml           # + Service, backend-migrate Job, /health/detailed probes, resources
   celery-worker-deployment.yaml     # same image as backend, runs the Celery worker
   celery-beat-deployment.yaml       # same image as backend, runs Celery beat (1 replica, singleton)
   frontend-deployment.yaml          # + Service
@@ -190,8 +205,8 @@ k8s/base/
 
 | Object | Contents |
 |---|---|
-| `ioc-intel-config` (ConfigMap) | Non-sensitive: `POSTGRES_HOST`/`PORT`/`DB`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `NEO4J_URI`, `NEO4J_PLUGINS`, `OPENSEARCH_URL`/`JAVA_OPTS`/discovery settings, `AWS_REGION`, `BEDROCK_MODEL_ID`, `BEDROCK_MAX_TOKENS`, `ENVIRONMENT`, `DEBUG`, `NEXT_PUBLIC_API_URL` |
-| `ioc-intel-secrets` (Secret, **not** committed with real values) | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL` (embeds the Postgres password), `NEO4J_USER`, `NEO4J_PASSWORD`, `JWT_SECRET_KEY`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, and every provider API key from `.env.example` (VirusTotal, AbuseIPDB, OTX, NVD, abuse.ch, Hybrid Analysis, Censys, PhishTank) |
+| `ioc-intel-config` (ConfigMap) | Non-sensitive: `POSTGRES_HOST`/`PORT`/`DB`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `NEO4J_URI`, `NEO4J_PLUGINS`, `OPENSEARCH_URL`/`JAVA_OPTS`/discovery settings, `AI_BACKEND`, `OLLAMA_BASE_URL`/`OLLAMA_MODEL`, model IDs for the other AI backends (`GEMINI_MODEL_ID`, `ANTHROPIC_MODEL_ID`, `GROQ_MODEL_ID`, `OPENAI_MODEL_ID`, `KIMI_MODEL_ID`, `DEEPSEEK_MODEL_ID`, `XAI_MODEL_ID`, `MISTRAL_MODEL_ID`, `OPENROUTER_MODEL_ID`), `AWS_REGION`, `BEDROCK_MODEL_ID`, `BEDROCK_MAX_TOKENS`, `ENVIRONMENT`, `DEBUG`, `NEXT_PUBLIC_API_URL` |
+| `ioc-intel-secrets` (Secret, **not** committed with real values) | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL` (embeds the Postgres password), `NEO4J_USER`, `NEO4J_PASSWORD`, `JWT_SECRET_KEY`, `ENCRYPTION_MASTER_KEY`, `MSF_RPC_PASSWORD`, `BEDROCK_API_KEY`/`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, API keys for the other AI backends (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `OPENAI_API_KEY`, `KIMI_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`), and every provider API key from `.env.example` (VirusTotal, AbuseIPDB, OTX, NVD, abuse.ch, Hybrid Analysis, Censys, PhishTank) |
 
 `backend`, `celery-worker`, and `celery-beat` all consume both via `envFrom`
 (`configMapRef` + `secretRef`), mirroring how compose merges service-level
@@ -228,6 +243,11 @@ kubectl -n ioc-intel-platform get pods
 kubectl -n ioc-intel-platform rollout status deployment/backend
 ```
 
+Migrations run once via the `backend-migrate` Job (also created by the command
+above) rather than inline in the `backend` Deployment's own pods — wait for it with
+`kubectl -n ioc-intel-platform wait --for=condition=complete job/backend-migrate` if
+you need to be sure the schema is up to date before relying on the API.
+
 Preview rendered manifests without applying:
 
 ```bash
@@ -238,8 +258,8 @@ kubectl kustomize k8s/base
 
 | Workload | Replicas | Probe |
 |---|---|---|
-| `backend` | 2 | HTTP `GET /health` on :8000 (readiness: 10s initial delay/10s period; liveness: 20s/15s, both 6 failure threshold) |
-| `frontend` | 2 | TCP :3000 (readiness 10s/10s, liveness 20s/15s, 6 failure threshold) |
+| `backend` | 2 | HTTP `GET /health/detailed` on :8000 (readiness: 10s initial delay/10s period; liveness: 20s/15s, both 6 failure threshold) |
+| `frontend` | 2 | TCP :3000 (readiness: 45s initial delay/10s period, 18 failure threshold; liveness: 90s/15s, 8 failure threshold) |
 | `celery-worker` | 2 | none defined |
 | `celery-beat` | 1 (kept as a singleton — running more than one replica would duplicate scheduled task dispatches) | none defined |
 | `postgres` | 1 (StatefulSet) | exec `pg_isready -U ioc` |
@@ -278,8 +298,9 @@ flowchart TD
   a pinned tag (not `latest`).
   - `backend/Dockerfile` (`python:3.12-slim`, `pip install -r requirements.txt`, `CMD
     uvicorn app.main:app --host 0.0.0.0 --port 8000`) is usable as-is for the k8s
-    image — the Deployment's own `command` overrides `CMD` anyway to add `alembic
-    upgrade head` first.
+    image — the Deployment's own `command` overrides `CMD` anyway to start `msfrpcd`
+    alongside `uvicorn`. Migrations run once via a separate `backend-migrate` Job
+    (`command: ["alembic", "upgrade", "head"]`), not inline in the Deployment's pods.
   - `frontend/Dockerfile` (`node:20-alpine`, `npm install`, `CMD npm run dev`) is a
     **dev-mode Dockerfile only**. `frontend-deployment.yaml` runs `command: ["npm",
     "start"]`, which requires a production `next build` output (`.next`) that this
@@ -295,15 +316,18 @@ flowchart TD
   a real `tls:` block plus a cert-manager `ClusterIssuer` annotation
   (`cert-manager.io/cluster-issuer: ...`), or your own pre-provisioned secret, before
   exposing this outside a trusted network.
-- **CI/CD**: **NOT IMPLEMENTED**. There is no pipeline that builds images, runs tests,
-  or applies these manifests — every step above (`docker build`, `docker push`,
-  `kubectl apply`) is manual.
+- **CI/CD**: GitHub Actions (`.github/workflows/`) runs backend/frontend tests and
+  lint on push/PR, a weekly dependency audit, and builds Windows/Linux installer
+  release artifacts on a version tag — but **no** workflow builds/pushes a Docker
+  image or runs `kubectl apply`; every step above (`docker build`, `docker push`,
+  `kubectl apply`) remains manual.
 
 ## Health and observability
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | Plain liveness check (`{"status": "ok", "service": ...}`), outside `/api/v1`. Used by the k8s readiness/liveness probes; not checked by a compose healthcheck. |
+| `GET /health` | Plain, dependency-free liveness check (`{"status": "ok", "service": ...}`), outside `/api/v1`. Not used by the k8s probes or the compose healthcheck — see `/health/detailed` below. |
+| `GET /health/detailed` | Dependency-aware check (Postgres/Redis); `503` if Postgres is unreachable, `200`/`"degraded"` if only Redis is down. Used by both the k8s readiness/liveness probes and the compose `backend` healthcheck. |
 | `GET /docs` | FastAPI/Swagger UI (auto-generated). |
 | `GET /metrics` | Prometheus-format metrics via `prometheus-fastapi-instrumentator`. No Prometheus server, scrape config, Grafana dashboards, or alerting are provided in this repo — **NOT IMPLEMENTED**, bring your own if needed. |
 | `GET /api/v1/providers/health` | Application-level check of which providers are `configured` (has an API key) vs. not — not an infra health check. |

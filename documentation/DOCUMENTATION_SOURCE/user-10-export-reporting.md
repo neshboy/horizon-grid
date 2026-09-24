@@ -18,7 +18,7 @@ Clicking any of the four buttons downloads a real file to your browser's Downloa
 PDF and CSV both go through the same real backend endpoint (`POST /api/v1/lookup/{id}/export?format=pdf|csv`), which is deliberately hardened against two classes of injection: CSV values that could be interpreted as spreadsheet formulas (a leading `=`/`+`/`-`/`@`) are neutralized before being written, and any AI-generated or IOC-supplied text going into the PDF is XML-escaped before being handed to ReportLab. Exporting requires the `lookup:export` permission (Admin and Analyst roles hold it; Viewer does not — a Viewer clicking Export PDF/CSV gets a permission error, not a missing-feature message; see the note below if you see one unexpectedly).
 
 > [!NOTE]
-> If you ever see **"Export format not yet available"** on a click, that specific string is the frontend's generic fallback for *any* failed export request (network error, server error, or a permission rejection) — it does not mean the format itself is unbuilt. If it happens consistently, check that your role has `lookup:export` (Viewer doesn't) before assuming something is broken.
+> If you ever see **"Export format not yet available"** on a click, that specific string is the frontend's fallback for a 404 response (e.g. the investigation no longer exists) or a network-level failure — it does not mean the format itself is unbuilt. A permission rejection or other server error shows a different message instead (`Export failed with status <code>.`); if you see that one, check that your role has `lookup:export` (Viewer doesn't) before assuming something is broken.
 
 All four formats carry the same underlying content, just structured for different purposes. Every export includes:
 

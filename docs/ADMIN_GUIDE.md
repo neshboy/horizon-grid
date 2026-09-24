@@ -63,6 +63,12 @@ of sync with what's actually enforced.
 | `basket:manage` | ✅ | ✅ | ❌ |
 | `case:create` / `case:write` / `case:close` | ✅ | ✅ | ❌ |
 | `case:read` | ✅ | ✅ | ✅ |
+| `security_assessment:create` | ✅ | ✅ | ❌ |
+| `security_assessment:read` | ✅ | ✅ | ✅ |
+| `dashboard:read` | ✅ | ✅ | ✅ |
+| `pentest:create` / `pentest:validate` | ✅ | ✅ | ❌ |
+| `pentest:read` | ✅ | ✅ | ✅ |
+| `pentest:admin` / `pentest:exploit` | ✅ | ❌ | ❌ |
 | `provider:manage` | ✅ | ❌ | ❌ |
 | `user:manage` | ✅ | ❌ | ❌ |
 | `audit:read` | ✅ | ❌ | ❌ |
@@ -141,11 +147,12 @@ curl -s -X POST http://localhost:8000/api/v1/admin/users/<user-id>/reset-passwor
   §1.3 above. There is still no unauthenticated recovery path of any kind.
 - No email verification.
 - No MFA / 2FA / TOTP.
-- No account-lockout or brute-force throttling on `/auth/login` (only the unrelated
-  per-user *lookup-creation* rate limit exists — see §3.4).
-- No self-service "log out everywhere" for a user's *own* other sessions (an
-  administrator resetting the password achieves this for that one user, but a user
-  can't trigger it themselves without changing their password).
+- No persistent, admin-clearable account lockout on `/auth/login` — but repeated
+  failed attempts against the same email *are* throttled: a per-account limiter
+  (`LOGIN_RATE_LIMIT_MAX_ATTEMPTS` / `LOGIN_RATE_LIMIT_WINDOW_SECONDS`, default 10
+  attempts per 60 seconds) returns `429`. A correct password against an active
+  account is never itself throttled by this; it is distinct from the unrelated
+  per-user *lookup-creation* rate limit (§3.4).
 
 ---
 
@@ -198,6 +205,7 @@ curl -s http://localhost:8000/api/v1/providers/health | grep -A5 '"provider_id":
 | `whois_rdap` | WHOIS/RDAP | WHOIS |
 | `spamhaus` | Spamhaus DBL/ZEN | Threat intel (DNS-based, no HTTP call) |
 | `phishtank` | PhishTank | Threat intel (works unauthenticated; key only raises the rate limit) |
+| `internet_intelligence` | Internet Intelligence Collector | OSINT (crawler; every underlying source is unauthenticated/best-effort) |
 
 Nothing to do for these — they're already usable out of the box.
 
@@ -213,6 +221,8 @@ Nothing to do for these — they're already usable out of the box.
 | `malwarebazaar` | MalwareBazaar | `ABUSECH_AUTH_KEY` | Same key as URLhaus/ThreatFox |
 | `hybrid_analysis` | Hybrid Analysis (Falcon Sandbox) | `HYBRID_ANALYSIS_API_KEY` | SHA256 hashes only — MD5/SHA1/URL support was dropped when the connector was rewritten around a deprecated endpoint |
 | `censys` | Censys | `CENSYS_PERSONAL_ACCESS_TOKEN` **and** `CENSYS_ORGANIZATION_ID` | Both must be set — the connector treats the pair as one unit |
+| `urlscan` | urlscan.io | `URLSCAN_API_KEY` | Submits a live sandbox scan, then polls for the result |
+| `google_safe_browsing` | Google Safe Browsing | `GOOGLE_SAFE_BROWSING_API_KEY` | Lookup API v4 (`threatMatches:find`) |
 
 `ABUSECH_AUTH_KEY` is a single shared credential across three connectors (URLhaus,
 ThreatFox, MalwareBazaar) — set it once to enable all three.
@@ -231,11 +241,6 @@ Then:
 docker compose up -d backend
 ```
 
-A 16th entry, `internet_intelligence` (the OSINT crawler wrapped as a provider,
-registered from `app.crawler`), also appears in `/providers/health`; its
-configuration surface was not verified in this pass — see
-[PROVIDERS.md](PROVIDERS.md) for anything further documented on it.
-
 ### 2.4 Full connector reference
 
 For request/response shapes, verdict logic, and every quirk per connector (e.g.
@@ -252,9 +257,9 @@ lookup, crt.sh's malformed-JSON tolerance), see [PROVIDERS.md](PROVIDERS.md).
 GET /api/v1/providers/health
 ```
 
-Gated by `require_permission("lookup:read")` — **any authenticated user** can call
+Gated by `require_permission("dashboard:read")` — **any authenticated user** can call
 this, not just admins, since all three roles (`admin`, `analyst`, `viewer`) hold
-`lookup:read`.
+`dashboard:read`.
 
 ```bash
 # Log in to get a token
@@ -267,8 +272,11 @@ curl -s http://localhost:8000/api/v1/providers/health \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Response is a JSON array, one object per registered provider
-(`backend/app/providers/registry.py:53-64`):
+Response is a JSON array, one object per registered provider, combining static
+config metadata with real, DB-backed health computed from actual provider-call
+history (`backend/app/core/dashboard.py`'s `get_provider_health_history()` — the
+route previously returned only the static metadata below with no real health
+signal; that old stub is now dead code):
 
 ```json
 [
@@ -278,7 +286,11 @@ Response is a JSON array, one object per registered provider
     "category": "threat_intel",
     "configured": false,
     "requires_key": true,
-    "supported_types": ["domain", "ipv4", "ipv6", "md5", "sha1", "sha256", "sha512", "url"]
+    "supported_types": ["domain", "ipv4", "ipv6", "md5", "sha1", "sha256", "sha512", "url"],
+    "1h": {"status": "unknown", "success_rate": null, "avg_latency_ms": null, "consecutive_failures": 0, "rate_limited_count": 0},
+    "24h": "... (same shape as 1h)",
+    "7d": "... (same shape as 1h)",
+    "30d": "... (same shape as 1h)"
   }
 ]
 ```
@@ -286,12 +298,15 @@ Response is a JSON array, one object per registered provider
 | Field | Meaning |
 |---|---|
 | `configured` | `true` if the required key(s)/credentials are set. **This does not confirm the key is valid** — only that a value is present. An invalid key still shows `configured: true`; you'll only see the failure as a `status: "error"` on an actual lookup (see below). |
-| `requires_key` | Whether this connector needs credentials at all (`false` for crt.sh, NVD, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, PhishTank). |
+| `requires_key` | Whether this connector needs credentials at all (`false` for crt.sh, NVD, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, Spamhaus, PhishTank, and the Internet Intelligence Collector). |
 | `supported_types` | IOC types this connector can be queried with — feeds the "how many providers apply to this IOC" count shown in the UI. |
+| `1h` / `24h` / `7d` / `30d` | Real per-window health computed from actual provider-call outcomes: `status` (`healthy`/`degraded`/`down`/`unknown` — a window with zero real attempts is always `unknown`, never `healthy`), `success_rate`, `avg_latency_ms`, `consecutive_failures`, `rate_limited_count`. |
 
-This endpoint only reports configuration presence. It does not test connectivity to
-the upstream API. To confirm a key actually works, run a real lookup against an IOC
-type that provider supports and check that provider's entry in the lookup's
+Beyond configuration presence, this endpoint now also reports real per-window health
+derived from actual call outcomes — but it is still not a live, on-demand connectivity
+test; the numbers reflect past activity, not the current instant. To generate a fresh
+data point (or confirm a key actually works right now), run a real lookup against an
+IOC type that provider supports and check that provider's entry in the lookup's
 per-provider results for `status: "ok"` rather than `"error"` or `"not_configured"`.
 `not_configured` specifically means `requires_key` is true and the key is still
 blank/missing at the process level (see §2.1 on why that can lag a `.env` edit).
@@ -300,7 +315,8 @@ blank/missing at the process level (see §2.1 on why that can lag a `.env` edit)
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /health` | None | Liveness check: `{"status": "ok", "service": "HORIZON GRID"}` |
+| `GET /health` | None | Deliberately dependency-free liveness check: `{"status": "ok", "service": "HORIZON GRID", "version": ..., "uptime_seconds": ...}` |
+| `GET /health/detailed` | None | Real dependency-aware check (Postgres + Redis) — `503` with `status: "down"` if Postgres is unreachable, `200` with `status: "degraded"` if only Redis is unreachable, `200` with `status: "healthy"` otherwise. `docker-compose.yml`'s backend `healthcheck:` points here, not at the plain `/health` above. |
 | `GET /metrics` | None | Prometheus metrics via `prometheus-fastapi-instrumentator`. **NOT IMPLEMENTED:** no Prometheus/Grafana server is bundled to scrape or display this — bring your own. |
 | `GET /docs` | None | FastAPI/Swagger interactive API docs |
 
@@ -340,7 +356,7 @@ These are documented in full in [CONFIGURATION.md](CONFIGURATION.md) and
 |---|---|---|
 | `JWT_SECRET_KEY` | `change-me-in-production` | HMAC signing key for every access/refresh token. A leaked or default key lets anyone forge a valid token for any role, including admin. **Must be changed before any non-local deployment.** |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Access token lifetime |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token lifetime. There is no server-side revocation list — a valid, unexpired refresh token can mint new access tokens indefinitely even after a client-side logout, since logout only clears `localStorage` in the browser. |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token lifetime. `POST /api/v1/auth/logout` (wired to the frontend's "Log out") bumps the user's `token_version`, immediately revoking every outstanding access and refresh token for that user server-side — the same mechanism an administrator-initiated password reset already uses. There is still no way to revoke a single session in isolation; logout (like a password reset) revokes all of a user's sessions at once. |
 | `DEBUG` | `true` | No longer read anywhere in the backend -- CORS is now a fixed policy allowing any `localhost`/loopback/private-IP origin (any port, `http://` only), independent of this flag. See `docs/SECURITY.md` §4. |
 
 Changing any of these follows the same rule as §2.1: edit `.env`, then

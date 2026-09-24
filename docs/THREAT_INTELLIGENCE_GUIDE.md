@@ -60,7 +60,7 @@ Two independent things are built from the same `CorrelationResult`:
    `final_assessment` SSE event is emitted (§6–§7 below).
 
 Only providers whose `ProviderResult.status == "ok"` contribute anything to either path
-(`backend/app/correlation/engine.py:106`). A provider that returned `error`, `timeout`,
+(`backend/app/correlation/engine.py:152`). A provider that returned `error`, `timeout`,
 `rate_limited`, `not_configured`, `unsupported_ioc`, or `no_data` contributes **zero** nodes,
 edges, deduplicated facts, or evidence — its silence is not evidence of anything, and the platform
 does not synthesize a placeholder claim for it.
@@ -86,18 +86,18 @@ table's `evidence_type` column. All nine values are actually producible by
 | `relationship` | `build_evidence_from_correlation()` | Fallback for any correlation-edge target type not matched above (e.g. `cve`) |
 
 Dispatch order for the correlation-edge path (`_relationship_evidence_type()`,
-`backend/app/evidence/builder.py:51-62`) is checked **in this exact sequence** —
+`backend/app/evidence/builder.py:53-64`) is checked **in this exact sequence** —
 malware → threat actor → campaign → MITRE technique → infrastructure → `relationship` fallback.
 A target type could in principle match more than one bucket; the first match in this order wins.
 
 ### `EvidenceRecord` fields
 
-`backend/app/evidence/builder.py:33-48` — mirrors the `EvidenceItem` table minus `lookup_id`
+`backend/app/evidence/builder.py:34-50` — mirrors the `EvidenceItem` table minus `lookup_id`
 (assigned once the parent `IOCLookup` row exists):
 
 ```
 evidence_type, source_label, provider_id, claim, interpretation, confidence,
-related_ioc_type, related_ioc_value, source_url, observed_at, raw_data
+related_ioc_type, related_ioc_value, source_url, observed_at, raw_data, provenance_category
 ```
 
 ### Claim text by source
@@ -110,16 +110,16 @@ related_ioc_type, related_ioc_value, source_url, observed_at, raw_data
 On a correlation-edge evidence record, `provider_id` is set only when the edge's provenance
 contains **exactly one** provider ID; if it was corroborated by more than one provider,
 `provider_id` is left `None` (the attribution lives in `source_label` /
-`raw_data.provenance` instead) (`backend/app/evidence/builder.py:129`).
+`raw_data.provenance` instead) (`backend/app/evidence/builder.py:134`).
 
 `build_evidence(provider_results, provider_summaries, correlation)`
-(`backend/app/evidence/builder.py:142-147`) is simply the concatenation of the two functions above
+(`backend/app/evidence/builder.py:148-153`) is simply the concatenation of the two functions above
 — no other evidence is generated anywhere else in the codebase.
 
 **Coverage gap to know about**: the provider path only fires when a `ProviderSummary` exists for
 that `provider_id` in `summaries_by_id`; if no matching summary was found (e.g. its persisted
 `AISummaryRecord` row failed to re-validate on reload), that provider's `ok` result is **silently
-skipped** — no evidence record, no error surfaced (`backend/app/evidence/builder.py:77-79`).
+skipped** — no evidence record, no error surfaced (`backend/app/evidence/builder.py:79-81`).
 
 ---
 
@@ -133,20 +133,20 @@ comparable in the UI" (`backend/app/evidence/builder.py:1-10`).
 
 `ProviderSummary.confidence` is a qualitative `low`/`medium`/`high` label set by the AI when it
 summarizes a single provider's raw data. The evidence builder converts it via a fixed lookup table
-— `_CONFIDENCE_LEVEL_TO_SCORE` (`backend/app/evidence/builder.py:21`):
+— `_CONFIDENCE_LEVEL_TO_SCORE` (`backend/app/evidence/builder.py:22`):
 
 ```python
 _CONFIDENCE_LEVEL_TO_SCORE = {"low": 30.0, "medium": 60.0, "high": 90.0}
 ```
 
-An unrecognized or missing confidence level defaults to `50.0` (`builder.py:81`).
+An unrecognized or missing confidence level defaults to `50.0` (`builder.py:83`).
 
 ### 4b. Correlation-edge confidence (0–1 internal → ×100 display)
 
 Correlation edges carry an internal `confidence: float` on a **0–1** scale
-(`GraphEdge`, `backend/app/correlation/engine.py:33-39`). When an edge becomes an `EvidenceRecord`,
+(`GraphEdge`, `backend/app/correlation/engine.py:38-50`). When an edge becomes an `EvidenceRecord`,
 its confidence is rescaled: `confidence = round(edge.confidence * 100, 1)`
-(`backend/app/evidence/builder.py:132`). This 0–1 → 0–100 edge-confidence model is described in
+(`backend/app/evidence/builder.py:137`). This 0–1 → 0–100 edge-confidence model is described in
 detail in §5.
 
 ---
@@ -155,7 +155,7 @@ detail in §5.
 
 ### Base confidence per field
 
-`_FIELD_BASE_CONFIDENCE` (`backend/app/correlation/engine.py:77-90`) — the starting confidence for
+`_FIELD_BASE_CONFIDENCE` (`backend/app/correlation/engine.py:88-101`) — the starting confidence for
 a correlation edge, keyed by which `ProviderResult.data` field produced it:
 
 | `data` field | Correlation relationship | Base confidence (0–1) |
@@ -179,7 +179,7 @@ family, threat actor, campaign) start at only 0.5 because naming conventions and
 inherently fuzzier across providers.
 
 **Fallback rule** for any field not in the table above
-(`backend/app/correlation/engine.py:125-127`):
+(`backend/app/correlation/engine.py:174-176`):
 
 ```python
 base_confidence = _FIELD_BASE_CONFIDENCE.get(
@@ -197,11 +197,11 @@ from any other category, 0.7.
 _CORROBORATION_BONUS_PER_PROVIDER = 0.15
 ```
 
-(`backend/app/correlation/engine.py:94`) — "Per additional distinct provider corroborating the
+(`backend/app/correlation/engine.py:105`) — "Per additional distinct provider corroborating the
 exact same (source, target, relationship) edge, beyond the first."
 
 Merge logic when two providers assert the **same** `(source, target, relationship)` edge
-(`backend/app/correlation/engine.py:154-175`):
+(`backend/app/correlation/engine.py:204-231`):
 
 1. `base_confidences[dedup_key] = max(existing_base, new_edge.confidence)` — the base is the
    **maximum**, not the sum, of the base confidences contributed by each provider for that field.
@@ -231,7 +231,7 @@ providers in this edge case.
 
 ### `provider_agreement` bucketing
 
-Inside `correlate()` (`backend/app/correlation/engine.py:140-142`), for every `ok` provider
+Inside `correlate()` (`backend/app/correlation/engine.py:190-192`), for every `ok` provider
 result:
 
 ```python
@@ -253,41 +253,46 @@ This dict is **not** streamed to the frontend directly. The SSE `correlation` ev
 
 The AI populates `FinalAssessment.agreeing_providers` and `.disagreeing_providers`
 (`backend/app/ai/schemas.py`) from that same context. Before the `final_assessment` SSE event is
-emitted, `_ground_final_assessment()` (`backend/app/ai/service.py:122-150`) filters both lists:
+emitted, `_ground_final_assessment()` (`backend/app/ai/service.py:376-429`) filters both lists:
 
 1. Builds `real_provider_ids` = the union of every provider ID appearing in `correlation.edges`'
-   provenance strings, and every provider ID appearing anywhere in
-   `correlation.provider_agreement`'s value lists.
+   provenance strings, every provider ID appearing anywhere in `correlation.provider_agreement`'s
+   value lists, and every provider ID that actually returned a per-provider summary for this
+   lookup (`known_provider_ids`, passed in by `generate_final_assessment()` — this catches a
+   provider, e.g. the OSINT crawler's `internet_intelligence`, that returned real data but produced
+   no relationship edge or verdict/reputation fact).
 2. Filters `assessment.agreeing_providers` / `.disagreeing_providers` to only the IDs present in
    `real_provider_ids`. **Exception**: if `real_provider_ids` is empty, the model's claimed list is
    passed through unfiltered (nothing real to check it against).
 
 So a provider name appearing in `disagreeing_providers` on the final assessment is guaranteed to be
-a provider ID that actually contributed a correlation edge or a verdict/reputation value for this
-lookup — it cannot be a hallucinated provider name (as long as at least one real provider
-contributed *something* to the correlation graph).
+a provider ID that actually contributed a correlation edge, a verdict/reputation value, or a
+per-provider summary for this lookup — it cannot be a hallucinated provider name (as long as at
+least one real provider contributed *something* to this lookup).
 
 ### Verdict/risk consistency is enforced by validation failure, not repair
 
 `FinalAssessment` has a `model_validator` (`_verdict_must_agree_with_risk`,
-`backend/app/ai/schemas.py:161-182`, `mode="after"`):
+`backend/app/ai/schemas.py:227-248`, `mode="after"`):
 
 - `final_verdict` in `{malicious, highly_malicious}` but `risk.malicious_probability < 30` → raises.
 - `final_verdict` in `{benign, likely_benign}` but `risk.malicious_probability > 50` → raises.
 
-This raise is caught by the generic `except Exception` in `generate_final_assessment()`
-(`backend/app/ai/service.py:243`) — **the schema validation failure itself is the enforcement
+This raise is caught by `except ValidationError` in `generate_final_assessment()`'s retry loop
+(`backend/app/ai/service.py:823-829`) — **the schema validation failure itself is the enforcement
 mechanism**, not a repair step. A contradictory verdict/risk pair from the AI does not get fixed
-up; the entire assessment falls back to a degraded `FinalAssessment` stating generation failed,
-with `final_verdict: "unknown"`, all risk fields zeroed, and `verdict_rationale` citing the
-exception. There is no second attempt (see [AI_ENGINE.md](AI_ENGINE.md) for the broader
-no-retry behavior of the AI clients).
+up in place; the model gets exactly one retry with the identical prompt (`for attempt in
+range(2)`), and only if that retry also fails validation does the entire assessment fall back to a
+degraded `FinalAssessment` (`backend/app/ai/service.py:832-863`) stating generation failed, with
+`final_verdict: "unknown"`, risk fields set to the deterministic scoring engine's values (not
+zeroed), and `verdict_rationale` citing the exception (see [AI_ENGINE.md](AI_ENGINE.md) for the
+broader retry/no-retry behavior of the AI clients).
 
 ---
 
 ## 7. MITRE ATT&CK mapping: what `grounded: false` actually means
 
-`MitreMapping` (`backend/app/ai/schemas.py:61-92`) fields:
+`MitreMapping` (`backend/app/ai/schemas.py:71-102`) fields:
 
 ```
 technique_id, technique_name, tactic (Literal of 14 ATT&CK tactic slugs),
@@ -297,7 +302,7 @@ kill_chain_stage (optional), rationale, grounded: bool = True
 The AI is prompted to set `grounded=false` on a mapping it inferred itself (e.g. "this reputation
 pattern is consistent with T1071") rather than one a provider explicitly surfaced. **In practice
 this initial model-set value is irrelevant** — `_ground_final_assessment()`
-(`backend/app/ai/service.py:122-150`) always overwrites it:
+(`backend/app/ai/service.py:376-429`) always overwrites it:
 
 1. Builds `grounded_technique_ids` from every correlation edge whose `relationship ==
    "uses_technique"`, taking `edge.target.split(":", 1)[1].upper()` (the technique ID half of the
@@ -320,7 +325,7 @@ mappings as analyst-review items, not as confirmed technique usage.
 
 ### Why `technique_id` has no format validation (and why that's safe)
 
-`backend/app/ai/schemas.py:62-71` deliberately omits a `pattern=` regex constraint on
+`backend/app/ai/schemas.py:72-82` deliberately omits a `pattern=` regex constraint on
 `technique_id`. Reason (verbatim intent): Ollama's grammar compiler (llama.cpp
 json-schema-to-grammar) fails to compile a `pattern` constraint into a decoding grammar and returns
 HTTP 400 for the **entire** `generate_final_assessment()` call, not just the offending field — a
@@ -342,7 +347,7 @@ other AI-generated artifacts derived from evidence:
   `explain_why_malicious`, `explain_disagreement`, `assess_false_positive`, `challenge_verdict`,
   etc. are prompted with the real `EvidenceItem` ledger (`_evidence_block()`) and asked to cite
   `evidence_ids`. After the AI responds, `_strip_invalid_evidence_ids()`
-  (`backend/app/ai/analysis_service.py:55-71`) recursively walks the validated response and filters
+  (`backend/app/ai/analysis_service.py:71-87`) recursively walks the validated response and filters
   every field literally named `evidence_ids` down to IDs that actually exist in the real ledger
   (`real_ids = {str(item.id) for item in evidence}`) — an invented evidence ID is silently dropped,
   never shown to the analyst as if real.
@@ -361,7 +366,7 @@ fallback object rather than partially-grounded output.
 
 ## 9. Pivot relevance banding (uses the same corroboration signal)
 
-`rank_pivots()` (`backend/app/evidence/pivot.py:22-52`) powers `GET
+`rank_pivots()` (`backend/app/evidence/pivot.py:22-57`) powers `GET
 /api/v1/lookup/{id}/pivots` and is explicitly **not** AI-generated — "a pure sort over real
 correlation edges can never hallucinate a pivot target." It reuses the same provenance/confidence
 signals described above:
@@ -415,11 +420,11 @@ descending, and only edges directly touching the seed IOC are surfaced (no multi
 
 - **Neo4j graph mirroring.** `engine.py`'s module docstring and the `CorrelationEdgeRecord` model
   docstring both describe correlation edges as "mirrored into Neo4j for graph traversal," and
-  `neo4j_uri` / `neo4j_user` / `neo4j_password` settings exist (`backend/app/core/config.py:31-33`).
+  `neo4j_uri` / `neo4j_user` / `neo4j_password` settings exist (`backend/app/core/config.py:56-58`).
   There is no Neo4j driver import, session, or write/query call anywhere in the codebase. Postgres
   (`correlation_edges` table) is the **sole** persisted store for correlation edges today.
 - **`GraphNode.labels`.** The `GraphNode` dataclass has a `labels: list[str]` field
-  (`backend/app/correlation/engine.py:30`), but no code path in `correlate()` ever populates it —
+  (`backend/app/correlation/engine.py:35`), but no code path in `correlate()` ever populates it —
   every node built has `labels: []`. Do not expect node labels in any correlation output.
 - **Per-provider proactive rate limiting.** `ProviderStatus.RATE_LIMITED` exists and is reachable
   (HTTP 429/403/509), but no connector self-throttles in advance — all retry/timeout logic lives

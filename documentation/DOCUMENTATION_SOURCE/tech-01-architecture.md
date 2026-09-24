@@ -31,7 +31,7 @@ This section describes what the platform is built from at the container/process 
 | `backend` | FastAPI, Python 3.12 | Core API server: IOC-type detection, provider orchestration, AI summarization/correlation, evidence building, auth, case management. | Actively used — the primary application process. |
 | `celery_worker` | Celery 5.4 (same backend codebase) | Executes background jobs. | Actively used, but for exactly one job (see below). |
 | `celery_beat` | Celery 5.4 beat scheduler | Triggers scheduled jobs on a timer. | Actively used, one scheduled job only. |
-| `frontend` | Next.js 14.2.15 | Web UI. | Actively used. |
+| `frontend` | Next.js 14.2.35 | Web UI. | Actively used. |
 
 A second compose file, `docker-compose.prod.yml`, is layered on top of `docker-compose.yml` for production use (this is what the Windows installer runs): it strips the development bind-mounts and switches the `backend`/`frontend` containers to their production start commands rather than dev/hot-reload ones.
 
@@ -53,9 +53,9 @@ The backend is also where the 18 third-party data-source connectors ("providers"
 
 ## 🎨 Frontend
 
-The frontend is a **Next.js 14.2.15** application using **React 18.3.1** and **TypeScript**, styled with **Tailwind**, with **Zustand** for client-side state, **Recharts** for charts, **react-force-graph-2d** for the relationship/correlation graph visualization, and **Radix UI** for primitive UI components (all per `frontend/package.json`).
+The frontend is a **Next.js 14.2.35** application using **React 18.3.1** and **TypeScript**, styled with **Tailwind**, with **Zustand** for client-side state, **Recharts** for charts, **react-force-graph-2d** for the relationship/correlation graph visualization, and **Radix UI** for primitive UI components (all per `frontend/package.json`).
 
-`package.json` declares `vitest` as the test runner (`"test": "vitest run"`), but a repository-wide search found zero `*.test.*`/`*.spec.*` files under `frontend/` — the tooling is configured but no frontend automated tests currently exist. (See the Testing and Quality Assurance appendix for the full picture, including the backend's test suites.)
+`package.json` declares `vitest` as the test runner (`"test": "vitest run"`), and a repository-wide search now finds five `*.test.*` files under `frontend/` (`app/pentest/page.test.ts`, `lib/api.test.ts`, `lib/authedFetch.test.ts`, `lib/dashboardSummary.test.ts`, `lib/runEffectOnce.test.ts`) — a start on frontend automated test coverage, though still far smaller than the backend's suites. (See the Testing and Quality Assurance appendix for the full picture, including the backend's test suites.)
 
 ## 📊 Executive Dashboard and Deterministic Scoring Engine
 
@@ -76,7 +76,7 @@ That is the entirety of what Celery does in this platform. **The main, user-faci
 Two deployment paths are implemented and verified in the repository:
 
 1. **Docker Compose** — `docker-compose.yml` (development) and `docker-compose.yml` + `docker-compose.prod.yml` (production). This is the path the Windows installer automates end-to-end (covered in the Windows Deployment / Installer section of this document).
-2. **Kubernetes** — the `k8s/` directory contains a parallel, **Kustomize**-based Kubernetes deployment: StatefulSets for `postgres`, `neo4j`, and `opensearch`; Deployments for `backend`, `frontend`, and `celery`; and an Ingress resource. This is an alternative to the Docker Compose / Windows-installer path.
+2. **Kubernetes** — the `k8s/` directory contains a parallel, **Kustomize**-based Kubernetes deployment: StatefulSets for `postgres`, `neo4j`, and `opensearch`; Deployments for `backend`, `frontend`, `redis`, and `celery` (worker and beat as separate Deployments); and an Ingress resource. This is an alternative to the Docker Compose / Windows-installer path.
 
 > [!NOTE]
 > Beyond its existence and the resource types listed above, further detail on the Kubernetes path (replica counts, resource limits, ingress rules, or how it is intended to be operated) is **not confirmed** — it was not otherwise inspected as part of this documentation effort.

@@ -70,8 +70,10 @@ on the final page.
      [Ollama](https://ollama.com) installed separately and a model pulled
      (`ollama pull llama3.2:3b` or similar) *on the Windows host*, not inside
      a container.
-   - **Anthropic**, **AWS Bedrock**, or **Google Gemini** — cloud-hosted,
-     each needs its own API key/credentials, entered directly in this page.
+   - **Anthropic**, **AWS Bedrock**, **Google Gemini**, **Groq**, **OpenAI**,
+     **Kimi (Moonshot AI)**, **DeepSeek**, **xAI (Grok)**, **Mistral**, or
+     **OpenRouter** — cloud-hosted, each needs its own API key/credentials,
+     entered directly in this page.
    - You can leave this on Ollama and switch later by re-running the wizard
      from the Start Menu ("Configuration").
 4. **Threat Intelligence Providers** — every provider is optional. Paste in
@@ -88,7 +90,7 @@ on the final page.
 6. **Summary** — a plain-language recap of what you configured, then a
    **Start Installation** button. Clicking it:
    - Writes your configuration to a protected file.
-   - Runs `docker compose up --build`, which builds and starts every
+   - Runs `docker compose up -d --build`, which builds and starts every
      container. **This step genuinely takes a few minutes the first time**
      (subsequent starts are fast) — a progress log shows what's happening.
    - Waits for the backend to report healthy.

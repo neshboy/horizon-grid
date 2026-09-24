@@ -1,8 +1,8 @@
 # Database Reference
 
-This chapter is the exhaustive column-level reference for the platform's PostgreSQL schema: every table, every column with its type/nullability/default, every foreign key, and every native enum. It is a companion to the narrative "Database Architecture" chapter elsewhere in this documentation set, which explains *why* Postgres is the sole system of record and what Redis/Neo4j/OpenSearch do and do not do; this chapter only documents *what the schema is*, table by table, as defined under `backend/app/models/` and applied by the twelve Alembic migrations in `backend/alembic/versions/`.
+This chapter is the exhaustive column-level reference for the platform's PostgreSQL schema: every table, every column with its type/nullability/default, every foreign key, and every native enum. It is a companion to the narrative "Database Architecture" chapter elsewhere in this documentation set, which explains *why* Postgres is the sole system of record and what Redis/Neo4j/OpenSearch do and do not do; this chapter only documents *what the schema is*, table by table, as defined under `backend/app/models/` and applied by the sixteen Alembic migrations in `backend/alembic/versions/`.
 
-The schema was verified by reading every model file and cross-checking it column-by-column against the applied migration DDL. The migration history is a single linear chain with one head — `660d2aa3bc20` → `a6d3ad2bb63c` → `0f2dc283823e` → `2652d888a33f` → `7a1c2f9d4e6b` → `3b9e7a2c1d4f` → `5c8e1f3a9b2d` → `6d2f4b8e1a7c` → `6716ed40b9f2` → `8f4a1c2d9e6b` → `9273d7b21c79` → `9123b075e962` — and no drift was found between the ORM models and the DDL they generated: every column, enum, foreign key, and index in the migrations matches the current model files exactly. There are **20 tables** in total, six of which (`security_assessment_runs`, `security_assessment_findings`, `pentest_assessments`, `pentest_targets`, `pentest_findings`, `pentest_exploit_attempts`) back the Security Assessment Toolkit and the standalone Pentest Suite and are documented in their own sections below, alongside the original 14.
+The schema was verified by reading every model file and cross-checking it column-by-column against the applied migration DDL. The migration history is a single linear chain with one head — `660d2aa3bc20` → `a6d3ad2bb63c` → `0f2dc283823e` → `2652d888a33f` → `7a1c2f9d4e6b` → `3b9e7a2c1d4f` → `5c8e1f3a9b2d` → `6d2f4b8e1a7c` → `6716ed40b9f2` → `8f4a1c2d9e6b` → `9273d7b21c79` → `9123b075e962` → `ec6690d5fcbc` → `157fc4148d76` → `401e725fa85f` → `b3f0587f2493` — and no drift was found between the ORM models and the DDL they generated: every column, enum, foreign key, and index in the migrations matches the current model files exactly. There are **21 tables** in total, seven of which (`security_assessment_runs`, `security_assessment_findings`, `pentest_assessments`, `pentest_targets`, `pentest_findings`, `pentest_exploit_attempts`, `pentest_global_kill_switch`) back the Security Assessment Toolkit and the standalone Pentest Suite and are documented in their own sections below, alongside the original 14.
 
 ## 📋 Table of contents
 
@@ -20,12 +20,12 @@ The schema was verified by reading every model file and cross-checking it column
 
 ## 📐 Conventions Used Throughout This Schema
 
-Two shared mixins (`backend/app/models/base.py:10-27`) are applied to almost every table:
+Two shared mixins (`backend/app/models/base.py:10-31`) are applied to almost every table:
 
 - **`UUIDPrimaryKeyMixin`** (`base.py:14-17`) — a single `id` column, type `UUID`, primary key. The value is generated in Python (`uuid.uuid4()`) by the ORM at insert time, not by a Postgres `DEFAULT` — there is no database-side UUID generation function involved.
-- **`TimestampMixin`** (`base.py:20-26`) — `created_at` and `updated_at`, both `TIMESTAMPTZ NOT NULL`, both with a genuine database-level `server_default=now()`. `updated_at` additionally has an ORM-side `onupdate=func.now()`, which means the refresh on update is applied by SQLAlchemy in the application layer, not by a Postgres trigger — a row updated by raw SQL outside the ORM would not have `updated_at` bumped automatically.
+- **`TimestampMixin`** (`base.py:20-31`) — `created_at` and `updated_at`, both `TIMESTAMPTZ NOT NULL`, both with a genuine database-level `server_default=now()`. `updated_at` additionally has an ORM-side `onupdate=func.now()`, which means the refresh on update is applied by SQLAlchemy in the application layer, not by a Postgres trigger — a row updated by raw SQL outside the ORM would not have `updated_at` bumped automatically. `created_at` also carries `index=True` at the ORM level; migration `b3f0587f2493_add_created_at_index_to_timestamped_.py` retroactively added the matching `ix_<table>_created_at` index to every one of the (then-)20 existing tables built on this mixin, since `created_at` is the primary `ORDER BY`/`WHERE` column for nearly every list and dashboard query.
 
-Every table below carries both mixins **except `config_audit_log`**, which uses only `UUIDPrimaryKeyMixin` and defines its own explicit `timestamp` column instead (with no server default — the application must set it).
+Every table below carries both mixins **except `config_audit_log`**, which uses only `UUIDPrimaryKeyMixin` and defines its own explicit `timestamp` column instead (with no server default — the application must set it), **and `pentest_global_kill_switch`**, which uses only `TimestampMixin` — its primary key is a plain `INTEGER` (always `1`, a singleton row), not the ORM-generated `UUID` the mixin would otherwise provide.
 
 > [!WARNING]
 > Two structural facts apply platform-wide and are easy to miss when reading the model files in isolation:
@@ -41,12 +41,12 @@ No diagram-generation tool was used for this chapter; the description below is a
 
 The schema has one hub table per functional domain, plus one standalone administrative domain and one standalone assessment domain:
 
-- **`users` is the root identity table.** It has no foreign keys of its own and is referenced by twelve other tables as the actor, owner, or author of some action: `ioc_lookups.requested_by`, `final_assessment_records.requested_by`, `basket_items.owner_id`, `cases.analyst_id`, `case_iocs.added_by`, `case_notes.author_id`, `case_reports.generated_by`, `provider_runtime_configs.updated_by`, `config_audit_log.actor_user_id`, `security_assessment_runs.requested_by`, `pentest_assessments.created_by`, and `pentest_exploit_attempts.requested_by`.
+- **`users` is the root identity table.** It has no foreign keys of its own and is referenced by thirteen other tables as the actor, owner, or author of some action: `ioc_lookups.requested_by`, `final_assessment_records.requested_by`, `basket_items.owner_id`, `cases.analyst_id`, `case_iocs.added_by`, `case_notes.author_id`, `case_reports.generated_by`, `provider_runtime_configs.updated_by`, `config_audit_log.actor_user_id`, `security_assessment_runs.requested_by`, `pentest_assessments.created_by`, `pentest_exploit_attempts.requested_by`, and `pentest_global_kill_switch.changed_by`.
 - **`ioc_lookups` is the hub of the investigation domain.** One lookup fans out to child rows in six other tables, all via a `lookup_id` foreign key back to `ioc_lookups.id`: `provider_results` (raw per-provider responses), `ai_summaries` (AI-generated per-provider and consolidated summaries), `correlation_edges` (the relationship graph for that lookup), `evidence_items` (the deterministic evidence ledger), `final_assessment_records` (the full history of AI final-assessment runs against that lookup, not just the primary one), and `security_assessment_runs` (the per-lookup Security Assessment Toolkit's own active-scan runs, each owning its own child `security_assessment_findings`). Two further tables hold a nullable, non-owning reference *into* this hub rather than owning rows within it: `basket_items.latest_lookup_id` and `case_iocs.lookup_id` — a basket item or case IOC can exist and be queried whether or not a completed lookup has ever been linked to it.
 - **`cases` is the hub of the case-management domain.** One case owns rows in three child tables via a `case_id` foreign key: `case_iocs`, `case_notes`, and `case_reports`. `case_iocs` additionally, and optionally, points back into the investigation domain via its nullable `lookup_id`.
 - **`basket_items` is a leaf table**, owned by exactly one user (`owner_id`) and optionally pointing at one lookup (`latest_lookup_id`); it participates in no other relationship.
 - **`provider_runtime_configs` and `config_audit_log` form a self-contained administrative domain.** Both reference `users` (as `updated_by` / `actor_user_id` respectively, both nullable) but are not referenced by, and do not reference, any table in the investigation or case domains. This is the storage layer behind the platform's runtime (no-restart) provider/AI credential configuration and its audit trail.
-- **`pentest_assessments` is the hub of a fourth, entirely standalone domain: the Pentest Suite.** Distinct from the per-lookup Security Assessment Toolkit above, a pentest assessment declares its own scope and owns `pentest_targets`, `pentest_findings` (via both `assessment_id` and `target_id`), and `pentest_exploit_attempts` (via `assessment_id`, `finding_id`, and `target_id`) — none of which reference `ioc_lookups` or `cases` at all. The only connection back to the rest of the schema is `users`, via `pentest_assessments.created_by` and `pentest_exploit_attempts.requested_by`.
+- **`pentest_assessments` is the hub of a fourth, entirely standalone domain: the Pentest Suite.** Distinct from the per-lookup Security Assessment Toolkit above, a pentest assessment declares its own scope and owns `pentest_targets`, `pentest_findings` (via both `assessment_id` and `target_id`), and `pentest_exploit_attempts` (via `assessment_id`, `finding_id`, and `target_id`) — none of which reference `ioc_lookups` or `cases` at all. A fifth table, `pentest_global_kill_switch`, is a platform-wide singleton (always exactly one row) that halts every assessment at once regardless of any individual assessment's own scope or `emergency_stopped` flag; it has no FK to `pentest_assessments` at all. The only connection back to the rest of the schema is `users`, via `pentest_assessments.created_by`, `pentest_exploit_attempts.requested_by`, and `pentest_global_kill_switch.changed_by`.
 
 Put simply: `users` sits at the root of ownership for every domain; `ioc_lookups` is the one-to-many parent for everything a single investigation produces (now including that investigation's own Security Assessment Toolkit runs); `cases` is the one-to-many parent for everything an analyst attaches to a multi-IOC case; the runtime-configuration tables are an independent branch that only touches `users`, never the investigation or case data itself; and the Pentest Suite's tables are a fourth, fully independent branch that only touches `users` too, deliberately never `ioc_lookups` or `cases`.
 
@@ -102,7 +102,7 @@ The central record of one investigation: the submitted IOC, its detected type, a
 FK: `requested_by` → `users.id` (nullable — a lookup can in principle exist without a resolvable requester). ORM relationships (`lookup.py:70-84`, `cascade="all, delete-orphan"`, ORM-only per the note above): `provider_results`, `ai_summaries`, `correlation_edges`, `evidence_items`, `security_assessment_runs`. `ioc_lookups` is referenced (via `lookup_id`) by `provider_results`, `ai_summaries`, `correlation_edges`, `final_assessment_records`, `evidence_items`, and `security_assessment_runs`, and referenced non-owningly by `basket_items.latest_lookup_id` and `case_iocs.lookup_id`.
 
 ### `provider_results`
-Source: `app/models/lookup.py:69-84` · Introduced in `660d2aa3bc20` (`initial_schema.py:79-95`).
+Source: `app/models/lookup.py:87-116` · Introduced in `660d2aa3bc20` (`initial_schema.py:79-95`); `from_cache` added by `ec6690d5fcbc_add_from_cache_to_provider_results.py`.
 
 One row per provider call per lookup — the raw connector response.
 
@@ -118,12 +118,13 @@ One row per provider call per lookup — the raw connector response.
 | `source_url` | VARCHAR(2048) | YES | — | — |
 | `error_message` | TEXT | YES | — | — |
 | `latency_ms` | INTEGER | YES | — | — |
+| `from_cache` | BOOLEAN | NO | ORM `False`; migration `server_default='false'` | — (true when this row is a replayed Redis cache hit rather than a genuine re-contact of the provider — see `app/providers/orchestrator.py`) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NO | server `now()` | — |
 
-No local enums; `status`/`category` are free-form strings mirroring the provider layer's own `ProviderStatus`/`ProviderCategory` Python enums, not database enum types. FK: `lookup_id` → `ioc_lookups.id`, back-populated on `IOCLookup.provider_results` (`lookup.py:84`).
+No local enums; `status`/`category` are free-form strings mirroring the provider layer's own `ProviderStatus`/`ProviderCategory` Python enums, not database enum types. FK: `lookup_id` → `ioc_lookups.id`, back-populated on `IOCLookup.provider_results` (`lookup.py:116`).
 
 ### `ai_summaries`
-Source: `app/models/lookup.py:87-97` · Introduced in `660d2aa3bc20` (`initial_schema.py:51-62`).
+Source: `app/models/lookup.py:119-129` · Introduced in `660d2aa3bc20` (`initial_schema.py:51-62`).
 
 AI-generated summary output. A nullable `provider_id` disambiguates a per-provider summary from the single consolidated summary for the lookup (consolidated rows have `provider_id = NULL`).
 
@@ -135,10 +136,10 @@ AI-generated summary output. A nullable `provider_id` disambiguates a per-provid
 | `summary` | JSONB | NO | — | — |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NO | server `now()` | — |
 
-FK: `lookup_id` → `ioc_lookups.id`, back-populated on `IOCLookup.ai_summaries` (`lookup.py:97`).
+FK: `lookup_id` → `ioc_lookups.id`, back-populated on `IOCLookup.ai_summaries` (`lookup.py:129`).
 
 ### `correlation_edges`
-Source: `app/models/lookup.py:118-143` · Introduced in `660d2aa3bc20` (`initial_schema.py:63-78`); `provenance_category` added by `6d2f4b8e1a7c_add_provenance_category.py`.
+Source: `app/models/lookup.py:132-157` · Introduced in `660d2aa3bc20` (`initial_schema.py:63-78`); `provenance_category` added by `6d2f4b8e1a7c_add_provenance_category.py`.
 
 One graph edge produced by the correlation engine for a lookup. As documented in the Database Architecture chapter, this table is, in its entirety, where the "correlation graph" the UI renders actually lives — the Neo4j container referenced elsewhere in configuration is not written to.
 
@@ -158,10 +159,10 @@ One graph edge produced by the correlation engine for a lookup. As documented in
 
 `provenance_category` is a second, distinct axis from `provenance` above — WHAT KIND of source asserted the edge (`threat_intel` / `security_assessment` / `local_observation` / `ai_interpretation`, see `app/core/provenance.py`) rather than WHICH provider. Existing rows backfilled to `"threat_intel"` because every provider that existed before this column did some form of external intelligence lookup, never a local active observation.
 
-FK: `lookup_id` → `ioc_lookups.id`, back-populated on `IOCLookup.correlation_edges` (`lookup.py:143`).
+FK: `lookup_id` → `ioc_lookups.id`, back-populated on `IOCLookup.correlation_edges` (`lookup.py:157`).
 
 ### `final_assessment_records`
-Source: `app/models/lookup.py:146-176` · Introduced in migration `2652d888a33f` (`add_final_assessment_records.py:22-36`); `ai_outcome` added by `6716ed40b9f2_add_final_assessment_ai_outcome.py`. No longer the current migration head — see **Migration Provenance** below for the full, current chain.
+Source: `app/models/lookup.py:160-190` · Introduced in migration `2652d888a33f` (`add_final_assessment_records.py:22-36`); `ai_outcome` added by `6716ed40b9f2_add_final_assessment_ai_outcome.py`. No longer the current migration head — see **Migration Provenance** below for the full, current chain.
 
 A durable history of every final-assessment generation run for a lookup, not just the one currently reflected on `ioc_lookups`. This backs the platform's cross-AI-backend comparison feature (e.g. comparing a Groq run against an Ollama re-run over the same evidence); `IOCLookup.final_assessment` / `final_verdict` / `risk_score` remains the single "primary" record surfaced by default.
 
@@ -179,7 +180,7 @@ A durable history of every final-assessment generation run for a lookup, not jus
 
 `ai_outcome` mirrors `app/ai/schemas.py`'s `FinalAssessment.ai_outcome` (`"success"` / `"skipped_no_evidence"` / `"failed"`) as a real, queryable column rather than something a caller would otherwise have to infer by deserializing the JSONB `assessment` blob or by treating `ai_backend == "unknown"` as a proxy for failure. Pre-existing rows (predating this column) were backfilled by matching each row's deterministic, hardcoded `executive_summary` text against the two known non-success templates — confirmed live to match exactly, with zero unmatched rows.
 
-FKs: `lookup_id` → `ioc_lookups.id`; `requested_by` → `users.id`. This model declares a bare `relationship()` with no `back_populates` (`lookup.py:144`) — `IOCLookup` does not expose a reverse collection for this table.
+FKs: `lookup_id` → `ioc_lookups.id`; `requested_by` → `users.id`. This model declares a bare `relationship()` with no `back_populates` (`lookup.py:190`) — `IOCLookup` does not expose a reverse collection for this table.
 
 ## 🧾 The Evidence Ledger
 
@@ -305,24 +306,24 @@ A multi-IOC investigation/incident container with its own status workflow, team-
 FK: `analyst_id` → `users.id`. Relationships (`case.py:42-44`, `cascade="all, delete-orphan"`, ORM-only): `iocs` (`CaseIOC`), `notes` (`CaseNote`), `reports` (`CaseReport`).
 
 ### `case_iocs`
-Source: `app/models/case.py:47-58` · Introduced in `a6d3ad2bb63c` (lines 52-65).
+Source: `app/models/case.py:47-64` · Introduced in `a6d3ad2bb63c` (lines 52-65); unique constraint added by `401e725fa85f_add_case_ioc_uniqueness_constraint.py`.
 
 One IOC attached to a case, optionally linked to the lookup that investigated it.
 
 | Column | Type | Null | Default | Index / Unique |
 |---|---|---|---|---|
 | `id` | UUID | NO | PK | PK |
-| `case_id` | UUID | NO | — | FK → `cases.id`; index `ix_case_iocs_case_id` |
-| `ioc_value` | VARCHAR(2048) | NO | — | — |
+| `case_id` | UUID | NO | — | FK → `cases.id`; index `ix_case_iocs_case_id`; part of composite unique `uq_case_ioc_case_value` |
+| `ioc_value` | VARCHAR(2048) | NO | — | part of composite unique `uq_case_ioc_case_value` |
 | `ioc_type` | VARCHAR(64) | NO | — | — |
 | `lookup_id` | UUID | YES | — | FK → `ioc_lookups.id` |
 | `added_by` | UUID | NO | — | FK → `users.id` |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NO | server `now()` | — |
 
-FKs: `case_id` → `cases.id`; `lookup_id` → `ioc_lookups.id` (nullable); `added_by` → `users.id`. Back-populated on `Case.iocs` (`case.py:58`).
+Table-level constraint: `UniqueConstraint(case_id, ioc_value, name="uq_case_ioc_case_value")` (`case.py:54`) — enforces at most one `case_iocs` row per case per exact IOC value; a real database-level constraint, not just an application check (added after a confirmed live bug where concurrent identical add-IOC requests each landed their own row). FKs: `case_id` → `cases.id`; `lookup_id` → `ioc_lookups.id` (nullable); `added_by` → `users.id`. Back-populated on `Case.iocs` (`case.py:64`).
 
 ### `case_notes`
-Source: `app/models/case.py:61-75` · Introduced in `a6d3ad2bb63c` (lines 67-79).
+Source: `app/models/case.py:67-81` · Introduced in `a6d3ad2bb63c` (lines 67-79).
 
 A free-text analyst note attached to a case, optionally "anchored" to a specific artifact by a loose string pair rather than a real foreign key.
 
@@ -336,10 +337,10 @@ A free-text analyst note attached to a case, optionally "anchored" to a specific
 | `anchor_ref` | VARCHAR(2048) | YES | — | — |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NO | server `now()` | — |
 
-FKs: `case_id` → `cases.id`; `author_id` → `users.id`. Back-populated on `Case.notes` (`case.py:75`). Because `anchor_type`/`anchor_ref` are plain strings, the database performs no referential-integrity check on what a note is anchored to — an anchor referencing a since-deleted evidence item, for example, would not be caught by a database constraint.
+FKs: `case_id` → `cases.id`; `author_id` → `users.id`. Back-populated on `Case.notes` (`case.py:81`). Because `anchor_type`/`anchor_ref` are plain strings, the database performs no referential-integrity check on what a note is anchored to — an anchor referencing a since-deleted evidence item, for example, would not be caught by a database constraint.
 
 ### `case_reports`
-Source: `app/models/case.py:78-88` · Introduced in `a6d3ad2bb63c` (lines 81-95).
+Source: `app/models/case.py:84-94` · Introduced in `a6d3ad2bb63c` (lines 81-95).
 
 A generated report artifact attached to a case.
 
@@ -354,7 +355,7 @@ A generated report artifact attached to a case.
 | `context` | JSONB | YES | — | — |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NO | server `now()` | — |
 
-FKs: `case_id` → `cases.id`; `generated_by` → `users.id`. Back-populated on `Case.reports` (`case.py:88`).
+FKs: `case_id` → `cases.id`; `generated_by` → `users.id`. Back-populated on `Case.reports` (`case.py:94`).
 
 > [!NOTE]
 > The table exists and is fully wired at the schema level, but no route or service function in `app/api/routes/cases.py` currently inserts a row here — verified against the endpoint inventory: `cases.py` exposes create/list/get/update/close/add-IOC/remove-IOC/add-note, and no report-generation endpoint. Read `case_reports` as a defined-but-unpopulated table today, not a dead or removed one.
@@ -407,7 +408,7 @@ No enums. FK: `actor_user_id` → `users.id`, but note this model declares no `r
 
 ## ⚔️ Pentest Suite Tables
 
-Four tables back the Pentest Suite (`backend/app/pentest/`) — a standalone, scope-enforced assessment lifecycle (DISCOVER → ENUMERATE → ASSESS → CORRELATE → PRIORITIZE → REPORT) operating on its own independently-declared targets, entirely distinct from the per-lookup Security Assessment Toolkit above. None of these four tables reference `ioc_lookups` or `cases`; the only connection back into the rest of the schema is `users`. The suite reuses the existing tool adapters (`app/security_assessment/*.py`) and the existing generic `config_audit_log`/`record_audit()` audit trail rather than inventing parallel ones — there is no separate pentest-specific audit table.
+Five tables back the Pentest Suite (`backend/app/pentest/`) — a standalone, scope-enforced assessment lifecycle (DISCOVER → ENUMERATE → ASSESS → CORRELATE → PRIORITIZE → REPORT) operating on its own independently-declared targets, entirely distinct from the per-lookup Security Assessment Toolkit above. None of these five tables reference `ioc_lookups` or `cases`; the only connection back into the rest of the schema is `users`. The suite reuses the existing tool adapters (`app/security_assessment/*.py`) and the existing generic `config_audit_log`/`record_audit()` audit trail rather than inventing parallel ones — there is no separate pentest-specific audit table.
 
 ### `pentest_assessments`
 Source: `app/models/pentest.py:72-99` · Introduced in migration `9273d7b21c79_add_pentest_suite_tables.py`.
@@ -491,7 +492,7 @@ One finding produced against one target within an assessment.
 FKs: `assessment_id` → `pentest_assessments.id`; `target_id` → `pentest_targets.id`. Relationship (`pentest.py:158`, `cascade="all, delete-orphan"`, ORM-only): `exploit_attempts` (`PentestExploitAttempt`).
 
 ### `pentest_exploit_attempts`
-Source: `app/models/pentest.py:178-218` · Introduced in migration `9123b075e962_add_pentest_exploit_attempts_table.py`, the current migration head.
+Source: `app/models/pentest.py:178-218` · Introduced in migration `9123b075e962_add_pentest_exploit_attempts_table.py`. No longer the current migration head — see **Migration Provenance** below for the full, current chain.
 
 One gated, manually-selected, individually-approved run of a real Metasploit module against a finding's own target. Never created by the autonomous DISCOVER→ENUMERATE→ASSESS pipeline — the only way a row here exists is a human explicitly choosing a specific module and, for `mode=exploit`, explicitly confirming it, every single time.
 
@@ -518,6 +519,20 @@ One gated, manually-selected, individually-approved run of a real Metasploit mod
 > This table exists specifically for genuine exploit-module execution, not a simulation. `module_options` cannot override the target host regardless of what a caller submits — `RHOSTS`/`RHOST` are always force-overwritten with the finding's own real target before the module runs. See the Pentest Suite's own chapter for the full safety model, including every gate between "an assessment exists" and "a real exploit ran."
 
 FKs: `assessment_id` → `pentest_assessments.id`; `finding_id` → `pentest_findings.id`; `target_id` → `pentest_targets.id`; `requested_by` → `users.id`. Relationships back-populated on `PentestAssessment.exploit_attempts` and `PentestFinding.exploit_attempts`.
+
+### `pentest_global_kill_switch`
+Source: `app/models/pentest.py:224-251` · Introduced in migration `157fc4148d76_add_pentest_global_kill_switch_table.py`.
+
+A singleton row (always `id=1`, enforced by the primary key itself) persisting the platform-wide pentest kill switch, so an admin's `engage()` survives a backend restart instead of silently reverting to disengaged. Distinct from each individual `pentest_assessments.emergency_stopped` column — this is the one switch that halts every assessment at once. A fresh install seeds this table with exactly one disengaged row.
+
+| Column | Type | Null | Default | Index / Unique |
+|---|---|---|---|---|
+| `id` | INTEGER | NO | PK, ORM `1` | PK |
+| `engaged` | BOOLEAN | NO | ORM `False` | — |
+| `changed_by` | UUID | YES | — | FK → `users.id` |
+| `created_at` / `updated_at` | TIMESTAMPTZ | NO | server `now()` | — |
+
+Unlike every other table in this chapter, this model uses only `TimestampMixin`, not `UUIDPrimaryKeyMixin` — `id` is a plain `INTEGER` primary key, not a generated `UUID`. No local enums. FK: `changed_by` → `users.id` (nullable). No `relationship()` is declared on either side; `app/pentest/orchestrator.py` reads and writes this row directly by primary key (`id == 1`).
 
 ## 🔢 Enum Inventory
 
@@ -559,6 +574,10 @@ Every native Postgres `ENUM` type in the schema, named as the lowercase of its P
 | `6716ed40b9f2_add_final_assessment_ai_outcome.py` | `6716ed40b9f2` → `6d2f4b8e1a7c` | adds `final_assessment_records.ai_outcome` |
 | `8f4a1c2d9e6b_add_cancelled_security_assessment_status.py` | `8f4a1c2d9e6b` → `6716ed40b9f2` | adds `CANCELLED` to the `securityassessmentrunstatus` enum (no new table/column) |
 | `9273d7b21c79_add_pentest_suite_tables.py` | `9273d7b21c79` → `8f4a1c2d9e6b` | `pentest_assessments`, `pentest_targets`, `pentest_findings` |
-| `9123b075e962_add_pentest_exploit_attempts_table.py` (head) | `9123b075e962` → `9273d7b21c79` | `pentest_exploit_attempts` |
+| `9123b075e962_add_pentest_exploit_attempts_table.py` | `9123b075e962` → `9273d7b21c79` | `pentest_exploit_attempts` |
+| `ec6690d5fcbc_add_from_cache_to_provider_results.py` | `ec6690d5fcbc` → `9123b075e962` | adds `provider_results.from_cache` |
+| `157fc4148d76_add_pentest_global_kill_switch_table.py` | `157fc4148d76` → `ec6690d5fcbc` | `pentest_global_kill_switch` |
+| `401e725fa85f_add_case_ioc_uniqueness_constraint.py` | `401e725fa85f` → `157fc4148d76` | adds unique constraint `uq_case_ioc_case_value` on `case_iocs` |
+| `b3f0587f2493_add_created_at_index_to_timestamped_.py` (head) | `b3f0587f2493` → `401e725fa85f` | adds `ix_<table>_created_at` index to 20 tables |
 
-The chain is linear with a single head at `9123b075e962`, twelve migrations deep. No table or column exists in the ORM models that is missing a corresponding migration, and no migration DDL was found that lacks a corresponding model — the schema described in this chapter is, at the time of writing, exactly the schema Alembic would produce by replaying all twelve migrations against an empty database.
+The chain is linear with a single head at `b3f0587f2493`, sixteen migrations deep. No table or column exists in the ORM models that is missing a corresponding migration, and no migration DDL was found that lacks a corresponding model — the schema described in this chapter is, at the time of writing, exactly the schema Alembic would produce by replaying all sixteen migrations against an empty database.

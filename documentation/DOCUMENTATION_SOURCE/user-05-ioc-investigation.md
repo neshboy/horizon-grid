@@ -67,7 +67,7 @@ Scroll down (or wait for later providers to finish) and the rest of the investig
 - **Recommended Actions** — AI-suggested next steps for the analyst, grounded in what was actually found.
 - **Verdict Analysis tools** — this is the toolbox that exists specifically so you don't have to just trust the Threat Score number. Each tab lets you interrogate the AI's own conclusion:
   - **Why?** — asks the AI to justify its verdict, citing the actual evidence behind it.
-  - **What's this?** — a plain-language explanation of what the IOC is.
+  - **What is this?** — a plain-language explanation of what the IOC is.
   - **Score Explanation** — breaks down how the numeric score was arrived at.
   - **Intelligence Conflicts** — specifically surfaces where providers disagree with each other (exactly the Spamhaus-vs-AbuseIPDB/VirusTotal situation in this example).
   - **False Positive Check** — asks the AI to assess how likely it is that the flagged verdict is wrong.
@@ -111,12 +111,9 @@ This is not an exhaustive list of every type the platform can classify internall
 Every provider covered so far is **passive** — it asks a third party what they already know about your indicator. Once an investigation completes for an IP, domain, hostname, or URL, a **Security Assessment** panel appears further down the page offering a genuinely different kind of check: sending real traffic to the target itself. Four checks are available — a Nmap port/service scan, a DNS record lookup, a TLS certificate inspection, and an HTTP security-header check — each described in plain language when you select it.
 
 > [!WARNING]
-> This never happens automatically. Unlike every passive provider, a security assessment is something you must deliberately start, and the platform requires two explicit confirmations before it will run anything:
->
-> 1. **Retype the exact target** in the confirmation box — this is a safeguard against accidentally scanning the wrong thing.
-> 2. **Check the authorization box**, confirming you're actually allowed to run active checks against this target. Only scan systems you own or have explicit permission to test.
+> This never happens automatically. Unlike every passive provider, a security assessment is something you must deliberately start, and the platform requires an explicit confirmation before it will run anything: **check the authorization box**, confirming you're actually allowed to run active checks against this target (shown read-only right above the checkbox, so you can double-check it before running). Only scan systems you own or have explicit permission to test.
 
-[FIGURE: 45-security-assessment-panel.png | The Security Assessment panel: tool selection, the target-confirmation box, and the authorization checkbox.]
+[FIGURE: 45-security-assessment-panel.png | The Security Assessment panel: tool selection, the read-only target line, and the authorization checkbox.]
 
 Once you start a run, results appear in a findings table with a severity badge on each row (from informational up to critical) — severities are assigned by fixed, documented rules based on what was actually found (e.g. an expired certificate, or an open port running software with a known vulnerability), never guessed. Click any finding to see exactly what was observed.
 

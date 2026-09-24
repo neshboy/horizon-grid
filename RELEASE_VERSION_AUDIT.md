@@ -63,7 +63,7 @@ Full detail on each is in `documentation/DOCUMENTATION_SOURCE/standalone-changel
 
 ## Frontend
 
-A real, mature Next.js 14 App Router application — 12 pages, 27 dashboard components, 5 UI primitives, one hand-written API client (`frontend/lib/api.ts`).
+A real, mature Next.js 14 App Router application — 12 pages, 28 dashboard components, 5 UI primitives, one hand-written API client (`frontend/lib/api.ts`).
 
 **Verified real and working:** Executive Dashboard (7 KPI tiles + AI-or-template-fallback narrative + provider-health widget, all from real API calls); SSE streaming via `fetch()`+`ReadableStream` (not `EventSource`, specifically because `EventSource` can't send an `Authorization` header) with transparent 401-refresh-and-retry; the Relationship Graph (force-directed + accessible list-view fallback, its data-mutation crash fixed this release); AI provider runtime-switching across all 11 backends with no restart; an AI-backend-comparison feature (re-run the same evidence against a different backend); an Investigation Copilot (evidence-scoped Q&A chat); the Security Assessment panel (typed target confirmation + explicit authorization checkbox required before a scan can start, live cancellation); case management; the IOC Basket (multi-select investigate-all, cross-IOC AI comparison); an Admin console (client-side role gate is explicitly documented as UX-only, server enforces the real boundary); export (client-side Markdown/JSON, server-side PDF/CSV with graceful 404 degradation); a Provider Health page rendering `null` success-rate/latency as "N/A", never a fabricated "0%".
 

@@ -59,7 +59,7 @@ The actual architecture is Docker Compose containers (postgres, redis, neo4j, op
 
 Every configuration surface was validated against the real running backend, not by trusting the installer's own success screen:
 
-- AI backend connection: real Ollama connectivity confirmed (model `llama3.2:3b`); AI-unavailable and AI-recovery scenarios explicitly tested (§9).
+- AI backend connection: real Ollama connectivity confirmed (model `llama3.2:3b`); AI-unavailable and AI-recovery scenarios explicitly tested (§11).
 - **Real bug found and fixed:** `docker-compose.yml` hardcoded `OLLAMA_BASE_URL` directly in the `environment:` block instead of using the same `${VAR:-default}` substitution pattern every other setting in the file uses. A compose `environment:` entry always wins over `env_file:`, so the setup wizard's AI Configuration page — despite writing the correct value to `.env` — could never actually change where the platform looks for Ollama. Fixed to `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}`; confirmed the default still resolves correctly and that a real `.env` override now actually takes effect (verified via `docker exec ... printenv`, not just a config read).
 - Provider connectivity: all 16 supported providers enumerate correctly via `/api/v1/providers/health` with accurate `configured`/`requires_key` flags (free-tier providers needing no key correctly show `configured: true` with no key present; paid providers needing a key correctly show `configured: false` without one).
 - Database connectivity/persistence: confirmed via real data surviving a Postgres container stop/restart, a full platform restart, a real OS reboot, and a full uninstall→reinstall cycle (see §§7–8, 10–11).
@@ -71,7 +71,7 @@ Multiple complete investigations run end-to-end against the real backend (no bro
 
 - IP (`8.8.8.8`, Google DNS): correctly resolved to a benign verdict backed by real WHOIS/RDAP and Spamhaus data.
 - Domain (`malware.testing.google.test` and others): correct type detection, correct provider fan-out.
-- MD5 hash (EICAR test hash `44d88612fea8a8f36de82e1278abb02f`): see the critical AI-fabrication bug in §9 — this single lookup produced the most severe finding of this entire pass.
+- MD5 hash (EICAR test hash `44d88612fea8a8f36de82e1278abb02f`): see the critical AI-fabrication bug in §8 — this single lookup produced the most severe finding of this entire pass.
 - Full pipeline confirmed working end-to-end: Search → IOC Detection → per-provider results → per-provider AI summaries → correlation → final AI assessment → Evidence → WHY?/disagreement/pivots/hunt/detection-rule analysis endpoints → Done.
 
 ## 8. Provider-by-Provider & AI Validation
@@ -128,7 +128,7 @@ A genuine `Restart-Computer` was executed on the tester's real primary workstati
 
 ## 14. Upgrade Test
 
-Not applicable as a distinct "previous version → new version" test (only one version, 0.1.0, exists), but the closely-related reconfigure/upgrade-detection path (re-running the wizard against an existing installation) was tested extensively as part of §15 and confirmed fully correct: existing admin account, AI backend selection, provider keys, and port choices are all correctly detected and offered for reuse rather than being silently overwritten or re-prompted from scratch.
+Not applicable as a distinct "previous version → new version" test (only one version, 0.1.0, exists), but the closely-related reconfigure/upgrade-detection path (re-running the wizard against an existing installation) was tested extensively as part of §16 and confirmed fully correct: existing admin account, AI backend selection, provider keys, and port choices are all correctly detected and offered for reuse rather than being silently overwritten or re-prompted from scratch.
 
 ## 15. Uninstall Test
 

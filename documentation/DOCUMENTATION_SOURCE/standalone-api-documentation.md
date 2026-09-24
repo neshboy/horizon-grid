@@ -94,11 +94,11 @@ Two distinct token types are issued together, signed HS256 (`backend/app/auth/se
 Both lifetimes are configurable per-install and are not hardcoded absolutes; the values above are the shipped defaults. An access token also embeds the user's `role` and a `token_version` counter — the latter means an administrator resetting a user's password immediately invalidates every token already issued to that user, not just future logins, because `get_current_user` re-checks `token_version` against the live database value on every single request (it also re-checks `is_active` the same way, so disabling an account takes effect on that account's very next request, not at token expiry).
 
 > [!NOTE]
-> There is no logout endpoint and no server-side token revocation list beyond the `token_version` mechanism above — an access token, once issued, remains valid for up to its own 30-minute lifetime even if the browser tab is closed. This is a documented, known characteristic of the current design, not an oversight to route around.
+> `POST /api/v1/auth/logout` (§1 below) invalidates every access and refresh token already issued to the caller by bumping `token_version` — the same mechanism an admin-initiated password reset uses. There is no server-side token revocation list beyond that mechanism; a caller who never explicitly logs out still has an access token that remains valid for up to its own 30-minute lifetime even if the browser tab is closed.
 
 ## 🛂 Authorization: roles and permissions
 
-Every protected route is gated by one specific *permission string*, checked by a single shared dependency, `require_permission("<permission>")` (`backend/app/auth/rbac.py`). There are exactly three roles (`backend/app/models/user.py`'s `Role` enum) and eighteen distinct permission strings checked anywhere in the API:
+Every protected route is gated by one specific *permission string*, checked by a single shared dependency, `require_permission("<permission>")` (`backend/app/auth/rbac.py`). There are exactly three roles (`backend/app/models/user.py`'s `Role` enum) and eighteen distinct permission strings checked across the routers documented in this reference (five more — `pentest:read`/`pentest:create`/`pentest:validate`/`pentest:admin`/`pentest:exploit` — gate the Pentest Suite routers noted under "Endpoint Reference" above, out of scope for this document):
 
 | Role | Can do |
 |---|---|
@@ -156,15 +156,20 @@ This document states the one required permission string next to every endpoint b
 
 ## ⏱ Rate limiting
 
-Exactly one route in the entire API is rate-limited: `POST /api/v1/lookup/stream`, capped per-user at `lookup_rate_limit_max_calls` (10) calls per `lookup_rate_limit_window_seconds` (60) seconds, enforced by a Redis fixed-window counter (`backend/app/core/cache.py`). Exceeding the lookup limit returns:
+Three routes in the API carry their own rate limit, each enforced by a Redis fixed-window counter (`backend/app/core/cache.py`):
+
+- `POST /api/v1/lookup/stream` — capped per-user at `lookup_rate_limit_max_calls` (10) calls per `lookup_rate_limit_window_seconds` (60) seconds. Exceeding it returns:
 
 ```
 HTTP 429
 {"detail": "Rate limit exceeded: max 10 lookups per 60s. Each lookup fans out to every provider plus the crawler and multiple AI calls, so this bounds cost/load per user."}
 ```
 
+- `POST /api/v1/auth/login` (§1) — capped per-attempted-email at `login_rate_limit_max_attempts` (10) attempts per `login_rate_limit_window_seconds` (60) seconds, counted only against a *failing* attempt (wrong password/unknown email, or a disabled account) — a correct password against an active account is never itself throttled. Exceeding it returns `HTTP 429 {"detail": "Too many login attempts for this account. Try again in under 60 seconds."}`.
+- `POST /api/v1/auth/register` (§1) — capped per-attempted-email at the same `login_rate_limit_max_attempts`/`login_rate_limit_window_seconds` values, bounding repeated registration attempts against one candidate address. Exceeding it returns `HTTP 429 {"detail": "Too many registration attempts for this address. Try again in under 60 seconds."}`.
+
 > [!WARNING]
-> Every other endpoint in this reference — including authentication itself — has no rate limit of its own; this is a known, documented gap, not a hidden one, called out in the Security Architecture chapter.
+> Every other endpoint in this reference has no rate limit of its own; this is a known, documented gap, not a hidden one, called out in the Security Architecture chapter.
 
 ---
 
@@ -172,8 +177,8 @@ HTTP 429
 
 | § | Router | Base path | Endpoints |
 |---|---|---|---|
-| 1 | `routes/auth.py` | `/api/v1/auth` | 4 |
-| 2 | `routes/lookup.py` | `/api/v1/lookup` | 6 |
+| 1 | `routes/auth.py` | `/api/v1/auth` | 5 |
+| 2 | `routes/lookup.py` | `/api/v1/lookup` | 7 |
 | 3 | `routes/providers.py` | `/api/v1/providers` | 2 |
 | 4 | `routes/ai_config.py` | `/api/v1/ai` | 2 |
 | 5 | `routes/analysis.py` | `/api/v1/lookup/{lookup_id}/analysis` | 10 |
@@ -183,16 +188,16 @@ HTTP 429
 | 9 | `routes/cases.py` | `/api/v1/cases` | 8 |
 | 10 | `routes/runtime.py` | `/api/v1/runtime` | 10 |
 | 11 | `routes/admin.py` | `/api/v1/admin` | 7 |
-| 12 | `routes/security_assessment.py` | `/api/v1/security-assessment` | 5 |
-| 13 | `routes/dashboard.py` | `/api/v1/dashboard` | 2 |
+| 12 | `routes/security_assessment.py` | `/api/v1/security-assessment` | 6 |
+| 13 | `routes/dashboard.py` | `/api/v1/dashboard` | 4 |
 
-**Total: 64 endpoints under `/api/v1`**, plus three unversioned utility routes covered in the final section. Routers are registered in `backend/app/main.py` in exactly this order (auth → lookup → providers → ai_config → analysis → hunting → pivot → basket → cases → runtime → admin → security_assessment → dashboard); FastAPI's routing is path-based, not order-sensitive, so this order affects only where each router appears below, not how requests are matched.
+**Total: 69 endpoints under `/api/v1`**, plus three unversioned utility routes covered in the final section. Routers are registered in `backend/app/main.py` in this relative order (auth → lookup → providers → ai_config → analysis → hunting → pivot → basket → cases → runtime → admin → security_assessment → dashboard); FastAPI's routing is path-based, not order-sensitive, so this order affects only where each router appears below, not how requests are matched. Two further routers are also mounted in the running application, between `security_assessment` and `dashboard` in registration order — `routes/pentest.py` (18 endpoints) and `routes/pentest_exploit.py` (6 endpoints), the Pentest Suite's assessment/target/finding management and its gated real-exploit-execution surface, at `/api/v1/pentest`, gated by five further permission strings (`pentest:read`, `pentest:create`, `pentest:validate`, `pentest:admin`, `pentest:exploit`) — but that pair of routers is out of scope for this document and is not documented below.
 
 ---
 
 ## 1. 🔑 Authentication — `/api/v1/auth`
 
-All four endpoints are unauthenticated *at the dependency level* except `/me`; `/register` and `/login` are the only two ways to ever obtain a token.
+All five endpoints are unauthenticated *at the dependency level* except `/me` and `/logout`; `/register` and `/login` are the only two ways to ever obtain a token.
 
 ### `POST /api/v1/auth/register`
 
@@ -208,7 +213,7 @@ All four endpoints are unauthenticated *at the dependency level* except `/me`; `
 | `full_name` | `str` | optional, defaults to `""` |
 
 - **Response (`201`):** `{"id": str, "email": str, "full_name": str, "role": "admin"}`
-- **Errors:** `400` `"Email already registered"`; `403` `"Self-registration is closed. Ask an administrator to create your account from the Administration page."` once at least one user already exists.
+- **Errors:** `429` `"Too many registration attempts for this address. Try again in under 60 seconds."` (per attempted email, see "Rate limiting" above); `403` `"Self-registration is closed. Ask an administrator to create your account from the Administration page."` once at least one user already exists — checked before the duplicate-email check specifically to avoid an email-enumeration oracle; `400` `"Email already registered"` (only reachable during the bootstrap window, before any user exists).
 - **Example:**
 
 ```bash
@@ -224,7 +229,7 @@ curl -X POST http://localhost:8000/api/v1/auth/register \
 - **Purpose:** Exchange an email/password for a fresh access/refresh token pair.
 - **Request body:** `{"email": "EmailStr", "password": "str (max 72 chars)"}`
 - **Response:** `{"access_token": str, "refresh_token": str, "token_type": "bearer"}`
-- **Errors:** `401` `"Invalid email or password"`; `403` `"Account disabled"` if the account's `is_active` is false.
+- **Errors:** `429` `"Too many login attempts for this account. Try again in under 60 seconds."` (per attempted email, counted only against a failing attempt — see "Rate limiting" above); `401` `"Invalid email or password"`; `403` `"Account disabled"` if the account's `is_active` is false.
 - **Example:** see "Authentication" above.
 
 ### `POST /api/v1/auth/refresh`
@@ -248,12 +253,26 @@ curl -X POST http://localhost:8000/api/v1/auth/refresh \
 - **Full URL:** `http://localhost:8000/api/v1/auth/me`
 - **Permission:** valid access token required (no specific permission string beyond `get_current_user`).
 - **Purpose:** Return the identity associated with the presented token — useful for a client to confirm who it's authenticated as and what role it holds, without decoding the JWT itself.
-- **Response:** `{"id": str, "email": str, "full_name": str, "role": "admin"|"analyst"|"viewer"}`. Note: `full_name` is hard-coded to `""` on this specific route rather than read from the database — a real, minor inconsistency with `/admin/users`, which does return the real value.
+- **Response:** `{"id": str, "email": str, "full_name": str, "role": "admin"|"analyst"|"viewer"}` — `full_name` is the real, current database value (`get_current_user` populates `CurrentUser.full_name` from the user row on every request).
 - **Errors:** `401` `"Could not validate credentials"`.
 - **Example:**
 
 ```bash
 curl http://localhost:8000/api/v1/auth/me \
+  -H "Authorization: Bearer <REDACTED>"
+```
+
+### `POST /api/v1/auth/logout`
+
+- **Full URL:** `http://localhost:8000/api/v1/auth/logout`
+- **Permission:** valid access token required (no specific permission string beyond `get_current_user`).
+- **Purpose:** Invalidate every access and refresh token already issued to the caller by incrementing their `token_version` — the same mechanism an admin-initiated password reset uses (§11's `/reset-password`), now wired to a self-service action so a leaked token (XSS, a shared machine, a synced browser profile) can't keep working after the user logs out.
+- **Response:** `204 No Content`.
+- **Errors:** `401` `"Could not validate credentials"` (the universal case; none raised beyond it).
+- **Example:**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/logout \
   -H "Authorization: Bearer <REDACTED>"
 ```
 
@@ -354,6 +373,15 @@ curl http://localhost:8000/api/v1/lookup/b3c1... \
   -H "Authorization: Bearer <REDACTED>"
 ```
 
+### `GET /api/v1/lookup/{lookup_id}/geo`
+
+- **Full URL:** `http://localhost:8000/api/v1/lookup/{lookup_id}/geo`
+- **Permission:** `lookup:read` (admin, analyst, viewer)
+- **Purpose:** Per-investigation companion to `GET /dashboard/geo-activity` (§13) for the "View on Globe" action on a single lookup — tells the frontend whether/where this one lookup can be plotted on the 3D threat globe. Only ever applies to `ipv4`/`ipv6` IOCs. A private/loopback/link-local/reserved/multicast/unspecified address is never placed on the globe, and a country is never guessed — only a country actually resolvable from this lookup's own persisted provider results is returned.
+- **Response:** `{"status": "public_resolved" | "public_unresolved" | "private" | "not_applicable", "country_code": "US" | null, "asn": "AS15169" | null, "org": "Google LLC" | null}` — `not_applicable` for any non-IP IOC type; `asn`/`org` come only from this lookup's own VirusTotal provider result, if present.
+- **Errors:** `404` `"Lookup not found"`.
+- **Example:** `curl http://localhost:8000/api/v1/lookup/b3c1.../geo -H "Authorization: Bearer <REDACTED>"`
+
 ### `POST /api/v1/lookup/{lookup_id}/export`
 
 *Not present in the prior internal API chapter — added here after confirming it directly in `backend/app/api/routes/lookup.py`.*
@@ -441,7 +469,7 @@ The AI-backend analog of §3: live credential testing and model-list discovery, 
 ### `POST /api/v1/ai/test`
 
 - **Full URL:** `http://localhost:8000/api/v1/ai/test`
-- **Permission:** `provider:manage` (admin only)
+- **Permission:** `provider:manage` (admin only) — except during the one-time bootstrap window before the very first user account exists on a fresh instance, when this route is reachable unauthenticated, so the Setup Wizard's AI Configuration page can work before anyone could possibly have signed in yet. This closes permanently and automatically the moment the first account is created, mirroring `/auth/register`'s own bootstrap rule (§1).
 - **Purpose:** Live credential check for any AI backend — sends one real, minimal chat request with the candidate credentials. Never persists anything.
 - **Request body:** `{"backend": "str", "credentials": {"api_key": "<YOUR_API_KEY>"}, "model": "str | null"}`
 - **Response:** `{"backend": str, "ok": bool, "message": str, "model": str | null, "latency_ms": number}`
@@ -459,8 +487,8 @@ curl -X POST http://localhost:8000/api/v1/ai/test \
 
 - **Full URL:** `http://localhost:8000/api/v1/ai/{backend}/models`
 - **Permission:** `provider:manage` (admin only)
-- **Purpose:** Return the model list for the AI-backend picker's dropdown. Groq and Ollama get real, live discovery; Anthropic/Gemini/Bedrock return a curated static list (there's no equivalently simple live-discovery call to make against those APIs from this codebase today).
-- **Path param:** `backend` — `"groq"`, `"ollama"`, `"anthropic"`, `"gemini"`, `"bedrock"`, or any other string (returns an empty list).
+- **Purpose:** Return the model list for the AI-backend picker's dropdown. `groq`, `openai`, `kimi`, `deepseek`, `xai`, `mistral`, `openrouter`, and `ollama` all attempt real, live discovery against the candidate credentials, falling back to a static/fallback list on a missing key or a provider-side failure; `anthropic`/`gemini`/`bedrock` return a curated static list only, with no live-discovery call attempted at all (there's no equivalently simple discovery endpoint to call against those APIs from this codebase today).
+- **Path param:** `backend` — `"groq"`, `"openai"`, `"kimi"`, `"deepseek"`, `"xai"`, `"mistral"`, `"openrouter"`, `"ollama"`, `"anthropic"`, `"gemini"`, `"bedrock"`, or any other string (returns an empty list, `source: "unknown"`).
 - **Request body:** `{"credentials": {"api_key": "<YOUR_API_KEY>"}}` (default `{}`)
 - **Response:** always includes `backend` and `models`; also `source` (`"live"`, `"static"`, `"fallback"`, or `"unknown"`) and `default`.
 - **Errors:** none raised as an HTTP error — a provider-side failure degrades to the fallback/static list rather than failing the request.
@@ -594,7 +622,7 @@ A single, deterministic (non-AI) endpoint — a pure sort over real correlation 
 - **Full URL:** `http://localhost:8000/api/v1/lookup/{lookup_id}/pivots?limit=10`
 - **Permission:** `lookup:read` (admin, analyst, viewer)
 - **Purpose:** Rank every IOC directly related to the seed indicator by confidence and corroboration, so an analyst can jump straight to the most valuable next investigation with one click.
-- **Query param:** `limit` — default `10`, clamped server-side to `[1, 50]`.
+- **Query param:** `limit` — default `10`, clamped server-side to `[0, 50]` (a caller-supplied `0` or negative value returns zero pivots rather than being bumped up to `1`).
 - **Response:** a ranked list of `{"ioc_value": str, "ioc_type": str, "relationship": str, "confidence": number (0-100), "corroborating_providers": int, "provenance": str, "relevance": "high"|"medium"|"low"}`, sorted by corroborating-provider count first, then confidence.
 - **Errors:** `404` `"Lookup not found"`.
 - **Example:**
@@ -724,7 +752,7 @@ curl -X POST http://localhost:8000/api/v1/cases \
 - **Purpose:** Attach an IOC to a case, optionally linking it to an existing lookup.
 - **Request body:** `{"ioc_value": "str", "ioc_type": "str", "lookup_id": "str | null"}`
 - **Response (`201`):** the full updated case object.
-- **Errors:** `404` `"Case not found"`. **Known gap:** supplying a `lookup_id` that isn't a syntactically valid UUID raises an unhandled `ValueError` (an uncaught server error, not a clean `422`) — a real, currently-existing rough edge worth knowing about if you're calling this endpoint programmatically; always send either a real UUID string or `null`.
+- **Errors:** `404` `"Case not found"`; standard `422` if `lookup_id` is supplied but isn't a syntactically valid UUID (validated by the request schema directly — `lookup_id` is typed `Optional[uuid.UUID]`, the same automatic validation every path-param UUID in this API already gets).
 
 ### `DELETE /api/v1/cases/{case_id}/iocs/{ioc_id}`
 
@@ -748,7 +776,7 @@ The API surface behind the "Manage Providers" screen: configuring and activating
 
 ### `GET /api/v1/runtime/ai-providers`
 
-- **Permission:** `provider:manage` (admin only)
+- **Permission:** `lookup:read` (admin, analyst, viewer) — deliberately gated on `lookup:read`, not `provider:manage`: ANALYST (and VIEWER) hold `lookup:read` but not `provider:manage`, and ANALYST needs this to populate the AI-backend picker dropdown for the "reanalyze with a different backend" feature. Every route in this router that actually writes provider config still requires `provider:manage`; only this read is looser.
 - **Purpose:** List every configured AI-backend row — persisted configuration, masked credentials, active/last-test status.
 - **Response:** a list of provider-config rows (masked credential fields, never raw secrets).
 
@@ -778,7 +806,7 @@ curl -X POST http://localhost:8000/api/v1/runtime/ai-providers/anthropic \
 
 ### `GET /api/v1/runtime/ai-active`
 
-- **Permission:** `lookup:read` (admin, analyst, viewer) — deliberately looser than every other endpoint in this router, since read-only callers (e.g. the home page's AI quick-switch widget) don't need `provider:manage` just to *display* the current backend.
+- **Permission:** `lookup:read` (admin, analyst, viewer) — like `GET /ai-providers` above, deliberately looser than the write-capable endpoints in this router, since read-only callers (e.g. the home page's AI quick-switch widget) don't need `provider:manage` just to *display* the current backend.
 - **Response:** `{"backend": str | null, "model_id": str | null}` — both `null` if nothing has ever been configured.
 
 ### `POST /api/v1/runtime/ai-providers/{backend}/record-test`
@@ -900,7 +928,7 @@ curl -X PATCH http://localhost:8000/api/v1/admin/users/<user_id> \
 - **Permission:** `user:manage` (admin only)
 - **Purpose:** Enable or disable a user account. A disabled account is rejected on its very next request, not merely at its token's natural expiry.
 - **Request body:** `{"is_active": bool}`
-- **Errors:** `409` (`LastAdminError`) if disabling this user would leave zero active admins; `404` if the user doesn't exist.
+- **Errors:** `409` (`LastAdminError`) if disabling this user would leave zero active admins; `400` (`SelfDeactivationError`) `"Administrators cannot disable their own account. Ask another administrator to do it."` if an admin tries to disable their own account (mirrors `/users/{user_id}`'s self-role-change guard); `404` if the user doesn't exist.
 - **Example:**
 
 ```bash
@@ -987,6 +1015,16 @@ curl -X POST http://localhost:8000/api/v1/security-assessment/b3c1.../run \
   }'
 ```
 
+### `POST /api/v1/security-assessment/runs/{run_id}/cancel`
+
+- **Full URL:** `http://localhost:8000/api/v1/security-assessment/runs/{run_id}/cancel`
+- **Permission:** `security_assessment:create` (admin, analyst) — the same permission required to start a run, rather than a per-resource ownership check: any analyst/admin can cancel any in-flight scan, not only their own, matching this app's team-shared model for investigations.
+- **Purpose:** Cancel a `pending`/`running` scan.
+- **Path param:** `run_id` (UUID)
+- **Response:** `{"run_id": str, "status": "cancelling"}`
+- **Errors:** `404` `"No such security assessment run: <id>"`; `400` `"Run is already <status> -- only a pending or running scan can be cancelled."`
+- **Example:** `curl -X POST http://localhost:8000/api/v1/security-assessment/runs/<run_id>/cancel -H "Authorization: Bearer <REDACTED>"`
+
 ### `GET /api/v1/security-assessment/{lookup_id}/runs`
 
 - **Permission:** `security_assessment:read` (admin, analyst, viewer)
@@ -1005,7 +1043,7 @@ curl -X POST http://localhost:8000/api/v1/security-assessment/b3c1.../run \
 
 ## 13. 📊 Executive Dashboard — `/api/v1/dashboard`
 
-Both endpoints back the Executive Dashboard. Both are read-only aggregations over already-persisted data — neither triggers a new provider call, and neither persists anything.
+All four endpoints back the Executive Dashboard. All are read-only aggregations over already-persisted data — none triggers a new provider call, and none persists anything.
 
 ### `GET /api/v1/dashboard/kpis`
 
@@ -1032,6 +1070,24 @@ curl http://localhost:8000/api/v1/dashboard/kpis \
   "ai_success_rate": 98.1
 }
 ```
+
+### `GET /api/v1/dashboard/activity-timeline`
+
+- **Full URL:** `http://localhost:8000/api/v1/dashboard/activity-timeline?hours=24`
+- **Permission:** `dashboard:read` (admin, analyst, viewer)
+- **Purpose:** Hourly-bucketed investigation activity for the dashboard's activity timeline widget. Every hour in the requested window is present in the response, including hours with zero investigations — a real quiet hour renders as a real zero, never a gap.
+- **Query param:** `hours` — default `24`; must be `1`–`168` inclusive, rejected with a standard `422` if outside that range (unlike the silently-clamped `limit` params described in "Conventions" above).
+- **Response:** `{"buckets": [{"bucket": "2025-01-01T00:00:00+00:00", "total": int, "high_risk": int, "suspicious": int, "failed": int}, ...]}` — `high_risk`/`suspicious`/`failed` are subsets of `total`, not additional categories.
+- **Errors:** none explicit beyond the standard `422` for an out-of-range `hours`.
+
+### `GET /api/v1/dashboard/geo-activity`
+
+- **Full URL:** `http://localhost:8000/api/v1/dashboard/geo-activity?hours=720`
+- **Permission:** `dashboard:read` (admin, analyst, viewer)
+- **Purpose:** Country breakdown of completed IOC lookups for the Executive Dashboard's 3D threat globe. A country is never fabricated — only a lookup with a clean, resolvable 2-letter country code from its own persisted provider results is counted against a country; everything else counts toward `unmapped_count`.
+- **Query param:** `hours` — default `720`; must be `1`–`4320` inclusive, rejected with a standard `422` if outside that range.
+- **Response:** `{"countries": [{"country_code": "US", "total": int, "high_risk": int, "suspicious": int}, ...], "unmapped_count": int}`
+- **Errors:** none explicit beyond the standard `422` for an out-of-range `hours`.
 
 ### `GET /api/v1/dashboard/executive-summary`
 
@@ -1088,8 +1144,8 @@ Both `/health` and `/network-info` share the same trust model: unauthenticated, 
 
 | Router | Endpoints | Permission strings used |
 |---|---|---|
-| `auth.py` | 4 | none (public) / implicit valid-token check on `/me` |
-| `lookup.py` | 6 | `lookup:create`, `lookup:read`, `lookup:export` |
+| `auth.py` | 5 | none (public) / implicit valid-token check on `/me` and `/logout` |
+| `lookup.py` | 7 | `lookup:create`, `lookup:read`, `lookup:export` |
 | `providers.py` | 2 | `dashboard:read`, `provider:manage` |
 | `ai_config.py` | 2 | `provider:manage` |
 | `analysis.py` | 10 | `evidence:read`, `analysis:generate`, `copilot:query` |
@@ -1099,8 +1155,10 @@ Both `/health` and `/network-info` share the same trust model: unauthenticated, 
 | `cases.py` | 8 | `case:read`, `case:create`, `case:write`, `case:close` |
 | `runtime.py` | 10 | `provider:manage`, `lookup:read`, `audit:read` |
 | `admin.py` | 7 | `user:manage` |
-| `security_assessment.py` | 5 | `security_assessment:read`, `security_assessment:create` |
-| `dashboard.py` | 2 | `dashboard:read` |
-| **Total** | **64** | **18 distinct permission strings** |
+| `security_assessment.py` | 6 | `security_assessment:read`, `security_assessment:create` |
+| `dashboard.py` | 4 | `dashboard:read` |
+| **Total** | **69** | **18 distinct permission strings** |
+
+Not counted above: `pentest.py` (18 endpoints) and `pentest_exploit.py` (6 endpoints), mounted at `/api/v1/pentest` and gated by five further permission strings (`pentest:read`, `pentest:create`, `pentest:validate`, `pentest:admin`, `pentest:exploit`) — out of scope for this document; see the note under "Endpoint Reference" above.
 
 Related reference material, covered in full elsewhere in this documentation set rather than repeated here: the exact deterministic-scoring formula behind `risk.overall_risk_score`/`confidence_score`/`malicious_probability` (Threat Scoring reference), the complete RBAC/credential-security threat model (Security Architecture chapter), and the Security Assessment Toolkit's tool-by-tool internals (Security Assessment Toolkit chapter).

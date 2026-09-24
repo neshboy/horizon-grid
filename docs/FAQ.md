@@ -65,11 +65,13 @@ GitHub's Search API uses 403 for rate limiting, not only for auth failures.
 Any other HTTP error status becomes `ERROR`.
 
 No connector self-throttles proactively — there is no per-provider
-`RateLimiter` instance anywhere in `app/providers/*.py`. The orchestrator's
-Redis-backed `RateLimiter` class is used for exactly one thing platform-wide:
-per-user lookup creation (`lookup_create:<user_id>`, 10 calls / 60s by
-default), not per-provider throttling. The OSINT crawler is the exception —
-see Q13.
+`RateLimiter` instance anywhere in `app/providers/*.py`. The Redis-backed
+`RateLimiter` class (`app/core/cache.py`) isn't provider-specific at all: it
+backs per-user lookup creation (`lookup_create:<user_id>`, 10 calls / 60s by
+default, in `app/api/routes/lookup.py`) and, separately, per-account login
+throttling and per-email registration throttling in `app/api/routes/auth.py`
+(10 attempts / 60s by default each) — none of it is per-provider throttling.
+The OSINT crawler is the exception — see Q13.
 
 ## 4. What's the difference between `overall_risk_score`, `confidence_score`, and `malicious_probability`?
 
@@ -103,11 +105,12 @@ literal is the anti-hallucination control working as intended, not a bug.
 ## 6. Why did the final assessment "fail" / come back as a generic fallback?
 
 `generate_final_assessment()` returns a static fallback `FinalAssessment`
-(all narrative fields state generation failed, `overall_risk_score=0`,
-`final_verdict="unknown"`) whenever the underlying call raises — and that
-includes **schema validation failures**, not just network errors. The most
-common cause is `_verdict_must_agree_with_risk`, a model validator that
-enforces:
+(all narrative fields state generation failed, `final_verdict="unknown"`,
+with `overall_risk_score`/`confidence_score`/`malicious_probability`/
+`severity` taken from the deterministic scoring engine rather than zeroed
+out) whenever both of its attempts raise — and that includes **schema
+validation failures**, not just network errors. The most common cause is
+`_verdict_must_agree_with_risk`, a model validator that enforces:
 
 - `final_verdict` in `{malicious, highly_malicious}` requires
   `malicious_probability >= 30`
@@ -115,12 +118,16 @@ enforces:
   `malicious_probability <= 50`
 
 If the model's stated verdict contradicts its own probability number, the
-`ValueError` raised here **is** the enforcement mechanism — there is no
-repair/retry step. `app/ai/schemas.py`'s module docstring claims the AI
-service "retries once with the validation error appended to the prompt," but
-**no such retry logic exists** in `service.py`, `analysis_service.py`, or
-`hunting_service.py` — every one of them goes straight from a validation or
-call exception to a static fallback on the first failure.
+`ValueError` raised here triggers exactly **one** retry — `service.py`'s
+`generate_final_assessment()` resends the identical prompt and gives up to
+the static fallback above only if the second attempt also fails.
+`app/ai/schemas.py`'s module docstring claims the AI service "retries once
+with the validation error appended to the prompt" — the retry-once part now
+holds for this call, but the validation error text is never actually
+appended to the retried prompt, and neither `summarize_provider()` (same
+file), `analysis_service.py`, nor `hunting_service.py` retry at all — they
+go straight from a validation or call exception to a static fallback on the
+first failure.
 
 ## 7. Why is a MITRE ATT&CK mapping marked ungrounded (or why don't ungrounded ones get removed)?
 
@@ -251,54 +258,53 @@ doesn't look identical to "genuinely nothing found" in the UI. In practice
 this path can only be triggered by GitHub or Reddit throttling, since the
 other two sources never raise it.
 
-## 14. Why does the "Export PDF" / "Export CSV" button do nothing (or show "Export format not yet available")?
+## 14. Why does the "Export PDF" / "Export CSV" button show "Export format not yet available"?
 
-Because there is no server-side export endpoint. **NOT IMPLEMENTED.**
-`frontend/components/dashboard/ExportMenu.tsx` calls:
+For most users it shouldn't — `POST /api/v1/lookup/{lookup_id}/export?format=pdf`
+and `?format=csv` are real, implemented routes (`export_lookup()` in
+`backend/app/api/routes/lookup.py`) that render the investigation
+server-side (ReportLab for PDF, `csv.writer` for CSV) and stream it back as
+a file attachment. `frontend/components/dashboard/ExportMenu.tsx`'s
+"Export format not yet available" message only fires on an actual HTTP 404
+or network failure, which isn't the normal path anymore.
 
-```
-POST /api/v1/lookup/{lookup_id}/export?format=pdf
-POST /api/v1/lookup/{lookup_id}/export?format=csv
-```
+The one case where it still bites: the route is gated on the dedicated
+`lookup:export` permission (`ROLE_PERMISSIONS` in
+`backend/app/models/user.py`, granted to `admin` and `analyst`, not
+`viewer`) rather than `lookup:read`. A `viewer` account gets an HTTP 403 —
+surfaced by the frontend as "Export failed with status 403.", not the
+"not yet available" message — instead of a file.
 
-...but no `/export` route exists anywhere under `backend/app/api/routes/`.
-The request 404s, and the frontend explicitly catches that:
-
-```ts
-if (res.status === 404) {
-  showMessage("Export format not yet available.");
-  return;
-}
-```
-
-Client-side **JSON** and **Markdown** export both work today — they build
-the file entirely in the browser from the already-fetched `FinalAssessment`
-object (`handleExportJson`, `buildMarkdown` in the same file) and never hit
-the network. Use those two if you need to get a result out of the platform
-right now.
-
-Relatedly: the `lookup:export` permission string exists in
-`ROLE_PERMISSIONS` (`backend/app/models/user.py`, granted to `admin` and
-`analyst`, not `viewer`) but is **never referenced by `require_permission()`
-anywhere** — there's no route to gate, so today it's a declared-but-unused
-permission. See [SECURITY.md](SECURITY.md#known-limitations).
+Client-side **JSON** and **Markdown** export still work exactly as before —
+they build the file entirely in the browser from the already-fetched
+`FinalAssessment` object (`handleExportJson`, `buildMarkdown` in the same
+file) and never hit the network.
 
 ## 15. Why does `GET /auth/me` show a blank name?
 
-**NOT IMPLEMENTED** (bug, not a config issue): the handler in
-`backend/app/api/routes/auth.py` hardcodes `full_name=""` in its response
-regardless of what's actually stored on the user record. The real
-`full_name` you registered with is in the database — `/me` just doesn't
-return it. See [SECURITY.md](SECURITY.md#known-limitations).
+It shouldn't anymore — this was a real bug, now fixed: the handler in
+`backend/app/api/routes/auth.py` returns `full_name=current.full_name`, and
+`get_current_user()` (`backend/app/auth/rbac.py`) populates that
+`full_name` from the actual user record. If `/me` still shows a blank name
+for a given account, the `full_name` stored for that user is genuinely
+empty (e.g. it was never set at registration), not something `/me` is
+failing to return.
 
 ## 16. Why can't I log out everywhere / revoke a stolen token?
 
-**NOT IMPLEMENTED.** `/auth/refresh` issues a new access/refresh token pair
-on every call, but there is no server-side token store or denylist. A
-refresh token stays valid until it naturally expires
-(`refresh_token_expire_days`, default 7 days) regardless of client-side
-logout, which only clears `localStorage`. There is no MFA, no password
-reset, and no email verification either — see [SECURITY.md](SECURITY.md).
+You can — `POST /auth/logout` bumps the user's `token_version` column, and
+both `get_current_user()` (`backend/app/auth/rbac.py`) and `/auth/refresh`
+(`backend/app/api/routes/auth.py`) reject any access/refresh token whose
+embedded `token_version` claim doesn't match the current value. The
+frontend's `logout()` (`frontend/lib/api.ts`) calls this endpoint before
+clearing `localStorage`, so logging out invalidates every access and
+refresh token already issued to that user immediately — it doesn't wait for
+`refresh_token_expire_days` (default 7 days) to run out. An administrator
+can trigger the same invalidation for another user via
+`POST /api/v1/admin/users/{id}/reset-password`, which also bumps
+`token_version`. There is still no *self-service* password reset (a
+locked-out user needs an administrator), no MFA, and no email verification
+— see [SECURITY.md](SECURITY.md).
 
 ## 17. Why is the relationship graph missing the labels I expected on nodes?
 
@@ -326,29 +332,43 @@ by the correlation/evidence subsystem). See
 
 ## 19. Why does switching `AI_BACKEND` change nothing until I restart?
 
-`_get_ai_client()` (`app/ai/service.py`) reads `settings.ai_backend` and
-picks one of four client modules — `ollama` (default/fallback for any
-unrecognized value), `anthropic`, `gemini`, `bedrock` — each of which
-computes its own `is_configured` flag once from settings at construction
-time (e.g. Anthropic: `bool(settings.anthropic_api_key)`; Ollama:
+Editing `AI_BACKEND` in `.env` and restarting doesn't actually change
+anything once this install has booted at least once: `_get_ai_client()`
+(`app/ai/service.py`) resolves the *active* backend from the
+runtime-configured provider table (`app/core/runtime_config.py`) —
+`settings.ai_backend` is only consulted as a fallback if no runtime config
+row has ever been seeded (which happens automatically on first boot). Use
+the AI Providers panel (or its underlying `set_active_ai_backend()`) to
+change the active backend instead — that takes effect on the very next
+call, with no restart. Whichever backend is active, `_get_ai_client()`
+builds one of **eleven** client modules — `ollama` (default/fallback for
+any unrecognized value), `anthropic`, `bedrock`, `deepseek`, `gemini`,
+`groq`, `kimi`, `mistral`, `openai`, `openrouter`, `xai` — each of which
+computes its own `is_configured` flag from whichever credentials it was
+built with (e.g. Anthropic: `bool(api_key)`; Ollama:
 `bool(base_url and model)`, true by default since both have non-empty
 defaults). If the selected backend's `is_configured` is `False`, the request
 raises `RuntimeError("AI backend '<name>' is not configured...")` rather
-than silently falling back to another backend. Changing `.env` requires a
-backend restart to take effect, same as provider API keys (Q1).
+than silently falling back to another backend.
 
 ## 20. Why did an AI call fail instead of retrying?
 
-Only `bedrock_client.py` has any retry policy, and it's not custom code —
-it's `botocore`'s `BotoConfig(retries={"max_attempts": 3, "mode":
-"adaptive"})`, applied at client construction. `ollama_client.py`,
-`anthropic_client.py`, and `gemini_client.py` each make **exactly one** HTTP
-attempt in `call_claude_json()` and raise a `RuntimeError` on any failure —
-connection error, timeout, non-2xx status, empty/non-JSON content, or a
-parsed-but-wrong-shape response. There is no retry-with-error-appended loop
-anywhere despite a docstring in `app/ai/schemas.py` claiming one exists (see
-Q6). Every caller (`service.py`, `analysis_service.py`, `hunting_service.py`)
-catches the resulting exception and returns a static, clearly-labeled
+Only `bedrock_client.py` has any transport-level retry policy, and it's not
+custom code — it's `botocore`'s `BotoConfig(retries={"max_attempts": 3,
+"mode": "adaptive"})`, applied at client construction. The other ten
+clients (`ollama_client.py`, `anthropic_client.py`, `gemini_client.py`,
+`groq_client.py`, `openai_client.py`, `kimi_client.py`, `deepseek_client.py`,
+`xai_client.py`, `mistral_client.py`, `openrouter_client.py`) each make
+**exactly one** HTTP attempt in `call_claude_json()` and raise a
+`RuntimeError` on any failure — connection error, timeout, non-2xx status,
+empty/non-JSON content, or a parsed-but-wrong-shape response.
+`generate_final_assessment()` (`service.py`) is the one exception at the
+application layer: it retries once, but only on a schema `ValidationError`
+(not on a `RuntimeError` from a failed call), resending the identical
+prompt rather than appending the validation error as the `app/ai/schemas.py`
+docstring describes (see Q6). `summarize_provider()` (same file),
+`analysis_service.py`, and `hunting_service.py` still catch the resulting
+exception on the first failure and return a static, clearly-labeled
 fallback object instead of surfacing a raw error to the UI.
 
 ---

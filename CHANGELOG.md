@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md` and, for the current release, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
+All notable changes to HORIZON GRID are documented here. Every entry reflects a real, tested change confirmed against the actual codebase at release time — not a planned or aspirational one. Full narrative detail and evidence for each entry lives in `documentation/DOCUMENTATION_SOURCE/standalone-changelog.md`, and, for the v0.2.3 mission-critical hardening pass specifically, `MISSION_CRITICAL_CERTIFICATION_REPORT.md`.
 
 ## [0.3.14] — 2026-09-15 — 3D threat globe, per-IP fly-to, and a global command palette
 

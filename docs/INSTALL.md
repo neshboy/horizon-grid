@@ -26,23 +26,25 @@ How to run HORIZON GRID locally with Docker Compose.
   final assessment degrade to "AI summarization unavailable" but the rest
   of the platform (provider fetch, correlation, dashboard) still works.
 - *Optional — alternative AI backends:* set `AI_BACKEND` to `bedrock`,
-  `gemini`, or `anthropic` in `.env` and fill in the matching credentials
-  (AWS IAM + Bedrock model access, a Gemini API key with quota, or an
-  Anthropic API key with credit, respectively) if you'd rather use a cloud
-  model than a local one.
+  `gemini`, `anthropic`, `groq`, `openai`, `kimi`, `deepseek`, `xai`,
+  `mistral`, or `openrouter` in `.env` and fill in the matching credentials
+  (AWS IAM + Bedrock model access, or an API key with quota/credit for the
+  matching cloud provider) if you'd rather use a cloud model than a local
+  one.
 - *Optional:* free-tier API keys for the real (non-stub) provider
-  connectors — VirusTotal, AbuseIPDB, AlienVault OTX, NVD, and a single
-  abuse.ch Auth-Key shared by URLhaus/ThreatFox/MalwareBazaar. The platform
-  runs and streams results without any of these; providers without a key
-  simply report `not_configured` (see Troubleshooting).
+  connectors — VirusTotal, AbuseIPDB, AlienVault OTX, NVD, urlscan.io,
+  Google Safe Browsing, and a single abuse.ch Auth-Key shared by
+  URLhaus/ThreatFox/MalwareBazaar. The platform runs and streams results
+  without any of these; providers without a key simply report
+  `not_configured` (see Troubleshooting).
 
 ## Steps
 
 1. **Clone the repository.**
 
    ```bash
-   git clone <repo-url> ioc-intel-platform
-   cd ioc-intel-platform
+   git clone <repo-url> horizon-grid
+   cd horizon-grid
    ```
 
 2. **Create your `.env` file.**
@@ -61,7 +63,8 @@ How to run HORIZON GRID locally with Docker Compose.
      `OTX_API_KEY`, `NVD_API_KEY`, `ABUSECH_AUTH_KEY`, etc.). Leave the rest
      blank — see Troubleshooting for what happens when a key is missing.
    - If you'd rather use a cloud AI backend, set `AI_BACKEND` to `bedrock`,
-     `gemini`, or `anthropic` and fill in the matching credentials.
+     `gemini`, `anthropic`, `groq`, `openai`, `kimi`, `deepseek`, `xai`,
+     `mistral`, or `openrouter` and fill in the matching credentials.
 
 4. **Build and start everything.**
 
@@ -76,15 +79,17 @@ How to run HORIZON GRID locally with Docker Compose.
 5. **Migrations run automatically.** The `backend` service's command is:
 
    ```
-   sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+   sh -c "msfrpcd -f -P \"$MSF_RPC_PASSWORD\" -S -a 127.0.0.1 -p 55553 -U msf &
+          alembic upgrade head &&
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
    ```
 
    so the database schema is brought up to date every time the backend
    container starts — there is no separate migration step to run by hand.
 
 6. **First-run registration.** No seed admin user exists. Register the
-   first user via the API (or once the frontend exposes a registration
-   form):
+   first user via the API (or the frontend's registration form at
+   `/register`):
 
    ```bash
    curl -X POST http://localhost:8000/api/v1/auth/register \

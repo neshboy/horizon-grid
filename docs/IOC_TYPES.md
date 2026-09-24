@@ -13,7 +13,7 @@ how detection fits into the lookup pipeline.
 
 `detect_ioc_type(raw: str) -> IOCType` (`backend/app/ioc/detector.py:61`) is the **only** place IOC
 type is inferred from a raw string. There is no client-side detection: the frontend
-(`frontend/app/lookup/new/page.tsx:112`) simply displays the `ioc_type` the backend already
+(`frontend/app/lookup/new/page.tsx:259`) simply displays the `ioc_type` the backend already
 resolved via the SSE `detected` event.
 
 ```mermaid
@@ -55,8 +55,8 @@ if ioc_type == IOCType.UNKNOWN:
 
 | Endpoint | File | Permission | Request field |
 |---|---|---|---|
-| `POST /lookup/stream` | `backend/app/api/routes/lookup.py:45-74` | `lookup:create` | `LookupCreateRequest.ioc_type_hint: Optional[IOCType]` (`backend/app/schemas/lookup.py:11`) |
-| `POST /basket` | `backend/app/api/routes/basket.py:45-54` | `basket:manage` | `BasketAddRequest.ioc_type_hint: Optional[IOCType]` (`backend/app/schemas/basket.py:10`) |
+| `POST /lookup/stream` | `backend/app/api/routes/lookup.py:45-74` | `lookup:create` | `LookupCreateRequest.ioc_type_hint: Optional[IOCType]` (`backend/app/schemas/lookup.py:17`) |
+| `POST /basket` | `backend/app/api/routes/basket.py:45-54` | `basket:manage` | `BasketAddRequest.ioc_type_hint: Optional[IOCType]` (`backend/app/schemas/basket.py:16`) |
 
 `ioc_type_hint` is a generic enum override -- pass any `IOCType` value to force classification
 (e.g. to disambiguate MD5 vs. JA3, or to force HOSTNAME instead of DOMAIN). There is **no**
@@ -154,8 +154,8 @@ explicitly), a safe example, and providers whose `supported_types` include it.
   domain from a hostname with a subdomain; both collapse to `DOMAIN` by design (comment,
   `detector.py:144-147`).
 - **Example:** `example.com`
-- **Providers:** OTX, ThreatFox, URLhaus, VirusTotal, WHOIS/RDAP, crt.sh, Spamhaus (stub), Internet
-  Intelligence Collector.
+- **Providers:** OTX, ThreatFox, URLhaus, VirusTotal, WHOIS/RDAP, crt.sh, urlscan.io, Google Safe
+  Browsing, Spamhaus (stub), Internet Intelligence Collector.
 
 ### URL
 
@@ -163,7 +163,8 @@ explicitly), a safe example, and providers whose `supported_types` include it.
 - **Detection:** step 4 -- checked immediately after quote-stripping and before every other regex,
   so URLs never get misclassified as domains/paths.
 - **Example:** `http://example.com/path`
-- **Providers:** ThreatFox, URLhaus, VirusTotal, PhishTank (stub).
+- **Providers:** ThreatFox, URLhaus, VirusTotal, OTX, urlscan.io, Google Safe Browsing, PhishTank
+  (stub).
 
 ### HOSTNAME -- NOT IMPLEMENTED via detector
 
@@ -172,7 +173,7 @@ explicitly), a safe example, and providers whose `supported_types` include it.
   dotted string resolves to `DOMAIN` (see DOMAIN above). `HOSTNAME` is only reachable by passing
   `ioc_type_hint=hostname` explicitly.
 - **Used elsewhere:** OTX provider maps it to OTX's own `"hostname"` indicator type
-  (`backend/app/providers/otx.py:20,29,141`) and it is included in `NETWORK_TYPES`
+  (`backend/app/providers/otx.py:21,30,143`) and it is included in `NETWORK_TYPES`
   (`types.py:44-53`) for correlation-graph seeding.
 - **Example:** `internal-host.example.com` (only usable via explicit hint).
 - **Providers:** OTX (accepts it if hinted).
@@ -215,7 +216,7 @@ explicitly), a safe example, and providers whose `supported_types` include it.
 ### TLS_CERTIFICATE -- NOT IMPLEMENTED via detector
 
 - **Detection:** never returned by `detect_ioc_type()`. Produced only as a correlation-graph edge
-  type (`backend/app/correlation/engine.py:63`) when crt.sh returns certificate data.
+  type (`backend/app/correlation/engine.py:74`) when crt.sh returns certificate data.
 - **Example:** n/a (not a user-submittable classification without a hint).
 - **Providers:** crt.sh declares `TLS_CERTIFICATE` in `supported_types` alongside `DOMAIN`
   (`backend/app/providers/crtsh.py:30`).
@@ -272,9 +273,9 @@ explicitly), a safe example, and providers whose `supported_types` include it.
   malware families, threat actors, or campaigns are lexically indistinguishable from each other and
   from process/mutex/service names, so the detector's single-token fallback (step 27) deliberately
   punts to `UNKNOWN` rather than guessing (comment, `detector.py:151-155`).
-- **Produced elsewhere:** correlation-graph edges (`backend/app/correlation/engine.py:65-67`) and
+- **Produced elsewhere:** correlation-graph edges (`backend/app/correlation/engine.py:76-78`) and
   the crawler's supported-search-type allowlist (`backend/app/crawler/collector.py:39-41`,
-  `backend/app/workers/tasks.py:41-43`).
+  `backend/app/workers/tasks.py:42-44`).
 - **Example:** `Emotet` (malware family), `APT29` (threat actor), `SolarWinds Compromise`
   (campaign) -- all only usable via `ioc_type_hint`.
 - **Providers:** Internet Intelligence Collector (`internet_intelligence`) declares all three in

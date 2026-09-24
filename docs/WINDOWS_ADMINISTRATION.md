@@ -14,19 +14,22 @@ permissions, and being a member of the Administrators group is not, by
 itself, enough to read an Administrators-ACL'd file from a normally-launched
 process. Windows UAC hands a normal (non-elevated) process a *filtered*
 token even for an admin account, and that filtered token cannot satisfy the
-ACL. Every shortcut here calls `Assert-Elevated` first specifically to
+ACL. Every shortcut here elevates itself first specifically to
 handle this correctly rather than failing with a confusing "not configured"
-message.
+message — **Open Platform** is the one exception: it skips elevation
+entirely when the platform is already running and reachable, since opening
+a browser tab to it doesn't need admin rights.
 
 | Shortcut | What it does |
 |---|---|
 | **Open Platform** | Opens the web interface in your default browser. |
-| **Configuration** | Re-runs the setup wizard against your existing install — change the AI backend, provider keys, ports, or reset the administrator password. Pre-fills every field with your current values. |
+| **Configuration** | Re-runs the setup wizard against your existing install — change the AI backend, provider keys, or ports. Pre-fills every field with your current values. |
 | **Start Platform** | Starts all Docker containers (`docker compose up -d`) and waits for the backend to report healthy. |
 | **Stop Platform** | Stops all containers without deleting anything — your data stays in the Docker volumes untouched. |
 | **Restart Platform** | Stop + Start in one step — the first thing to try if something seems stuck. |
 | **Service Status** | Shows container status, backend/frontend health, and whether Docker Desktop itself is running. Opens a console window and stays open so you can read it. |
 | **Backup Database Now** | Takes an immediate `pg_dump` snapshot into the backups folder (see below). Runs automatically before every upgrade too — this is for backing up on demand, e.g. right before you try something risky. |
+| **Restore Database** | Replaces the current database with a backup file — destructive, asks for a typed confirmation first (see below). |
 | **Diagnostics** | Builds a redacted `.zip` on your Desktop with container logs, status, and system info — secrets are stripped before anything is written. Use this if you need to share details for troubleshooting. |
 | **Documentation** | Opens the docs folder (this file and everything else under `docs/`). |
 | **Uninstall** | Standard Windows uninstaller — see [WINDOWS_INSTALLATION.md](WINDOWS_INSTALLATION.md#uninstalling). |
@@ -80,7 +83,7 @@ settings on the current version. Either way:
 
 1. A database backup is taken automatically first.
 2. Your configuration is pre-loaded — nothing is reset to defaults.
-3. `docker compose up --build` picks up any code/image changes.
+3. `docker compose up -d --build` picks up any code/image changes.
 4. Your cases, investigations, watchlists, and notes are all untouched —
    they live in Docker volumes the upgrade path never deletes.
 

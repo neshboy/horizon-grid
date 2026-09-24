@@ -12,7 +12,7 @@
 - [v0.2.1 — Port scanning: cancellation added](#v021---port-scanning-cancellation-added)
 - [What's new in v0.2.0](#-whats-new-in-v020)
 - [Upgrading from a previous install](#-upgrading-from-a-previous-install)
-- [Known limitations](#-known-limitations-current-as-of-v038----unchanged-since-v023-through-every-later-release-in-this-document-including-the-pentest-suite-and-the-v031v038-wizardbackend-fixes-none-of-which-touched-anything-this-list-covers)
+- [Known limitations](#-known-limitations-current-as-of-v0314----unchanged-since-v023-through-every-later-release-in-this-document-including-the-pentest-suite-and-the-v031v038-wizardbackend-fixes-none-of-which-touched-anything-this-list-covers)
 - [Verdict](#-verdict)
 
 ## v0.3.8 — 🤖 DeepSeek backend fix
@@ -102,17 +102,16 @@ HORIZON GRID is the renamed, significantly extended release of this platform (pr
 
 Re-running the installer on an existing install preserves your configuration, credentials, and all investigation/case/watchlist data — nothing about this release requires starting over. Internal identifiers (data folder location, database name) are unchanged from before the rename specifically so an upgrade is safe.
 
-## ⚠ Known limitations (current, as of v0.3.8 -- unchanged since v0.2.3 through every later release in this document, including the Pentest Suite and the v0.3.1–v0.3.8 wizard/backend fixes, none of which touched anything this list covers)
+## ⚠ Known limitations (current, as of v0.3.14 -- unchanged since v0.2.3 through every later release in this document, including the Pentest Suite and the v0.3.1–v0.3.8 wizard/backend fixes, none of which touched anything this list covers)
 
 - No automated host-disk-space alerting, and no retention/cleanup job for ever-growing investigation tables.
 - No off-host/off-site backup copy option — backups are local-disk-only, which does not protect a genuinely remote site against the host/disk itself failing.
-- A narrow DNS-rebinding TOCTOU window remains on the SSRF check (validates a resolution snapshot; the real outbound call re-resolves independently afterward).
 - Neo4j and OpenSearch remain fully provisioned (~1.5–2 GB RAM) with zero actual application traffic — a real resource cost with no current benefit, flagged as an open product question rather than resolved unilaterally.
-- No frontend test infrastructure exists (`vitest` is wired into `package.json`, but zero test files exist anywhere in the tree).
+- Frontend test coverage is still limited (`vitest` runs a handful of Node-environment regression tests for pure `lib/` functions plus one static page-wiring check; no jsdom/React-rendering component tests exist yet).
 - A live, elevated, end-to-end Windows installer run was not performed for v0.2.3 (requires an interactive UAC prompt); the installer's packaged contents were verified directly instead.
 - If you configure a local AI model (Ollama) as your active backend, the AI-generated executive summary can be slower under heavy *concurrent* load, since a single local model processes generation requests one at a time. This does not affect the accuracy of any number shown, and does not affect the Dashboard's KPI tiles or the Provider Health page, both plain database reads independent of AI backend choice.
 - A minor, disclosed hardening item remains in the scoring engine's handling of a malformed numeric provider value (NaN/Infinity) — not exploitable by any currently-integrated provider, tracked as a future improvement.
 
 ## 🏁 Verdict
 
-**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (established as of v0.2.3, unchanged through every release since, up to and including the current v0.3.8). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict; none of the v0.2.4 branding pass, the v0.2.5 UI fixes, the v0.3.0 Pentest Suite addition, or the v0.3.1–v0.3.8 wizard/backend fixes touched anything this verdict covers.
+**MISSION-CRITICAL READY WITH DOCUMENTED LIMITATIONS** (established as of v0.2.3, unchanged through every release since, up to and including the current v0.3.14). See `MISSION_CRITICAL_CERTIFICATION_REPORT.md` for the full evidence behind this verdict; none of the v0.2.4 branding pass, the v0.2.5 UI fixes, the v0.3.0 Pentest Suite addition, or the v0.3.1–v0.3.8 wizard/backend fixes touched anything this verdict covers.

@@ -32,19 +32,19 @@ ioc-intel-platform/
 
 | Directory | Contents |
 |---|---|
-| `api/routes/` | FastAPI routers: `analysis.py`, `auth.py`, `basket.py`, `cases.py`, `hunting.py`, `lookup.py`, `pivot.py`, `providers.py`. `api/routes/__init__.py` is empty — `main.py` imports each router module directly. |
-| `models/` | SQLAlchemy models: `base.py` (mixins), `user.py`, `lookup.py`, `evidence.py`, `basket.py`, `case.py`. `models/__init__.py` imports every module so `Base.metadata` is fully populated for Alembic. |
-| `schemas/` | Pydantic request/response schemas for the routes: `auth.py`, `basket.py`, `case.py`, `lookup.py`. |
+| `api/routes/` | FastAPI routers: `admin.py`, `ai_config.py`, `analysis.py`, `auth.py`, `basket.py`, `cases.py`, `dashboard.py`, `hunting.py`, `lookup.py`, `pentest.py`, `pentest_exploit.py`, `pivot.py`, `providers.py`, `runtime.py`, `security_assessment.py`. `api/routes/__init__.py` is empty — `main.py` imports each router module directly. |
+| `models/` | SQLAlchemy models: `base.py` (mixins), `user.py`, `lookup.py`, `evidence.py`, `basket.py`, `case.py`, `runtime_config.py`, `security_assessment.py`, `pentest.py`. `models/__init__.py` imports every module so `Base.metadata` is fully populated for Alembic. |
+| `schemas/` | Pydantic request/response schemas for the routes: `admin.py`, `auth.py`, `basket.py`, `case.py`, `lookup.py`, `pentest.py`, `security_assessment.py`. |
 | `providers/` | One module per intelligence connector, `base.py` (the `BaseProvider` contract), `orchestrator.py` (fan-out/cache/retry), `registry.py` (the single list of registered providers), `stubs/` (connectors gated behind API keys the reference deployment doesn't have configured). |
-| `ai/` | AI backend abstraction: `service.py` (core per-provider + final-assessment prompting), `analysis_service.py` (WHY/Challenge/Copilot/etc.), `hunting_service.py` (hunting queries/detection rules), `schemas.py` / `analysis_schemas.py` (Pydantic output contracts), `schema_utils.py`, and one thin client per backend: `ollama_client.py`, `bedrock_client.py`, `gemini_client.py`, `anthropic_client.py`. |
+| `ai/` | AI backend abstraction: `service.py` (core per-provider + final-assessment prompting), `analysis_service.py` (WHY/Challenge/Copilot/etc.), `hunting_service.py` (hunting queries/detection rules), `schemas.py` / `analysis_schemas.py` (Pydantic output contracts), `schema_utils.py`, and one thin client per backend (11 total): `ollama_client.py`, `anthropic_client.py`, `gemini_client.py`, `bedrock_client.py`, `groq_client.py`, `openai_client.py`, `kimi_client.py`, `deepseek_client.py`, `xai_client.py`, `mistral_client.py`, `openrouter_client.py`. |
 | `correlation/` | `engine.py` — pure function (`correlate`) turning a batch of `ProviderResult`s into graph nodes/edges. No I/O. |
 | `evidence/` | `builder.py` (deterministic `EvidenceItem` extraction from provider data + correlation edges, no AI), `loaders.py` (reconstructs in-memory graph/evidence structures from persisted rows for non-streaming routes), `pivot.py` (pure pivot-ranking logic behind `GET /lookup/{id}/pivots`). |
 | `crawler/` | The OSINT crawler wrapped as a `BaseProvider` (`collector.py` → `internet_intelligence_provider`), plus `sources/` (`github.py`, `reddit.py`, `rss_news.py`, `pastebin_search.py`, `rate_limit.py`, `errors.py`). |
-| `ioc/` | `types.py` (the canonical `IOCType` enum, 32 members, plus `HASH_TYPES`), `detector.py` (`detect_ioc_type`). |
+| `ioc/` | `types.py` (the canonical `IOCType` enum, 33 members, plus `HASH_TYPES`), `detector.py` (`detect_ioc_type`). |
 | `auth/` | `security.py` (password hashing, JWT), `rbac.py` (`get_current_user`, `require_permission` dependency factory). |
 | `core/` | `config.py` (`Settings` / `get_settings()`), `db.py` (async engine/session), `cache.py` (Redis client, `RateLimiter`). |
 | `workers/` | `celery_app.py`, `tasks.py` — the hourly OSINT crawl (`run_osint_crawl`). Lookups themselves run in-process (SSE), not through Celery. |
-| `tests/` | `unit/` (9 files, no infra needed), `integration/` (3 files, 2 need Docker services). See [TESTING.md](TESTING.md). |
+| `tests/` | `unit/` (65 files, no infra needed), `integration/` (34 files, several need Docker services). See [TESTING.md](TESTING.md). |
 
 ---
 
@@ -74,9 +74,11 @@ This brings up (per `docker-compose.yml`): `postgres` (host port `5433` → cont
 [ARCHITECTURE.md](ARCHITECTURE.md)), `opensearch` (`9200` — also unused by app code), `backend`
 (`8000`), `celery_worker`, `celery_beat`, and `frontend` (`3000`).
 
-The `backend` container's start command runs migrations before serving:
+The `backend` container's start command starts the Metasploit RPC daemon (used by the pentest
+routes) in the background, then runs migrations before serving:
 
 ```bash
+msfrpcd -f -P "$MSF_RPC_PASSWORD" -S -a 127.0.0.1 -p 55553 -U msf &
 alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -94,7 +96,7 @@ docker compose up -d postgres redis
 
 Then run the backend directly from `backend/` with your own Python environment (see
 `backend/requirements.txt` for pinned versions: FastAPI 0.115.0, SQLAlchemy 2.0.35, asyncpg
-0.29.0, Alembic 1.13.2, etc.).
+0.30.0, Alembic 1.13.2, etc.).
 
 ### Database migrations
 
@@ -103,12 +105,13 @@ cd backend
 alembic upgrade head
 ```
 
-The migration history has exactly two revisions today (`backend/alembic/versions/`):
+The migration history has 16 revisions today (`backend/alembic/versions/`); the first and current
+HEAD are:
 
 | Order | Revision | Down-revision | Creates |
 |---|---|---|---|
 | 1 | `660d2aa3bc20` | `None` | `users`, `ioc_lookups`, `ai_summaries`, `correlation_edges`, `provider_results` |
-| 2 (HEAD) | `a6d3ad2bb63c` | `660d2aa3bc20` | `cases`, `basket_items`, `case_iocs`, `case_notes`, `case_reports`, `evidence_items` |
+| 16 (HEAD) | `b3f0587f2493` | `401e725fa85f` | `created_at` indexes on the timestamped tables |
 
 The engine URL comes from `Settings.database_url` (`backend/app/core/config.py`, default
 `postgresql+asyncpg://ioc:ioc@postgres:5432/ioc_intel`), read by `alembic/env.py` via
@@ -127,7 +130,7 @@ alembic upgrade head
 ### Running tests
 
 ```bash
-docker compose up -d postgres redis   # only needed for the two DB/Redis-backed integration tests
+docker compose up -d postgres redis   # only needed for the DB/Redis-backed integration tests
 cd backend
 pytest
 ```
@@ -245,8 +248,8 @@ Only `ProviderStatus.OK` results are cached in Redis (`orchestrator.py`), keyed 
 (default 3600s). You don't need to implement caching yourself.
 
 Full connector-by-connector detail (VirusTotal, AbuseIPDB, OTX, URLhaus, ThreatFox, MalwareBazaar,
-crt.sh, NVD, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, and the stub connectors Hybrid Analysis, Spamhaus,
-PhishTank, Censys): [PROVIDERS.md](PROVIDERS.md).
+crt.sh, NVD, CISA KEV, MITRE ATT&CK, WHOIS/RDAP, urlscan.io, Google Safe Browsing, and the stub
+connectors Hybrid Analysis, Spamhaus, PhishTank, Censys): [PROVIDERS.md](PROVIDERS.md).
 
 ---
 
@@ -293,13 +296,11 @@ representative example (path param + `Depends(get_db)` + `Depends(require_permis
 resolves `get_current_user` from the bearer JWT, then raises `403` with detail
 `"Role '{role}' lacks permission '{permission}'"` unless `permission` is in
 `ROLE_PERMISSIONS[user.role]` (`backend/app/models/user.py`). Reuse one of the existing permission
-strings (`lookup:create`, `lookup:read`, `evidence:read`, `analysis:generate`, `hunting:generate`,
-`copilot:query`, `basket:manage`, `case:create`, `case:read`, `case:write`, `case:close`) or define
-a new one and add it to `ROLE_PERMISSIONS` for the roles that should have it. Note:
-`lookup:export`, `provider:manage`, `user:manage`, and `audit:read` are defined in
-`ROLE_PERMISSIONS` but currently have **no route anywhere that checks them** — see
-[API_DOCUMENTATION.md](API_DOCUMENTATION.md) for the full permission matrix and which permissions
-are configured-but-unused.
+strings (`lookup:create`, `lookup:read`, `lookup:export`, `evidence:read`, `analysis:generate`,
+`hunting:generate`, `copilot:query`, `basket:manage`, `case:create`, `case:read`, `case:write`,
+`case:close`, `provider:manage`, `user:manage`, `audit:read`) or define a new one and add it to
+`ROLE_PERMISSIONS` for the roles that should have it — see
+[API_DOCUMENTATION.md](API_DOCUMENTATION.md) for the full permission matrix.
 
 Auth uses `HTTPBearer(auto_error=False)` rather than `OAuth2PasswordBearer`, deliberately, because
 `/auth/login` takes a JSON body, not an OAuth2 form-encoded grant.
@@ -316,7 +317,7 @@ app.include_router(your_feature.router, prefix=settings.api_v1_prefix)
 Every router is mounted with `prefix=settings.api_v1_prefix` (`/api/v1`), so
 `APIRouter(prefix="/your-feature")` becomes `GET /api/v1/your-feature`.
 
-Full endpoint-by-endpoint reference (all 8 routers, request/response shapes, status codes):
+Full endpoint-by-endpoint reference (all 15 routers, request/response shapes, status codes):
 [API_DOCUMENTATION.md](API_DOCUMENTATION.md).
 
 ---
@@ -326,8 +327,8 @@ Full endpoint-by-endpoint reference (all 8 routers, request/response shapes, sta
 - [ARCHITECTURE.md](ARCHITECTURE.md) — component diagram and end-to-end lookup flow.
 - [DATA_MODEL.md](DATA_MODEL.md) — full schema, ERD, migration history.
 - [PROVIDERS.md](PROVIDERS.md) — every connector's quirks, endpoints, and auth scheme.
-- [AI_ENGINE.md](AI_ENGINE.md) — the `AI_BACKEND` abstraction (Ollama/Bedrock/Gemini/Anthropic)
-  and grounding/anti-hallucination rules.
+- [AI_ENGINE.md](AI_ENGINE.md) — the `AI_BACKEND` abstraction (Ollama/Anthropic/Gemini/Bedrock/
+  Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter) and grounding/anti-hallucination rules.
 - [API_DOCUMENTATION.md](API_DOCUMENTATION.md) — full REST/SSE route reference.
 - [TESTING.md](TESTING.md) — test inventory, how to run it, Windows-specific gotchas.
 - [CONFIGURATION.md](CONFIGURATION.md) — every environment variable / `Settings` field.

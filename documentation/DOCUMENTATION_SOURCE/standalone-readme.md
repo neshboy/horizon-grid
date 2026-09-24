@@ -2,12 +2,12 @@
 
 **Every Signal. One Operational Picture.**
 
-![Version](https://img.shields.io/badge/version-0.3.8-brightgreen)
+![Version](https://img.shields.io/badge/version-0.3.14-brightgreen)
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)
 ![AI](https://img.shields.io/badge/AI-11%20backends%20incl.%20local%20Ollama-6E56CF)
 
-**Application Version:** 0.3.8
+**Application Version:** 0.3.14
 **Status:** Release Ready with Known Limitations — see the Final Release QA Report for the full evidence behind that verdict.
 
 ## 📋 Table of contents

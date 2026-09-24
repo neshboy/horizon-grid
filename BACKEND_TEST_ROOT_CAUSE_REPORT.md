@@ -22,7 +22,7 @@ Result: 4 collection errors, 0 tests run.
 ModuleNotFoundError: No module named 'cryptography'
 ```
 
-raised from `app/security_assessment/tls_tool.py:33` (`from cryptography
+raised from `app/security_assessment/tls_tool.py:34` (`from cryptography
 import x509`), which cascades into `app/core/security_assessment.py` →
 `app/tests/unit/test_security_assessment_service.py` and three other files
 that import that chain, aborting collection entirely.

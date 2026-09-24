@@ -2,12 +2,12 @@
 
 This chapter is the exhaustive endpoint-by-endpoint reference for the HORIZON GRID backend's HTTP API. Every route defined under `backend/app/api/routes/*.py` is documented here — method, path, purpose, authentication/permission requirement, request body, response shape, and error cases — traced directly to the route source. Narrative context (why the pipeline is shaped this way, how the pieces fit together) is covered in the Architecture and Data Flow chapters; this chapter is deliberately just the contract.
 
-All 51 routes share one global prefix, `settings.api_v1_prefix = "/api/v1"` (`backend/app/core/config.py:20`), applied in `backend/app/main.py:173-187` via `app.include_router(..., prefix=settings.api_v1_prefix)`. Routers are registered, and therefore documented below, in this order: **auth → lookup → providers → ai_config → analysis → hunting → pivot → basket → cases → runtime**, plus a newer `dashboard` router documented as an addendum in §11 below. (`app/main.py` also registers four further routers in real registration order -- `routes/admin.py` (7 endpoints), `routes/security_assessment.py` (6 endpoints), `routes/pentest.py` (18 endpoints), and `routes/pentest_exploit.py` (6 endpoints) -- after `runtime` and ahead of `dashboard`. These back the Administration panel, the per-lookup Security Assessment Toolkit, and the standalone Pentest Suite respectively; all four are out of scope for this reference and are covered in their own chapters.)
+All 56 routes share one global prefix, `settings.api_v1_prefix = "/api/v1"` (`backend/app/core/config.py:20`), applied in `backend/app/main.py:258-272` via `app.include_router(..., prefix=settings.api_v1_prefix)`. Routers are registered, and therefore documented below, in this order: **auth → lookup → providers → ai_config → analysis → hunting → pivot → basket → cases → runtime**, plus a newer `dashboard` router documented as an addendum in §11 below. (`app/main.py` also registers four further routers in real registration order -- `routes/admin.py` (7 endpoints), `routes/security_assessment.py` (6 endpoints), `routes/pentest.py` (18 endpoints), and `routes/pentest_exploit.py` (6 endpoints) -- after `runtime` and ahead of `dashboard`. These back the Administration panel, the per-lookup Security Assessment Toolkit, and the standalone Pentest Suite respectively; all four are out of scope for this reference and are covered in their own chapters.)
 
 | # | Router file | Base path | Endpoints |
 |---|---|---|---|
-| 1 | `routes/auth.py` | `/api/v1/auth` | 4 |
-| 2 | `routes/lookup.py` | `/api/v1/lookup` | 5 |
+| 1 | `routes/auth.py` | `/api/v1/auth` | 5 |
+| 2 | `routes/lookup.py` | `/api/v1/lookup` | 7 |
 | 3 | `routes/providers.py` | `/api/v1/providers` | 2 |
 | 4 | `routes/ai_config.py` | `/api/v1/ai` | 2 |
 | 5 | `routes/analysis.py` | `/api/v1/lookup/{lookup_id}/analysis` | 10 |
@@ -16,9 +16,9 @@ All 51 routes share one global prefix, `settings.api_v1_prefix = "/api/v1"` (`ba
 | 8 | `routes/basket.py` | `/api/v1/basket` | 5 |
 | 9 | `routes/cases.py` | `/api/v1/cases` | 8 |
 | 10 | `routes/runtime.py` | `/api/v1/runtime` | 10 |
-| 11 | `routes/dashboard.py` | `/api/v1/dashboard` | 2 |
+| 11 | `routes/dashboard.py` | `/api/v1/dashboard` | 4 |
 
-**Total: 51 endpoints.** Four additional endpoints are defined directly in `app/main.py`, outside `app/api/routes/`, and are out of scope for this reference but noted for completeness at the end of the chapter: `GET /health`, `GET /health/detailed`, `GET /network-info`, and `GET /metrics`.
+**Total: 56 endpoints.** Four additional endpoints are defined directly in `app/main.py`, outside `app/api/routes/`, and are out of scope for this reference but noted for completeness at the end of the chapter: `GET /health`, `GET /health/detailed`, `GET /network-info`, and `GET /metrics`.
 
 [FIGURE: backend-02-api-reference-diagram-1.png | Diagram: API Reference]
 Diagram: Router registration order and base paths, all mounted under the global `/api/v1` prefix. Registration order determines only documentation order here -- FastAPI's routing is path-based, not order-sensitive, except where two routers could otherwise share an ambiguous prefix (none do in this codebase).
@@ -55,23 +55,23 @@ Every endpoint below follows the same template:
 
 Every `require_permission(...)` dependency resolves through the same two-step chain, defined in `app/auth/rbac.py`:
 
-1. `Depends(get_current_user)` (`rbac.py:32-47`) decodes the request's `Authorization: Bearer <token>` header as a JWT access token. It raises **401** with detail `"Could not validate credentials"` if the header is missing, the token is invalid/expired, the token's type claim is not `"access"` (e.g. a refresh token was used where an access token was expected), or the resolved user's `is_active` flag is false.
-2. `require_permission(permission)` (`rbac.py:50-62`) then checks whether `permission in ROLE_PERMISSIONS.get(user.role, set())`. If not, it raises **403** with detail `f"Role '{user.role.value}' lacks permission '{permission}'"`.
+1. `Depends(get_current_user)` (`rbac.py:29-71`) decodes the request's `Authorization: Bearer <token>` header as a JWT access token. It raises **401** with detail `"Could not validate credentials"` if the header is missing, the token is invalid/expired, the token's type claim is not `"access"` (e.g. a refresh token was used where an access token was expected), or the token's embedded `token_version` no longer matches the user's current one (e.g. an administrator reset this user's password after the token was issued). It raises **403** with detail `"Account disabled"` — not 401 — if the resolved user's `is_active` flag is false.
+2. `require_permission(permission)` (`rbac.py:74-86`) then checks whether `permission in ROLE_PERMISSIONS.get(user.role, set())`. If not, it raises **403** with detail `f"Role '{user.role.value}' lacks permission '{permission}'"`.
 
-There are exactly three roles (`app/models/user.py:11-14`): `admin`, `analyst`, `viewer`. The full permission-to-role matrix (`ROLE_PERMISSIONS`) lives in `app/models/user.py` and is described in the Security Architecture chapter; the permission string required by each route is called out individually below. Fourteen distinct permission strings are checked anywhere in the API: `provider:manage`, `lookup:create`, `lookup:read`, `evidence:read`, `analysis:generate`, `copilot:query`, `hunting:generate`, `basket:manage`, `case:read`, `case:create`, `case:write`, `case:close`, `audit:read`, `dashboard:read`. `dashboard:read` is the newest of the fourteen — deliberately granted to all three roles (admin, analyst, viewer) alike, since it gates read-only operational-visibility endpoints only, never anything credential-management or write-capable.
+There are exactly three roles (`app/models/user.py:13-16`): `admin`, `analyst`, `viewer`. The full permission-to-role matrix (`ROLE_PERMISSIONS`) lives in `app/models/user.py` and is described in the Security Architecture chapter; the permission string required by each route is called out individually below. Fifteen distinct permission strings are checked anywhere in the API: `provider:manage`, `lookup:create`, `lookup:read`, `lookup:export`, `evidence:read`, `analysis:generate`, `copilot:query`, `hunting:generate`, `basket:manage`, `case:read`, `case:create`, `case:write`, `case:close`, `audit:read`, `dashboard:read`. `dashboard:read` is the newest of the fifteen — deliberately granted to all three roles (admin, analyst, viewer) alike, since it gates read-only operational-visibility endpoints only, never anything credential-management or write-capable.
 
 ---
 
 ## 🔑 1. Authentication — `routes/auth.py`
 
-Base path `/api/v1/auth`. All four endpoints are unauthenticated at the route level except `/me`; `/register` and `/login` are the only ways to obtain a token in the first place.
+Base path `/api/v1/auth`. All five endpoints are unauthenticated at the route level except `/me` and `/logout`; `/register` and `/login` are the only ways to obtain a token in the first place.
 
 ### `POST /api/v1/auth/register`
-`app/api/routes/auth.py:20`
+`app/api/routes/auth.py:28`
 
 - **Purpose:** Register a new user account. **Bootstrap-only:** the very first account ever created on an instance is automatically granted the `admin` role; every registration attempt after that is rejected outright rather than receiving `analyst`.
 - **Auth:** None (public), but only succeeds while the `users` table is empty.
-- **Request body** (`RegisterRequest`, `app/schemas/auth.py:16-19`):
+- **Request body** (`RegisterRequest`, `app/schemas/auth.py:16-25`):
 
 | Field | Type | Notes |
 |---|---|---|
@@ -80,34 +80,43 @@ Base path `/api/v1/auth`. All four endpoints are unauthenticated at the route le
 | `full_name` | `str` | optional, defaults to `""` |
 
 - **Response** (`UserResponse`, HTTP **201**, only on an empty `users` table): `id: str`, `email: str`, `full_name: str`, `role: Role` (always `admin` for this route).
-- **Errors:** **400** `"Email already registered"` if the email already exists (`auth.py:25`); **403** `"Self-registration is closed. Ask an administrator to create your account from the Administration page."` if at least one user already exists (`auth.py:32-35`) — use `POST /api/v1/admin/users` instead.
+- **Errors:** **429** with a message referencing a per-email-address registration rate limit when exceeded (`auth.py:50-55`); **403** `"Self-registration is closed. Ask an administrator to create your account from the Administration page."` if at least one user already exists — checked before the duplicate-email check specifically to prevent email enumeration (`auth.py:76-79`); **400** `"Email already registered"` if the email already exists, only reachable during the empty-table bootstrap window (`auth.py:92`) — use `POST /api/v1/admin/users` instead.
 
 ### `POST /api/v1/auth/login`
-`app/api/routes/auth.py:42`
+`app/api/routes/auth.py:106`
 
 - **Purpose:** Authenticate with email and password; issues a JWT access token and refresh token pair.
 - **Auth:** None (public).
 - **Request body** (`LoginRequest`): `email: EmailStr`, `password: str` (max 72 characters).
 - **Response** (`TokenResponse`): `access_token: str`, `refresh_token: str`, `token_type: str` (always `"bearer"`).
-- **Errors:** **401** `"Invalid email or password"` on bad credentials (`auth.py:47`); **403** `"Account disabled"` if the matched user's `is_active` is false (`auth.py:49`).
+- **Errors:** **429** with a message referencing a per-account login rate limit, checked only on a wrong-password/unknown-email or disabled-account attempt — never on a successful login with a correct password against an active account (`auth.py:182-187,191-196`); **401** `"Invalid email or password"` on bad credentials (`auth.py:189`); **403** `"Account disabled"` if the matched user's `is_active` is false (`auth.py:197`).
 
 ### `POST /api/v1/auth/refresh`
-`app/api/routes/auth.py:56`
+`app/api/routes/auth.py:205`
 
 - **Purpose:** Exchange a still-valid refresh token for a new access/refresh token pair, without re-sending a password.
 - **Auth:** None at the dependency level — validity is enforced by decoding the refresh token itself, not a bearer dependency.
 - **Request body** (`RefreshRequest`): `refresh_token: str`.
 - **Response** (`TokenResponse`): identical shape to `/login`.
-- **Errors:** **401** `"Invalid refresh token"` if the token is missing, malformed, or its type claim is not `"refresh"` (`auth.py:60`); **401** (same message) if the user it resolves to is missing or inactive (`auth.py:64`).
+- **Errors:** **401** `"Invalid refresh token"` if the token is missing, malformed, or its type claim is not `"refresh"` (`auth.py:209`); **401** (same message) if the user it resolves to is missing or inactive (`auth.py:213`), or if the token's embedded `token_version` no longer matches the user's current one — e.g. an administrator reset this user's password after the token was issued (`auth.py:218-219`).
 
 ### `GET /api/v1/auth/me`
-`app/api/routes/auth.py:71`
+`app/api/routes/auth.py:226`
 
 - **Purpose:** Return the identity of the caller associated with the presented access token.
 - **Auth:** `Depends(get_current_user)` — a valid access token is required; there is no specific permission string on this route.
 - **Request body:** none.
-- **Response** (`UserResponse`): `id`, `email`, `full_name` (hard-coded to `""` in this handler — not populated from the database on this particular route), `role`.
-- **Errors:** **401** `"Could not validate credentials"` for any invalid/missing/expired token or inactive user.
+- **Response** (`UserResponse`): `id`, `email`, `full_name`, `role`.
+- **Errors:** **401** `"Could not validate credentials"` for any invalid/missing/expired token; **403** `"Account disabled"` if the user is inactive.
+
+### `POST /api/v1/auth/logout`
+`app/api/routes/auth.py:231`
+
+- **Purpose:** Invalidate the caller's own outstanding access and refresh tokens immediately, by bumping the user's `token_version` — the same revocation mechanism an administrator-initiated password reset already uses (`app/core/users.py`'s `reset_password()`), now wired to a self-service action so a leaked or still-live token stops working the moment the user logs out, rather than only when it naturally expires.
+- **Auth:** `Depends(get_current_user)` — a valid access token is required; there is no specific permission string on this route.
+- **Request body:** none.
+- **Response:** **204 No Content** (empty body).
+- **Errors:** **401** `"Could not validate credentials"` for any invalid/missing/expired token; **403** `"Account disabled"` if the user is inactive.
 
 ---
 
@@ -116,11 +125,11 @@ Base path `/api/v1/auth`. All four endpoints are unauthenticated at the route le
 Base path `/api/v1/lookup`. This is the core investigation pipeline: creating a lookup, streaming its lifecycle, re-running the AI assessment, and reading back results.
 
 ### `POST /api/v1/lookup/stream`
-`app/api/routes/lookup.py:51`
+`app/api/routes/lookup.py:61`
 
 - **Purpose:** Create a lookup, fan the submitted IOC out to every applicable provider in parallel, and stream the entire investigation lifecycle back to the client as Server-Sent Events (SSE) — detection, each provider's result and AI summary as they complete, the correlation graph, and the final AI assessment.
 - **Auth:** `require_permission("lookup:create")`.
-- **Request body** (`LookupCreateRequest`, `app/schemas/lookup.py:9-20`):
+- **Request body** (`LookupCreateRequest`, `app/schemas/lookup.py:9-26`):
 
 | Field | Type | Notes |
 |---|---|---|
@@ -130,20 +139,20 @@ Base path `/api/v1/lookup`. This is the core investigation pipeline: creating a 
 | `ai_backend` | `Optional[str]` | overrides the active AI backend for this one lookup |
 
 - **Response:** `StreamingResponse`, media type `text/event-stream` — not a single JSON body. Named SSE events, in order: `detected` (`{lookup_id, ioc_value, ioc_type}`), then a `provider_result` (the provider's `to_dict()`) followed by a `provider_summary` for each provider as it finishes, `correlation` (`{nodes, edges}`), `final_assessment` (the final assessment's `model_dump()`), and `done` (`{lookup_id}`). On a mid-stream failure, an `error` event (`{message}`) is emitted in place of `final_assessment`/`done`.
-- **Errors:** **429** with a message referencing `settings.lookup_rate_limit_max_calls` / `lookup_rate_limit_window_seconds` when the caller's rate limit is exceeded (`lookup.py:68-75`); **422** `"Could not determine IOC type; pass ioc_type_hint."` if automatic type detection fails and no hint was supplied (`lookup.py:80`). Provider or pipeline exceptions raised mid-stream are caught, logged, the lookup is marked `FAILED`, and the failure is surfaced as an `error` SSE event rather than an HTTP error status (`lookup.py:256-260`) — a client must inspect the event stream itself to detect failure, not just the initial HTTP response code.
+- **Errors:** **400** `f"Unknown AI backend {payload.ai_backend!r}"` if `ai_backend` is supplied but not a recognized backend (`lookup.py:85-86`); **429** with a message referencing `settings.lookup_rate_limit_max_calls` / `lookup_rate_limit_window_seconds` when the caller's rate limit is exceeded (`lookup.py:89-102`); **422** `"IOC value cannot be empty or whitespace-only."` if `value` is only whitespace after stripping (`lookup.py:112`); **422** if an explicit `ioc_type_hint` doesn't match the value's actual shape (`lookup.py:123-128`); **422** `"Could not determine IOC type; pass ioc_type_hint."` if automatic type detection fails and no hint was supplied (`lookup.py:132`). Provider or pipeline exceptions raised mid-stream are caught, logged, the lookup is marked `FAILED`, and the failure is surfaced as an `error` SSE event rather than an HTTP error status (`lookup.py:401-423`) — a client must inspect the event stream itself to detect failure, not just the initial HTTP response code.
 
 ### `POST /api/v1/lookup/{lookup_id}/reanalyze`
-`app/api/routes/lookup.py:310`
+`app/api/routes/lookup.py:473`
 
 - **Purpose:** Re-run only the final-assessment AI step against an already-completed lookup's persisted evidence, using an explicitly chosen AI backend, without re-querying providers. The result is stored as an additional, non-primary `FinalAssessmentRecord` — the lookup's original primary verdict is untouched.
 - **Auth:** `require_permission("lookup:create")`.
 - **Path param:** `lookup_id` (UUID string).
-- **Request body** (`ReanalyzeRequest`, inline `lookup.py:306-307`): `ai_backend: str`.
+- **Request body** (`ReanalyzeRequest`, inline `lookup.py:469-470`): `ai_backend: str`.
 - **Response:** `{id: str, ai_backend: str, ai_model: str | None, assessment: dict}`.
-- **Errors:** **404** `"Lookup not found"` (`lookup.py:331`); **400** `"Lookup must be completed before it can be re-analyzed."` if the lookup's status is not `COMPLETED` (`lookup.py:333`).
+- **Errors:** **404** `"Lookup not found"` (`lookup.py:515`); **400** `"Lookup must be completed before it can be re-analyzed."` if the lookup's status is not `COMPLETED` (`lookup.py:517`); **400** `f"Unknown AI backend {payload.ai_backend!r}"` if `ai_backend` is not a recognized backend (`lookup.py:521-522`).
 
 ### `GET /api/v1/lookup/{lookup_id}/assessments`
-`app/api/routes/lookup.py:387`
+`app/api/routes/lookup.py:583`
 
 - **Purpose:** List every final assessment ever generated for a lookup — the original plus every subsequent re-analysis — so backends can be compared side by side against the same evidence.
 - **Auth:** `require_permission("lookup:read")`.
@@ -153,21 +162,42 @@ Base path `/api/v1/lookup`. This is the core investigation pipeline: creating a 
 - **Errors:** none explicit — an unknown or row-less `lookup_id` simply returns an empty list; this route does not 404 on a missing lookup.
 
 ### `GET /api/v1/lookup/{lookup_id}`
-`app/api/routes/lookup.py:416`
+`app/api/routes/lookup.py:657`
 
 - **Purpose:** Fetch full detail for a single lookup — provider results, AI summaries, the primary final assessment, and a correlation graph rebuilt from persisted rows.
 - **Auth:** `require_permission("lookup:read")`.
 - **Path param:** `lookup_id`.
 - **Request body:** none.
-- **Response:** `{id, ioc_value, ioc_type, status, final_verdict: str | None, risk_score, confidence_score, final_assessment: dict | None, provider_results: [{provider_id, provider_name, category, status, data, source_url, error_message, latency_ms}], ai_summaries: [dict], created_at, correlation: {nodes: [{node_id, ioc_type, value, labels: []}], edges: [{source, target, relationship, confidence, provenance}]}}`. The correlation payload is rebuilt by `_correlation_payload` (`lookup.py:462-501`) and always includes the seed IOC node even when it has zero edges.
-- **Errors:** **404** `"Lookup not found"` (`lookup.py:433`).
+- **Response:** `{id, ioc_value, ioc_type, status, final_verdict: str | None, risk_score, confidence_score, final_assessment: dict | None, provider_results: [{provider_id, provider_name, category, status, data, source_url, error_message, latency_ms}], ai_summaries: [dict], created_at, correlation: {nodes: [{node_id, ioc_type, value, labels: []}], edges: [{source, target, relationship, confidence, provenance}]}}`. The correlation payload is rebuilt by `_correlation_payload` (`lookup.py:1004-1043`) and always includes the seed IOC node even when it has zero edges.
+- **Errors:** **404** `"Lookup not found"` (`lookup.py:624`).
+
+### `GET /api/v1/lookup/{lookup_id}/geo`
+`app/api/routes/lookup.py:667`
+
+- **Purpose:** Per-investigation companion to the dashboard's aggregate `GET /dashboard/geo-activity`, powering the "View on Globe" action on a single completed lookup — tells the frontend whether/where this one lookup can be plotted on the 3D threat globe, never a guess. A private/loopback/link-local/reserved/multicast/unspecified IP is never placed on the globe.
+- **Auth:** `require_permission("lookup:read")`.
+- **Path param:** `lookup_id`.
+- **Request body:** none.
+- **Response:** `{status: "public_resolved" | "public_unresolved" | "private" | "not_applicable", country_code: str | None, asn: str | None, org: str | None}`. `not_applicable` is returned for any non-IP IOC type; `private` for a private/loopback/link-local/reserved/multicast/unspecified address (`country_code`/`asn`/`org` always `None` in both cases); `asn`/`org` come only from this lookup's own VirusTotal provider result, if present, independent of whether `country_code` resolved.
+- **Errors:** **404** `"Lookup not found"` (via the shared `_load_lookup_detail` helper, `lookup.py:624`).
+
+### `POST /api/v1/lookup/{lookup_id}/export`
+`app/api/routes/lookup.py:971`
+
+- **Purpose:** Server-rendered export of a lookup as a PDF or CSV file — the two formats the frontend's `ExportMenu.tsx` cannot build client-side (JSON/Markdown are built directly in the browser from data already loaded there).
+- **Auth:** `require_permission("lookup:export")` — a dedicated permission distinct from `lookup:read`; granted to `admin`/`analyst` but not `viewer`, since exporting a file to disk is a more sensitive action than viewing JSON in the app.
+- **Path param:** `lookup_id`.
+- **Query param:** `format: Literal["pdf", "csv"]`, required.
+- **Request body:** none.
+- **Response:** a file download — `Response` with `media_type` `application/pdf` or `text/csv` and a `Content-Disposition: attachment; filename="ioc-assessment-{lookup_id}.{format}"` header.
+- **Errors:** **404** `"Lookup not found"` (via the shared `_load_lookup_detail` helper); **422** if `format` is anything other than `pdf`/`csv` (standard FastAPI `Literal` validation).
 
 ### `GET /api/v1/lookup` (list)
-`app/api/routes/lookup.py:504`
+`app/api/routes/lookup.py:1046`
 
 - **Purpose:** List recent lookups across the whole team — this is a shared, not per-user, view.
 - **Auth:** `require_permission("lookup:read")`.
-- **Query params:** `limit: int = 50`, clamped server-side to the range `[1, 200]` (`lookup.py:513`).
+- **Query params:** `limit: int = 50`, clamped server-side to the range `[1, 200]` (`lookup.py:1055`).
 - **Request body:** none.
 - **Response:** list of `{id, ioc_value, ioc_type, status, final_verdict: str | None, risk_score, confidence_score, created_at}`, ordered by `created_at` descending.
 - **Errors:** none explicit.
@@ -188,12 +218,12 @@ Base path `/api/v1/providers`. Read-only health reporting plus a live credential
 - **Errors:** none explicit.
 
 ### `POST /api/v1/providers/{provider_id}/test`
-`app/api/routes/providers.py:20`
+`app/api/routes/providers.py:33`
 
 - **Purpose:** Live credential check for a single IOC provider — makes one real outbound call using candidate credentials supplied in the request body. The credentials are never persisted by this route; it exists purely to validate a key before it is saved.
 - **Auth:** `require_permission("provider:manage")`.
 - **Path param:** `provider_id: str`.
-- **Request body** (`ProviderTestRequest`, inline `providers.py:16-17`): `credentials: dict[str, str]`.
+- **Request body** (`ProviderTestRequest`, inline `providers.py:29-30`): `credentials: dict[str, str]`.
 - **Response:** `{provider_id: str, ok: bool, message: str, latency_ms: <type per test_provider_connection result>}`.
 - **Errors:** none raised as `HTTPException` in this route — failures from the underlying connection test surface through the `ok`/`message` fields of a `200` response, not as an HTTP error status.
 
@@ -204,26 +234,26 @@ Base path `/api/v1/providers`. Read-only health reporting plus a live credential
 Base path `/api/v1/ai`. Live AI-backend credential testing and model-list discovery for the setup wizard / Manage Providers UI.
 
 ### `POST /api/v1/ai/test`
-`app/api/routes/ai_config.py:39`
+`app/api/routes/ai_config.py:93`
 
 - **Purpose:** Live credential check for any of the eleven AI backends (Ollama, Anthropic, Bedrock, Gemini, Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter) — makes one real, minimal chat request with candidate credentials. Never persists anything.
-- **Auth:** `require_permission("provider:manage")`.
-- **Request body** (`AITestRequest`, inline `ai_config.py:33-36`): `backend: str`, `credentials: dict[str, str]` (default `{}`), `model: str | None` (default `None`).
+- **Auth:** `Depends(_require_provider_manage_or_bootstrap)` — enforces `provider:manage` exactly like every other route in this chapter, except during the one-time bootstrap window before the very first user account exists (mirroring `POST /auth/register`'s own bootstrap exception), when the route is reachable unauthenticated so the setup wizard's AI Configuration page can work before anyone can possibly hold a session (`ai_config.py:65-90`).
+- **Request body** (`AITestRequest`, inline `ai_config.py:59-62`): `backend: str`, `credentials: dict[str, str]` (default `{}`), `model: str | None` (default `None`).
 - **Response:** `{backend: str, ok: bool, message: str, model: str | None, latency_ms: <type>}`.
 - **Errors:** none raised as `HTTPException` — failures surface through `ok`/`message`.
 
 ### `POST /api/v1/ai/{backend}/models`
-`app/api/routes/ai_config.py:63`
+`app/api/routes/ai_config.py:117`
 
-- **Purpose:** Return the model list for the AI-backend picker's dropdown. Live discovery for Groq (its `/models` API) and Ollama (`GET {base_url}/api/tags`); static curated lists for Anthropic, Gemini, and Bedrock; an empty list for an unrecognized backend.
+- **Purpose:** Return the model list for the AI-backend picker's dropdown. Live discovery for Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, and OpenRouter (each backend's own model-list API) and Ollama (`GET {base_url}/api/tags`); static curated lists for Anthropic, Gemini, and Bedrock; an empty list for an unrecognized backend.
 - **Auth:** `require_permission("provider:manage")`.
 - **Path param:** `backend: str`.
-- **Request body** (`ModelListRequest`, inline `ai_config.py:59-60`): `credentials: dict[str, str]` (default `{}`).
+- **Request body** (`ModelListRequest`, inline `ai_config.py:113-114`): `credentials: dict[str, str]` (default `{}`).
 - **Response** (shape varies by backend, always includes `backend` and `models`):
-  - Groq: `{backend, models: list[str], source: "fallback" | "live", default: str}` — falls back to a hard-coded model list if no `api_key` is supplied or the live call raises `httpx.HTTPError` (`ai_config.py:76-85`).
-  - Ollama: `{backend, models: list[str], source: "live" | "fallback", default: str}` — live via `GET {base_url}/api/tags` if a `base_url` is supplied and returns HTTP 200 with model names; otherwise a static two-item fallback list (`ai_config.py:87-99`).
-  - Anthropic / Gemini / Bedrock: `{backend, models: list[str], source: "static", default: str}` (`ai_config.py:101-104`).
-  - Unknown backend: `{backend, models: [], source: "unknown", default: None}` (`ai_config.py:102-103`).
+  - Groq, OpenAI, Kimi, DeepSeek, xAI, Mistral, OpenRouter: `{backend, models: list[str], source: "fallback" | "live", default: str}` — each falls back to its own hard-coded model list if no `api_key` is supplied or the live call raises `httpx.HTTPError`/`json.JSONDecodeError` (`ai_config.py:129-211`).
+  - Ollama: `{backend, models: list[str], source: "live" | "fallback", default: str}` — live via `GET {base_url}/api/tags` if a `base_url` is supplied and returns HTTP 200 with model names; otherwise a static two-item fallback list (`ai_config.py:213-233`).
+  - Anthropic / Gemini / Bedrock: `{backend, models: list[str], source: "static", default: str}` (`ai_config.py:235-238`).
+  - Unknown backend: `{backend, models: [], source: "unknown", default: None}` (`ai_config.py:236-237`).
 - **Errors:** none raised as `HTTPException` — provider-side HTTP errors are caught and logged, degrading to the fallback/static response instead of failing the request.
 
 ---
@@ -371,35 +401,35 @@ Base path `/api/v1/lookup/{lookup_id}/pivots`. A single deterministic (non-AI) e
 Base path `/api/v1/basket`. A per-analyst scratch space of saved IOCs, scoped by the caller's own user ID — every endpoint here operates only on the requesting user's own basket items.
 
 ### `GET /api/v1/basket`
-`app/api/routes/basket.py:34`
+`app/api/routes/basket.py:35`
 
 - **Purpose:** List the caller's own basket items, newest first.
 - **Auth:** `require_permission("basket:manage")`.
 - **Request body:** none.
-- **Response:** list of `{id, ioc_value, ioc_type, note: str | None, latest_lookup_id: str | None, created_at}` (via the `_serialize` helper, `basket.py:23-31`).
+- **Response:** list of `{id, ioc_value, ioc_type, note: str | None, latest_lookup_id: str | None, created_at}` (via the `_serialize` helper, `basket.py:24-32`).
 - **Errors:** none explicit.
 
 ### `POST /api/v1/basket`
-`app/api/routes/basket.py:45`
+`app/api/routes/basket.py:46`
 
-- **Purpose:** Add an IOC to the caller's basket. Deduplicates by exact `ioc_value` per owner, and best-effort attaches the most recent *completed* lookup for that value if one exists.
+- **Purpose:** Add an IOC to the caller's basket. Deduplicates case-insensitively by `ioc_value` per owner (without rewriting the stored casing of an existing entry), and best-effort attaches the most recent *completed* lookup for that value if one exists.
 - **Auth:** `require_permission("basket:manage")`.
-- **Request body** (`BasketAddRequest`, `app/schemas/basket.py:8-11`): `ioc_value: str`, `ioc_type_hint: Optional[IOCType]`, `note: Optional[str]`.
+- **Request body** (`BasketAddRequest`, `app/schemas/basket.py:8-21`): `ioc_value: str`, `ioc_type_hint: Optional[IOCType]`, `note: Optional[str]`.
 - **Response** (HTTP **201** for a new item, or the same serializer's output for an item that already existed): `{id, ioc_value, ioc_type, note, latest_lookup_id, created_at}`.
-- **Errors:** **422** `"Could not determine IOC type; pass ioc_type_hint."` if the type cannot be auto-detected and no hint was supplied (`basket.py:54`).
+- **Errors:** **422** `"Could not determine IOC type; pass ioc_type_hint."` if the type cannot be auto-detected and no hint was supplied (`basket.py:72`).
 
 ### `DELETE /api/v1/basket/{item_id}`
-`app/api/routes/basket.py:89`
+`app/api/routes/basket.py:149`
 
 - **Purpose:** Remove one basket item owned by the caller.
 - **Auth:** `require_permission("basket:manage")`.
 - **Path param:** `item_id`.
 - **Request body:** none.
 - **Response:** **204 No Content** (empty body).
-- **Errors:** **404** `"Basket item not found"` if no such item exists, or it exists but is owned by a different user (`basket.py:98-99`) — ownership mismatch is indistinguishable from non-existence in the response.
+- **Errors:** **404** `"Basket item not found"` if no such item exists, or it exists but is owned by a different user (`basket.py:159`) — ownership mismatch is indistinguishable from non-existence in the response.
 
 ### `DELETE /api/v1/basket`
-`app/api/routes/basket.py:104`
+`app/api/routes/basket.py:164`
 
 - **Purpose:** Clear all of the caller's own basket items in one call.
 - **Auth:** `require_permission("basket:manage")`.
@@ -408,36 +438,36 @@ Base path `/api/v1/basket`. A per-analyst scratch space of saved IOCs, scoped by
 - **Errors:** none explicit.
 
 ### `POST /api/v1/basket/compare`
-`app/api/routes/basket.py:115`
+`app/api/routes/basket.py:175`
 
 - **Purpose:** Build a deterministic side-by-side comparison table across 2–10 already-looked-up IOCs (referenced by `lookup_id`), then generate an AI narrative comparing them.
 - **Auth:** `require_permission("basket:manage")`.
-- **Request body:** raw `dict`, documented inline as `{"lookup_ids": list[str]}` (`basket.py:121-122`).
+- **Request body:** raw `dict`, documented inline as `{"lookup_ids": list[str]}` (`basket.py:181`).
 - **Response:** `{rows: list[{ioc_value, ioc_type, verdict: str, risk_score, confidence_score, asn: list[str], malware_families: list[str], threat_actors: list[str], related_domains: list[str], first_seen: str}], narrative: {most_dangerous_ioc_value: str | None, narrative: str, key_differences: list[str]}}` — the narrative fields come from `IOCComparisonNarrative` (`analysis_schemas.py:159-165`).
-- **Errors:** **422** `"Provide at least 2 lookup_ids to compare"` if fewer than 2 are supplied (`basket.py:128`); **422** `"Cannot compare more than 10 IOCs at once"` if more than 10 are supplied (`basket.py:130`); **422** `"Fewer than 2 of the given lookup_ids resolved to completed lookups"` if resolution yields fewer than 2 valid, completed rows (`basket.py:161`).
+- **Errors:** **422** `"Provide at least 2 lookup_ids to compare"` if fewer than 2 are supplied (`basket.py:188`); **422** `"Cannot compare more than 10 IOCs at once"` if more than 10 are supplied (`basket.py:190`); **422** `"Fewer than 2 of the given lookup_ids resolved to completed lookups"` if resolution yields fewer than 2 valid, completed rows (`basket.py:244`).
 
 ---
 
 ## 📁 9. Case Management — `routes/cases.py`
 
-Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation containers grouping IOCs, notes, and reports. Most endpoints share a loader, `_load_case` (`cases.py:68-77`), which raises **404** `"Case not found"` for a missing case; that is stated once here and referenced, not repeated, below.
+Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation containers grouping IOCs, notes, and reports. Most endpoints share a loader, `_load_case` (`cases.py:69-78`), which raises **404** `"Case not found"` for a missing case; that is stated once here and referenced, not repeated, below.
 
 ### `GET /api/v1/cases`
-`app/api/routes/cases.py:80`
+`app/api/routes/cases.py:81`
 
 - **Purpose:** List cases across the whole team, optionally filtered by status.
 - **Auth:** `require_permission("case:read")`.
-- **Query params:** `status_filter: str | None = None`, `limit: int = 50` (clamped to `[1, 200]`, `cases.py:87`).
+- **Query params:** `status_filter: str | None = None`, `limit: int = 50` (clamped to `[1, 200]`, `cases.py:88`).
 - **Request body:** none.
 - **Response:** list of `{id, title, severity: str, status: str, tags: list[str], created_at}`.
 - **Errors:** none explicit.
 
 ### `POST /api/v1/cases`
-`app/api/routes/cases.py:105`
+`app/api/routes/cases.py:106`
 
 - **Purpose:** Create a new case, owned by the calling analyst.
 - **Auth:** `require_permission("case:create")`.
-- **Request body** (`CaseCreateRequest`, `app/schemas/case.py:8-12`):
+- **Request body** (`CaseCreateRequest`, `app/schemas/case.py:25-29`):
 
 | Field | Type | Notes |
 |---|---|---|
@@ -446,11 +476,11 @@ Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation
 | `severity` | `CaseSeverity` | default `MEDIUM`; one of `low`/`medium`/`high`/`critical` |
 | `tags` | `list[str]` | default `[]` |
 
-- **Response** (HTTP **201**): full case object via `_serialize_case` (`cases.py:22-65`) — `{id, title, description, analyst_id, severity, status, tags, created_at, updated_at, iocs: [{id, ioc_value, ioc_type, lookup_id, added_by, created_at}], notes: [{id, author_id, body, anchor_type, anchor_ref, created_at}], reports: [{id, report_type, title, generated_by, created_at}]}`.
+- **Response** (HTTP **201**): full case object via `_serialize_case` (`cases.py:23-66`) — `{id, title, description, analyst_id, severity, status, tags, created_at, updated_at, iocs: [{id, ioc_value, ioc_type, lookup_id, added_by, created_at}], notes: [{id, author_id, body, anchor_type, anchor_ref, created_at}], reports: [{id, report_type, title, generated_by, created_at}]}`.
 - **Errors:** none explicit — invalid field values fail standard FastAPI/Pydantic `422` validation.
 
 ### `GET /api/v1/cases/{case_id}`
-`app/api/routes/cases.py:124`
+`app/api/routes/cases.py:125`
 
 - **Purpose:** Fetch full detail for one case — its IOCs, notes, and reports.
 - **Auth:** `require_permission("case:read")`.
@@ -460,16 +490,16 @@ Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation
 - **Errors:** **404** `"Case not found"`.
 
 ### `PATCH /api/v1/cases/{case_id}`
-`app/api/routes/cases.py:133`
+`app/api/routes/cases.py:134`
 
 - **Purpose:** Partially update a case's mutable fields — only fields explicitly present in the request body are applied.
 - **Auth:** `require_permission("case:write")`.
-- **Request body** (`CaseUpdateRequest`, `app/schemas/case.py:15-20`, all fields optional, applied via `model_dump(exclude_unset=True)`): `title: Optional[str]`, `description: Optional[str]`, `severity: Optional[CaseSeverity]`, `status: Optional[CaseStatus]` (`open`/`investigating`/`contained`/`resolved`/`false_positive`/`closed`), `tags: Optional[list[str]]`.
+- **Request body** (`CaseUpdateRequest`, `app/schemas/case.py:32-37`, all fields optional, applied via `model_dump(exclude_unset=True)`): `title: Optional[str]`, `description: Optional[str]`, `severity: Optional[CaseSeverity]`, `status: Optional[CaseStatus]` (`open`/`investigating`/`contained`/`resolved`/`false_positive`/`closed`), `tags: Optional[list[str]]`.
 - **Response:** the full updated case object.
 - **Errors:** **404** `"Case not found"`.
 
 ### `POST /api/v1/cases/{case_id}/close`
-`app/api/routes/cases.py:148`
+`app/api/routes/cases.py:149`
 
 - **Purpose:** Force-close a case — sets `status` to `CLOSED` regardless of its current status.
 - **Auth:** `require_permission("case:close")` — note this is a distinct permission string from `case:write`, allowing a role matrix where closing is more restricted than editing.
@@ -478,33 +508,30 @@ Base path `/api/v1/cases`. Cases are team-shared (not per-analyst) investigation
 - **Errors:** **404** `"Case not found"`.
 
 ### `POST /api/v1/cases/{case_id}/iocs`
-`app/api/routes/cases.py:162`
+`app/api/routes/cases.py:161`
 
 - **Purpose:** Attach an IOC to a case, optionally linking it to an existing lookup.
 - **Auth:** `require_permission("case:write")`.
-- **Request body** (`CaseIOCAddRequest`, `app/schemas/case.py:23-26`): `ioc_value: str`, `ioc_type: str`, `lookup_id: Optional[str]`.
+- **Request body** (`CaseIOCAddRequest`, `app/schemas/case.py:40-57`): `ioc_value: str`, `ioc_type: str`, `lookup_id: Optional[uuid.UUID]` — typed as a real UUID, so FastAPI/Pydantic rejects a non-UUID `lookup_id` with a standard `422` automatically.
 - **Response** (HTTP **201**): the full updated case object.
 - **Errors:** **404** `"Case not found"` (from `_load_case`).
 
-> [!WARNING]
-> Supplying a `lookup_id` that is not a syntactically valid UUID raises an unhandled `ValueError` from `uuid.UUID(...)` (`cases.py:174`) — this surfaces as an unhandled server error rather than a documented `HTTPException`/`422`, and is a real gap rather than an intentional error path.
-
 ### `DELETE /api/v1/cases/{case_id}/iocs/{ioc_id}`
-`app/api/routes/cases.py:182`
+`app/api/routes/cases.py:224`
 
 - **Purpose:** Remove an IOC from a case.
 - **Auth:** `require_permission("case:write")`.
 - **Path params:** `case_id`, `ioc_id`.
 - **Request body:** none.
 - **Response:** **204 No Content**.
-- **Errors:** **404** `"Case IOC not found"` if no `CaseIOC` row matches that `case_id`/`ioc_id` pair (`cases.py:193`).
+- **Errors:** **404** `"Case IOC not found"` if no `CaseIOC` row matches that `case_id`/`ioc_id` pair (`cases.py:235`).
 
 ### `POST /api/v1/cases/{case_id}/notes`
-`app/api/routes/cases.py:198`
+`app/api/routes/cases.py:240`
 
 - **Purpose:** Add an analyst note to a case, optionally anchored to a specific artifact (an IOC, an evidence item, a graph node, a timeline event, or a provider result — a free string, not a foreign key).
 - **Auth:** `require_permission("case:write")`.
-- **Request body** (`CaseNoteCreateRequest`, `app/schemas/case.py:29-32`): `body: str` (min length 1), `anchor_type: Optional[str]`, `anchor_ref: Optional[str]`.
+- **Request body** (`CaseNoteCreateRequest`, `app/schemas/case.py:60-65`): `body: str` (min length 1), `anchor_type: Optional[str]`, `anchor_ref: Optional[str]`.
 - **Response** (HTTP **201**): the full updated case object.
 - **Errors:** **404** `"Case not found"`.
 
@@ -518,80 +545,80 @@ Base path `/api/v1/runtime`. This is the API surface behind the DB-backed "Manag
 `app/api/routes/runtime.py:26`
 
 - **Purpose:** List every configured AI-backend runtime row — persisted configuration, masked credentials, active/last-test status.
-- **Auth:** `require_permission("provider:manage")`.
+- **Auth:** `require_permission("lookup:read")` — deliberately the same lower-privilege choice as the sibling `GET /ai-active` below, not `provider:manage`; every route that actually writes provider config still requires `provider:manage`.
 - **Request body:** none.
-- **Response:** the return value of `svc.list_ai_providers()` (`app/core/runtime_config.py`); row shape is not independently typed by this route.
+- **Response:** `svc.list_ai_providers()` merged against every backend in `svc.AI_BACKENDS`, so a backend added to the code after this install's first boot still appears as a sensible unconfigured default rather than being invisible (`app/core/runtime_config.py`); row shape is not independently typed by this route.
 - **Errors:** none explicit.
 
 ### `POST /api/v1/runtime/ai-providers/{backend}`
-`app/api/routes/runtime.py:38`
+`app/api/routes/runtime.py:83`
 
 - **Purpose:** Persist validated credentials and/or a model choice for one AI backend into the runtime-mutable store. Takes effect on the very next AI call — no restart required.
 - **Auth:** `require_permission("provider:manage")`.
 - **Path param:** `backend: str`.
-- **Request body** (`ConfigureAIProviderRequest`, inline `runtime.py:31-35`): `credentials: dict[str, str]` (default `{}`), `model_id: Optional[str]`.
+- **Request body** (`ConfigureAIProviderRequest`, inline `runtime.py:76-80`): `credentials: dict[str, str]` (default `{}`), `model_id: Optional[str]`.
 - **Response:** the return value of `svc.upsert_ai_provider(...)`.
-- **Errors:** **400** `f"Unknown AI backend {backend!r}"` if `backend` is not in `svc.AI_BACKENDS` (`runtime.py:45`).
+- **Errors:** **400** `f"Unknown AI backend {backend!r}"` if `backend` is not in `svc.AI_BACKENDS` (`runtime.py:90`).
 
 ### `POST /api/v1/runtime/ai-active`
-`app/api/routes/runtime.py:55`
+`app/api/routes/runtime.py:103`
 
 - **Purpose:** Switch the platform-wide active AI backend immediately — affects the very next investigation and every subsequent AI call.
 - **Auth:** `require_permission("provider:manage")`.
-- **Request body** (`ActivateAIRequest`, inline `runtime.py:51-52`): `backend: str`.
+- **Request body** (`ActivateAIRequest`, inline `runtime.py:99-100`): `backend: str`.
 - **Response:** `{active_backend: str}`.
-- **Errors:** **400** with `str(exc)` as the detail message if `svc.set_active_ai_backend` raises `ValueError` — e.g. the backend is unknown or not yet configured (`runtime.py:64-65`).
+- **Errors:** **400** with `str(exc)` as the detail message if `svc.set_active_ai_backend` raises `ValueError` — e.g. the backend is unknown or not yet configured (`runtime.py:111-113`).
 
 ### `GET /api/v1/runtime/ai-active`
-`app/api/routes/runtime.py:69`
+`app/api/routes/runtime.py:117`
 
 - **Purpose:** Return the currently active AI backend and model.
 - **Auth:** `require_permission("lookup:read")` — note this route uses a different permission string than every other endpoint in this router, since read-only callers (e.g. the home-page AI Quick Switch) do not need `provider:manage`.
 - **Request body:** none.
-- **Response:** `{backend: str | None, model_id: str | None}` — both `None` if nothing has been configured yet (`runtime.py:72-73`); otherwise `{backend: config["backend"], model_id: config["model_id"]}`.
+- **Response:** `{backend: str | None, model_id: str | None}` — both `None` if nothing has been configured yet (`runtime.py:120-121`); otherwise `{backend: config["backend"], model_id: config["model_id"]}`.
 - **Errors:** none explicit.
 
 ### `POST /api/v1/runtime/ai-providers/{backend}/record-test`
-`app/api/routes/runtime.py:82`
+`app/api/routes/runtime.py:130`
 
 - **Purpose:** Record the outcome of a prior `/api/v1/ai/test` call against a backend's now-saved credential, so the UI can display a "last tested" status without re-running the test.
 - **Auth:** `require_permission("provider:manage")`.
 - **Path param:** `backend: str`.
-- **Request body** (`TestResultRequest`, inline `runtime.py:77-79`): `ok: bool`, `message: str` (default `""`).
+- **Request body** (`TestResultRequest`, inline `runtime.py:125-127`): `ok: bool`, `message: str` (default `""`).
 - **Response:** `{recorded: true}`.
 - **Errors:** none explicit.
 
 ### `GET /api/v1/runtime/ioc-providers`
-`app/api/routes/runtime.py:98`
+`app/api/routes/runtime.py:148`
 
 - **Purpose:** List every known IOC provider merged with its runtime configuration row (or a synthesized default if it has never been configured), together with static metadata (`requires_key`, `credential_fields`, `category`, `supported_types`).
 - **Auth:** `require_permission("provider:manage")`.
 - **Request body:** none.
-- **Response:** a list of dicts, each either the persisted row from `svc.list_ioc_providers()` or a synthesized default — `{provider_id, provider_name, kind: "ioc", enabled: true, is_active: false, configured, model_id: null, extra_config: {}, masked_credentials: {}, last_test_at: null, last_test_ok: null, last_test_message: null, updated_at: null}` — with `requires_key`, `credential_fields: list`, `category: str`, `supported_types: list[str]` appended in either case (`runtime.py:123-126`).
+- **Response:** a list of dicts, each either the persisted row from `svc.list_ioc_providers()` or a synthesized default — `{provider_id, provider_name, kind: "ioc", enabled: true, is_active: false, configured, model_id: null, extra_config: {}, masked_credentials: {}, last_test_at: null, last_test_ok: null, last_test_message: null, updated_at: null}` — with `requires_key`, `credential_fields: list`, `category: str`, `supported_types: list[str]` appended in either case (`runtime.py:173-176`).
 - **Errors:** none explicit.
 
 ### `POST /api/v1/runtime/ioc-providers/{provider_id}`
-`app/api/routes/runtime.py:135`
+`app/api/routes/runtime.py:185`
 
 - **Purpose:** Persist validated credentials and/or extra configuration for one IOC provider.
 - **Auth:** `require_permission("provider:manage")`.
 - **Path param:** `provider_id: str`.
-- **Request body** (`ConfigureIOCProviderRequest`, inline `runtime.py:130-132`): `credentials: dict[str, str]` (default `{}`), `extra_config: Optional[dict]`.
+- **Request body** (`ConfigureIOCProviderRequest`, inline `runtime.py:180-182`): `credentials: dict[str, str]` (default `{}`), `extra_config: Optional[dict]`.
 - **Response:** the return value of `svc.upsert_ioc_provider(...)`.
-- **Errors:** **404** `f"Unknown IOC provider {provider_id!r}"` if the ID is not in the known provider registry (`runtime.py:144`).
+- **Errors:** **404** `f"Unknown IOC provider {provider_id!r}"` if the ID is not in the known provider registry (`runtime.py:194`).
 
 ### `POST /api/v1/runtime/ioc-providers/{provider_id}/enabled`
-`app/api/routes/runtime.py:159`
+`app/api/routes/runtime.py:212`
 
 - **Purpose:** Enable or disable an IOC provider at runtime — takes effect on the next investigation, no restart required.
 - **Auth:** `require_permission("provider:manage")`.
 - **Path param:** `provider_id: str`.
-- **Request body** (`EnableRequest`, inline `runtime.py:155-156`): `enabled: bool`.
+- **Request body** (`EnableRequest`, inline `runtime.py:208-209`): `enabled: bool`.
 - **Response:** `{provider_id: str, enabled: bool}`.
 - **Errors:** none explicit.
 
 ### `POST /api/v1/runtime/ioc-providers/{provider_id}/record-test`
-`app/api/routes/runtime.py:172`
+`app/api/routes/runtime.py:227`
 
 - **Purpose:** Record the outcome of a prior connection test for an IOC provider.
 - **Auth:** `require_permission("provider:manage")`.
@@ -601,7 +628,7 @@ Base path `/api/v1/runtime`. This is the API surface behind the DB-backed "Manag
 - **Errors:** none explicit.
 
 ### `GET /api/v1/runtime/audit-log`
-`app/api/routes/runtime.py:185`
+`app/api/routes/runtime.py:242`
 
 - **Purpose:** Retrieve the runtime-configuration audit log — who changed which provider or AI configuration, and when.
 - **Auth:** `require_permission("audit:read")` — the only route gated by this permission string.
@@ -614,7 +641,7 @@ Base path `/api/v1/runtime`. This is the API surface behind the DB-backed "Manag
 
 ## 📊 11. Dashboard — `routes/dashboard.py`
 
-Base path `/api/v1/dashboard`. Both endpoints back the Executive Dashboard added in this update. Both are read-only aggregations over already-persisted data — neither makes a new provider call, a new AI call outside the one described below, or persists anything.
+Base path `/api/v1/dashboard`. All four endpoints back the Executive Dashboard added in this update. All are read-only aggregations over already-persisted data — none makes a new provider call, a new AI call outside the one described below, or persists anything.
 
 ### `GET /api/v1/dashboard/kpis`
 `app/api/routes/dashboard.py:20`
@@ -625,8 +652,28 @@ Base path `/api/v1/dashboard`. Both endpoints back the Executive Dashboard added
 - **Response:** `{active_investigations: int, critical_high_risk_iocs: int, open_cases: int, open_critical_cases: int, avg_threat_score: float, provider_health_percentage: float, ai_success_rate: float | None}`. `ai_success_rate` is `null` (not `0`) when there is no qualifying AI activity in the lookback window, rather than misrepresenting "no data" as a 0% success rate.
 - **Errors:** none explicit.
 
-### `GET /api/v1/dashboard/executive-summary`
+### `GET /api/v1/dashboard/activity-timeline`
 `app/api/routes/dashboard.py:25`
+
+- **Purpose:** Return hourly-bucketed investigation activity for the Executive Dashboard's activity-timeline widget. Every hour in the requested window is present, including hours with zero investigations — a real quiet hour renders as a real zero, never an absent bucket. See `get_activity_timeline()` (`app/core/dashboard.py`).
+- **Auth:** `require_permission("dashboard:read")`.
+- **Query params:** `hours: int = 24`, clamped to `[1, 168]`.
+- **Request body:** none.
+- **Response:** `{buckets: list[{bucket: str, total: int, high_risk: int, suspicious: int, failed: int}]}`. `high_risk`/`suspicious`/`failed` are subsets of `total`, not additional categories on top of it.
+- **Errors:** none explicit.
+
+### `GET /api/v1/dashboard/geo-activity`
+`app/api/routes/dashboard.py:33`
+
+- **Purpose:** Return a country breakdown of completed IOC lookups for the Executive Dashboard's 3D threat globe. Never fabricates a country: only `whois_rdap`/`abuseipdb`/`virustotal` provider results are consulted, and anything that doesn't resolve to a clean 2-letter country code is counted in `unmapped_count` rather than guessed. See `get_geo_activity()` (`app/core/dashboard.py`).
+- **Auth:** `require_permission("dashboard:read")`.
+- **Query params:** `hours: int = 720`, clamped to `[1, 4320]`.
+- **Request body:** none.
+- **Response:** `{countries: list[{country_code: str, total: int, high_risk: int, suspicious: int}], unmapped_count: int}`.
+- **Errors:** none explicit.
+
+### `GET /api/v1/dashboard/executive-summary`
+`app/api/routes/dashboard.py:41`
 
 - **Purpose:** Return an AI-generated (or, on any AI failure, deterministic template-fallback) 2–4 sentence executive narrative, grounded exclusively in the same seven KPI values `GET /api/v1/dashboard/kpis` returns — the AI, or its fallback, is only ever handed those values as given facts and never computes or restates a number independently. See `generate_executive_summary()` (`app/ai/dashboard_summary.py`).
 - **Auth:** `require_permission("dashboard:read")` — reuses the same permission as `/dashboard/kpis`; no new permission was introduced for this route.
@@ -651,8 +698,8 @@ All four are excluded from the router/permission inventory above because they ar
 
 | Router file | Endpoints | Distinct permission strings used |
 |---|---|---|
-| `auth.py` | 4 | none (public) / implicit `get_current_user` on `/me` |
-| `lookup.py` | 5 | `lookup:create`, `lookup:read` |
+| `auth.py` | 5 | none (public) / implicit `get_current_user` on `/me`, `/logout` |
+| `lookup.py` | 7 | `lookup:create`, `lookup:read`, `lookup:export` |
 | `providers.py` | 2 | `dashboard:read`, `provider:manage` |
 | `ai_config.py` | 2 | `provider:manage` |
 | `analysis.py` | 10 | `evidence:read`, `analysis:generate`, `copilot:query` |
@@ -661,5 +708,5 @@ All four are excluded from the router/permission inventory above because they ar
 | `basket.py` | 5 | `basket:manage` |
 | `cases.py` | 8 | `case:read`, `case:create`, `case:write`, `case:close` |
 | `runtime.py` | 10 | `provider:manage`, `lookup:read`, `audit:read` |
-| `dashboard.py` | 2 | `dashboard:read` |
-| **Total** | **51** | **14 distinct permission strings** |
+| `dashboard.py` | 4 | `dashboard:read` |
+| **Total** | **56** | **15 distinct permission strings** |

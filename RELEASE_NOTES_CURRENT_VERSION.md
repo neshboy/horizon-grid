@@ -69,7 +69,7 @@ Added a concurrency cap on scan execution and CIDR-size-proportional timeout sca
 
 ## Administration
 
-No RBAC/permission changes this release. (Multiple-administrator support, race-safe last-admin protection, and the 3-role/28-permission matrix are unchanged and were independently re-confirmed by this release's audit.)
+No RBAC/permission changes this release. (Multiple-administrator support, race-safe last-admin protection, and the 3-role/23-permission matrix are unchanged and were independently re-confirmed by this release's audit.)
 
 ## Reliability (fix, not feature)
 
@@ -95,7 +95,7 @@ The `.deb` package was rebuilt and installed as a **real upgrade** over a live e
 - No off-host/off-site backup copy option — backups are local-disk-only, which does not protect a genuinely remote site against the host/disk itself failing.
 - A narrow DNS-rebinding TOCTOU window remains on the SSRF check.
 - Neo4j and OpenSearch remain fully provisioned (~1.5–2 GB RAM) with zero actual application traffic — a real resource cost with no current benefit, independently re-confirmed by this release's audit. Flagged as an open product question, not resolved unilaterally.
-- No frontend test infrastructure exists (`vitest` is wired into `package.json`, but zero test files exist anywhere in the tree).
+- Frontend test coverage is minimal (`vitest` is wired into `package.json`; only a handful of test files exist in the tree).
 - A live elevated Windows installer run was not performed this release (see Windows, above).
 
 ## Upgrade notes

@@ -3,7 +3,7 @@
 > [!NOTE]
 > This report certifies the initial Linux release, `horizon-grid_0.2.0_amd64.deb`. It predates, and
 > is superseded on release-readiness for the current version by, every changelog entry from v0.2.1
-> through the current v0.3.8 (see `standalone-changelog.md`) -- including the later Linux packaging
+> through the current v0.3.14 (see `standalone-changelog.md`) -- including the later Linux packaging
 > fixes and version bumps described in the Linux Release Notes and Changelog addenda. It remains
 > accurate as a historical record of what was actually tested and found for that original Linux
 > release.
@@ -166,7 +166,7 @@ the shared build host.
 | `apt purge` deleted `/etc/horizon-grid` | PASS |
 | `apt purge` fully removed `/opt/horizon-grid/app` (no orphaned directory) | PASS |
 
-**12 PASS, 0 FAIL.** This is the result that should be trusted for "does purge actually work" -- the two
+**11 PASS, 0 FAIL.** This is the result that should be trusted for "does purge actually work" -- the two
 `FAIL` lines in the three-distro suite above are the test harness's own artifact, fully explained, and
 independently disproven as a real defect by this test.
 

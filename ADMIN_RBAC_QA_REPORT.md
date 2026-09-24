@@ -23,7 +23,7 @@ What was actually missing and had to be built: the CRUD endpoints, the service l
 - `app/auth/security.py`, `app/auth/rbac.py`, `app/api/routes/auth.py` — `token_version` embedded in every JWT and checked on every request and on refresh; bumped by password reset (§3). Also fixed a small pre-existing bug: `/auth/me` always returned `full_name: ""` regardless of the stored value.
 
 ### Frontend (new/changed files)
-- `lib/types.ts`, `lib/api.ts` — types and 9 new API functions for the admin surface, plus `getCurrentUser()`.
+- `lib/types.ts`, `lib/api.ts` — types and 7 new API functions for the admin surface, plus `getCurrentUser()`.
 - `components/ui/input.tsx`, `badge.tsx`, `dialog.tsx` — three new primitives (previously only `Button`/`Card` existed); `dialog.tsx` is the first real use of the already-installed-but-unused `@radix-ui/react-dialog`.
 - `components/dashboard/UsersManagementPanel.tsx` — search/filter/sort/paginate table + 4 dialogs (create, edit, reset password, enable/disable confirmation).
 - `app/admin/page.tsx` — the console itself: Overview / Users / Roles & Permissions / Audit Log tabs, double-guarded (`isLoggedIn()` then `role === "admin"`, both UX-only redirects — the real boundary is server-side).

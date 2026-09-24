@@ -71,7 +71,7 @@ All of the above run on Docker network `app_default`.
 - **Engine:** PostgreSQL `16.14` (Alpine), accessed via SQLAlchemy 2.0 async + `asyncpg`. Also Neo4j `5.x` (graph relationships/correlation) and OpenSearch `2.17.0` (indexing/search) as secondary datastores.
 - **Migration tool:** Alembic. **Current head, live-confirmed on the running DB:** `6d2f4b8e1a7c` — both `alembic current`/`alembic heads` inside `app-backend-1` and the DB's own `alembic_version` table agree (single head, no drift).
 - **Live schema (17 tables):** `users`, `ioc_lookups`, `provider_results`, `provider_runtime_configs`, `ai_summaries`, `evidence_items`, `correlation_edges`, `final_assessment_records`, `security_assessment_runs`, `security_assessment_findings`, `basket_items`, `cases`, `case_iocs`, `case_notes`, `case_reports`, `config_audit_log`, `alembic_version`.
-- Notable columns: `provider_runtime_configs.encrypted_credentials` (Fernet-encrypted, see §4/§13), `evidence_items.provenance_category`, `case_reports.content_markdown` (reports are stored as Markdown text + JSON `context`, not as binary blobs — see §11).
+- Notable columns: `provider_runtime_configs.encrypted_credentials` (Fernet-encrypted, see §6), `evidence_items.provenance_category`, `case_reports.content_markdown` (reports are stored as Markdown text + JSON `context`, not as binary blobs — see §11).
 
 ## 4. Authentication
 
@@ -104,7 +104,7 @@ Three roles (`app/models/user.py`, `enum Role`): **`admin`**, **`analyst`**, **`
 | `security_assessment:create` | ✓ | ✓ | |
 | `security_assessment:read` | ✓ | ✓ | ✓ |
 
-Notes: `analyst` and `admin` differ only by the four admin-only permissions (`provider:manage`, `user:manage`, `audit:read`, plus admin has none exclusive beyond those three since `security_assessment:create`/case perms are shared). `viewer` is strictly read-only (4 permissions, all `*:read`). This is an exhaustive list of every permission string defined in the model — there are 17 distinct permission strings total.
+Notes: `analyst` and `admin` differ only by the three admin-only permissions (`provider:manage`, `user:manage`, `audit:read`, plus admin has none exclusive beyond those three since `security_assessment:create`/case perms are shared). `viewer` is strictly read-only (4 permissions, all `*:read`). This is an exhaustive list of every permission string defined in the model — there are 17 distinct permission strings total.
 
 ## 6. AI Layer
 
@@ -191,7 +191,7 @@ There is **no persistent object/file storage layer** (no S3 bucket, no local upl
 - **.env file location (installed copy):** `C:\Program Files\IOC Intelligence Platform\app\.env` — confirmed to exist (last modified 2026-08-14) but **not readable by the current shell user** (`Permission denied` on direct read attempt), consistent with the Windows wizard's documented `icacls`-locked-down `Program Files`/`ProgramData` write model. Variable *names* only were enumerated via `docker inspect` on the container's resolved environment instead of reading the file directly (values never retrieved): `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_URL`, `NEO4J_URI`, `NEO4J_PASSWORD`, `OPENSEARCH_URL` present as container env.
 - **docker-compose.yml overlay behavior (installed copy, confirmed live):** the `backend` service's explicit `environment:` block in `docker-compose.yml` always wins over `env_file: .env` for the same key. One key, `OLLAMA_BASE_URL`, is hardcoded there (`host.docker.internal:11434` default) rather than using the `${VAR:-default}` pattern every other setting uses — the file's own inline comment documents this as a confirmed-live bug where a user-configured Ollama host written correctly to `.env` by the setup wizard was silently never honored, because the compose-level `environment:` entry overrides it regardless. (This is pre-existing/documented in the file itself, not a new finding from this pass.)
 - **Datastore network exposure (installed copy, confirmed live, already fixed):** Postgres/Redis/Neo4j/OpenSearch host ports are explicitly bound to `127.0.0.1` only, each with an inline comment stating that the default Docker shorthand (`0.0.0.0`-equivalent publish) was confirmed live to be LAN-reachable with zero authentication for OpenSearch specifically (security plugin disabled — `DISABLE_SECURITY_PLUGIN: "true"`) and reachable-metadata-only for Neo4j — i.e., this is a documented-and-already-remediated issue in the running config, not an open one.
-- **Full settings surface** (`Settings` class) covers: app metadata, LAN network-info fields (written by the Windows wizard), JWT/encryption keys, 4 datastore URLs, 2 Celery URLs, credentials/model IDs for all 5 AI backends, credentials for all 11 real+stub IOC providers, crawler tuning (user-agent, timeout, max results/source), provider execution tuning (timeout, retries, cache TTL), and lookup-endpoint rate-limit tuning.
+- **Full settings surface** (`Settings` class) covers: app metadata, LAN network-info fields (written by the Windows wizard), JWT/encryption keys, 4 datastore URLs, 2 Celery URLs, credentials/model IDs for all 5 AI backends, credentials for all 15 real+stub IOC providers, crawler tuning (user-agent, timeout, max results/source), provider execution tuning (timeout, retries, cache TTL), and lookup-endpoint rate-limit tuning.
 
 ## 13. Logging
 

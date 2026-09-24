@@ -45,7 +45,7 @@ Several enum members exist but can **never** actually be returned by the detecto
 | `tls_certificate`, `malware_family`, `threat_actor`, `campaign` | **NOT IMPLEMENTED** (by the detector) | Never returned by `detect_ioc_type()`; produced by other subsystems (correlation engine, crawler, workers, crt.sh's `supported_types`). |
 
 The only override mechanism is `ioc_type_hint` on `LookupCreateRequest` / `BasketAddRequest`
-(`backend/app/schemas/lookup.py:11`, `backend/app/schemas/basket.py:10`) — a generic
+(`backend/app/schemas/lookup.py:17`, `backend/app/schemas/basket.py:16`) — a generic
 `Optional[IOCType]`, not a type-specific hint (e.g. there is no dedicated "this is JA3, not MD5"
 signal).
 
@@ -55,7 +55,7 @@ signal).
 
 The `Verdict` enum (`backend/app/models/lookup.py:22-34`) is the final classification stored on
 `IOCLookup.final_verdict` and produced by the AI's `FinalAssessment.final_verdict` field
-(`backend/app/ai/schemas.py:158`). Twelve values:
+(`backend/app/ai/schemas.py:205`). Twelve values:
 
 | Value | Frontend color (`frontend/lib/utils.ts`) | Meaning |
 |---|---|---|
@@ -74,7 +74,7 @@ The `Verdict` enum (`backend/app/models/lookup.py:22-34`) is the final classific
 
 `malicious` and `highly_malicious` are grouped as `_MALICIOUS_VERDICTS`; `benign` and
 `likely_benign` are grouped as `_BENIGN_VERDICTS` (`backend/app/ai/schemas.py:28-29`). A Pydantic
-validator (`FinalAssessment._verdict_must_agree_with_risk`, `schemas.py:161-182`) rejects an AI
+validator (`FinalAssessment._verdict_must_agree_with_risk`, `schemas.py:227-248`) rejects an AI
 response where `final_verdict` is in `_MALICIOUS_VERDICTS` but `malicious_probability < 30`, or in
 `_BENIGN_VERDICTS` but `malicious_probability > 50` — a sanity check against small local models
 that emit an internally contradictory assessment.
@@ -101,16 +101,16 @@ used on both `ProviderSummary` (per-provider) and `RiskAssessment` (final):
 
 Two distinct 0–100 numeric confidence conventions exist in the platform — do not conflate them:
 
-1. **AI assessment confidence** — `RiskAssessment.confidence_score` (`ai/schemas.py:105-109`) and
+1. **AI assessment confidence** — `RiskAssessment.confidence_score` (`ai/schemas.py:115-119`) and
    `overall_risk_score` / `malicious_probability` are all `float` fields on a **0–100** scale
-   (explicitly *not* 0–1). A validator (`_reject_0_to_1_scale`, `ai/schemas.py:119-131`) rescales
+   (explicitly *not* 0–1). A validator (`_reject_0_to_1_scale`, `ai/schemas.py:140-152`) rescales
    any value strictly between 0 and 1 by ×100, because small local models (observed:
    `llama3.2:3b`) sometimes emit a 0–1 probability despite the 0–100 field description.
 2. **Deterministic evidence confidence** — `EvidenceRecord.confidence` (`backend/app/evidence/builder.py`)
    is also 0–100, "same scale as `RiskAssessment` ... so evidence and risk numbers are directly
    comparable in the UI" (`builder.py:1-10` docstring). Two sources feed it:
    - Provider-summary evidence: `_CONFIDENCE_LEVEL_TO_SCORE` maps the `_Confidence` literal to a
-     score — `low` → `30.0`, `medium` → `60.0`, `high` → `90.0` (`builder.py:21`); an unrecognized
+     score — `low` → `30.0`, `medium` → `60.0`, `high` → `90.0` (`builder.py:22`); an unrecognized
      value defaults to `50.0`.
    - Correlation-edge evidence: `confidence = round(edge.confidence * 100, 1)` — the correlation
      engine's internal 0–1 edge confidence (see [Correlation confidence](#correlation-edge-confidence-and-corroboration)
@@ -127,22 +127,23 @@ value in the same object.
 
 ## ProviderStatus
 
-The `ProviderStatus` enum (`backend/app/providers/base.py:31-38`) — the outcome of a single
+The `ProviderStatus` enum (`backend/app/providers/base.py:70-81`) — the outcome of a single
 provider's `run()` call for one IOC lookup:
 
 | Value | Meaning | Set by |
 |---|---|---|
 | `ok` | Provider returned usable data | Connector `fetch()` on success |
-| `error` | Unexpected failure (non-retryable exception, or HTTP error not otherwise mapped) | `BaseProvider.run()` (`base.py:126-151`), orchestrator on exhausted retries |
-| `timeout` | Provider call exceeded `provider_timeout_seconds` | Orchestrator (`orchestrator.py:59-78`), `error_message="Timed out after {N}s"` |
-| `rate_limited` | Provider signaled its own rate limit | `BaseProvider.run()` maps HTTP `429`, `403`, `509` → `rate_limited` (509 is PhishTank's documented over-limit code, `base.py:129`) |
-| `not_configured` | Provider requires an API key/credential that isn't set | `BaseProvider.run()` (`base.py:112-123`) when `requires_key=True` and `configured=False` |
-| `unsupported_ioc` | The IOC type isn't in this provider's `supported_types` | `BaseProvider.run()` short-circuit (`base.py:101-111`), before any network call |
+| `error` | Unexpected failure (non-retryable exception, or HTTP error not otherwise mapped) | `BaseProvider.run()` (`base.py:217-252`), orchestrator on exhausted retries |
+| `timeout` | Provider call exceeded `provider_timeout_seconds` | Orchestrator (`orchestrator.py:90-98`), `error_message="Timed out after {N}s"` |
+| `rate_limited` | Provider signaled its own rate limit | `BaseProvider.run()` maps HTTP `429`, `403`, `509` → `rate_limited` (509 is PhishTank's documented over-limit code, `base.py:222`) |
+| `not_configured` | Provider requires an API key/credential that isn't set | `BaseProvider.run()` (`base.py:205-216`) when `requires_key=True` and `configured=False` |
+| `disabled` | An administrator turned the provider off at runtime (distinct from `not_configured`) | `BaseProvider.run()` short-circuit (`base.py:182-193`), before the `unsupported_ioc` check |
+| `unsupported_ioc` | The IOC type isn't in this provider's `supported_types` | `BaseProvider.run()` short-circuit (`base.py:194-204`), before any network call |
 | `no_data` | Provider reached out successfully but had nothing on this IOC | Connector-specific (e.g. VirusTotal 404, AbuseIPDB empty `data`, abuse.ch `"ok"` status with zero entries) |
 
-Only `ok` results are cached in Redis (`orchestrator.py:80-83`) and only `ok` results contribute
-nodes/edges to the correlation graph (`correlation/engine.py:106`) or top-level evidence records
-(`evidence/builder.py:75-76`). See [PROVIDERS.md](PROVIDERS.md) for the per-connector mapping
+Only `ok` results are cached in Redis (`orchestrator.py:111-115`) and only `ok` results contribute
+nodes/edges to the correlation graph (`correlation/engine.py:152`) or top-level evidence records
+(`evidence/builder.py:76-77`). See [PROVIDERS.md](PROVIDERS.md) for the per-connector mapping
 rules (e.g. why abuse.ch auth failures are deliberately `error`, not `no_data` — a misconfigured
 key must never look like a clean verdict, per `abusech.py:5-9`).
 
@@ -166,7 +167,7 @@ persisted `EvidenceItem` row. All 9 values are actually producible by
 | `infrastructure` | `build_evidence_from_correlation()` | Correlation edge whose target type is in `NETWORK_TYPES` (see [IOC](#ioc-indicator-of-compromise)) plus `tls_certificate` / `asn` |
 | `relationship` | `build_evidence_from_correlation()` | Fallback for any correlation-edge target type not covered above (e.g. `cve`) |
 
-`build_evidence()` (`builder.py:142-147`) simply concatenates the provider-path and
+`build_evidence()` (`builder.py:148-153`) simply concatenates the provider-path and
 correlation-path results — no other `EvidenceType` values exist. Evidence is deterministic: the
 module docstring states explicitly "with NO AI involved" (`builder.py:1-10`).
 
@@ -176,7 +177,7 @@ module docstring states explicitly "with NO AI involved" (`builder.py:1-10`).
 
 The correlation engine (`backend/app/correlation/engine.py`) assigns each `GraphEdge` a 0–1
 `confidence` float, from a fixed base-confidence table keyed by the source data field
-(`_FIELD_BASE_CONFIDENCE`, `engine.py:77-90`):
+(`_FIELD_BASE_CONFIDENCE`, `engine.py:88-101`):
 
 | Field | Base confidence |
 |---|---|
@@ -190,13 +191,13 @@ The correlation engine (`backend/app/correlation/engine.py`) assigns each `Graph
 
 When multiple providers independently assert the *same* `(source, target, relationship)` edge,
 confidence is boosted: `boosted = min(1.0, max_base_confidence + 0.15 * (distinct_providers - 1))`
-(`_CORROBORATION_BONUS_PER_PROVIDER = 0.15`, `engine.py:94, 154-175`). The provenance string
+(`_CORROBORATION_BONUS_PER_PROVIDER = 0.15`, `engine.py:105, 204-231`). The provenance string
 (comma-joined provider IDs) is what `rank_pivots()` and `build_evidence_from_correlation()` later
 split on to decide corroboration and to label the evidence source as `"Correlation Engine
-(corroborated)"` vs. a single provider ID (`evidence/builder.py:122-123`, `evidence/pivot.py:35`).
+(corroborated)"` vs. a single provider ID (`evidence/builder.py:128`, `evidence/pivot.py:35`).
 
 Only `correlate()` results built from providers with `status == ok` contribute edges at all — a
-failed provider contributes zero nodes/edges (`engine.py:106`).
+failed provider contributes zero nodes/edges (`engine.py:152`).
 
 ---
 
@@ -213,11 +214,11 @@ References the [MITRE ATT&CK](https://attack.mitre.org/) framework. Two IOC-faci
   `https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json`,
   cached in-process for up to 3600s.
 
-The AI schema's `_MitreTactic` literal (`backend/app/ai/schemas.py:41-45`) constrains
+The AI schema's `_MitreTactic` literal (`backend/app/ai/schemas.py:51-55`) constrains
 `MitreMapping.tactic` to the 14 exact ATT&CK `phase_name` slugs (e.g. `initial-access`,
 `command-and-control`) so the frontend's exact-string-equality tactic grouping
 (`MitreMatrix.tsx`) never splits one tactic into two differently-cased buckets.
-`MitreMapping.grounded` (`ai/schemas.py:85-92`) is `true` only if the technique was explicitly
+`MitreMapping.grounded` (`ai/schemas.py:95-102`) is `true` only if the technique was explicitly
 surfaced by a provider (e.g. the MITRE ATT&CK provider's `mitre_techniques` field); the AI must
 set it `false` for a technique it inferred itself rather than one grounded in provider data.
 
@@ -260,14 +261,14 @@ regexes ran; a regression test pins this case to resolve as `md5`, not `asn`
 `asn` is part of `NETWORK_TYPES` (`backend/app/ioc/types.py:44-53`) and is supported by the
 WHOIS/RDAP provider (`whois_rdap.py`, via `rdap.org`) and by the correlation engine's
 `_RELATIONSHIP_EXTRACTORS` table as the `belongs_to_asn` relationship, with a 0.9 base confidence
-(`correlation/engine.py:57-90`).
+(`correlation/engine.py:75-91`).
 
 ---
 
 ## Roles and permissions (`ROLE_PERMISSIONS`)
 
-Three roles, defined by `Role` (`backend/app/models/user.py:11-14`): `admin`, `analyst`, `viewer`.
-The permission matrix `ROLE_PERMISSIONS` (`backend/app/models/user.py:31-44`) is a
+Three roles, defined by `Role` (`backend/app/models/user.py:13-16`): `admin`, `analyst`, `viewer`.
+The permission matrix `ROLE_PERMISSIONS` (`backend/app/models/user.py:48-76`) is a
 `dict[Role, set[str]]` consumed by `require_permission(permission)`
 (`backend/app/auth/rbac.py`), a FastAPI dependency factory that 403s with
 `"Role '{role}' lacks permission '{permission}'"` if the current user's role's set doesn't
@@ -276,7 +277,7 @@ contain the requested permission string.
 | Permission string | `admin` | `analyst` | `viewer` | Gates |
 |---|---|---|---|---|
 | `lookup:create` | ✓ | ✓ | | `POST /lookup/stream` |
-| `lookup:read` | ✓ | ✓ | ✓ | `GET /lookup/{id}`, `GET /lookup`, `GET /lookup/{id}/pivots`, `GET /providers/health` |
+| `lookup:read` | ✓ | ✓ | ✓ | `GET /lookup/{id}`, `GET /lookup`, `GET /lookup/{id}/pivots` |
 | `lookup:export` | ✓ | ✓ | | (lookup export) |
 | `provider:manage` | ✓ | | | (provider administration) |
 | `user:manage` | ✓ | | | (user administration) |
@@ -290,9 +291,18 @@ contain the requested permission string.
 | `case:read` | ✓ | ✓ | ✓ | Case retrieval |
 | `case:write` | ✓ | ✓ | | Case editing |
 | `case:close` | ✓ | ✓ | | Case closure |
+| `security_assessment:create` | ✓ | ✓ | | `POST /security-assessment/{lookup_id}/run` |
+| `security_assessment:read` | ✓ | ✓ | ✓ | Security-assessment profile/run retrieval |
+| `dashboard:read` | ✓ | ✓ | ✓ | `GET /providers/health`, `GET /dashboard/kpis` |
+| `pentest:create` | ✓ | ✓ | | `POST /pentest/assessments` (pentest lifecycle control) |
+| `pentest:read` | ✓ | ✓ | ✓ | Pentest assessment/finding retrieval |
+| `pentest:validate` | ✓ | ✓ | | `POST /pentest/findings/{id}/validate` |
+| `pentest:admin` | ✓ | | | Pentest kill switch (`POST /pentest/kill-switch/engage`) |
+| `pentest:exploit` | ✓ | | | Real exploit-module execution (`POST /pentest/findings/{id}/exploit/run`) |
 
-`viewer` is strictly read-only: `{lookup:read, evidence:read, case:read}` — it cannot create
-lookups, manage baskets, or touch cases beyond reading them (`user.py:43`). The first user ever
+`viewer` is strictly read-only: `{lookup:read, evidence:read, case:read, security_assessment:read,
+dashboard:read, pentest:read}` — it cannot create lookups, manage baskets, or touch cases beyond
+reading them (`user.py:71-75`). The first user ever
 registered via `POST /auth/register` is assigned `admin`; every registration attempt after that
 is rejected with `403 Forbidden` — every account after the first admin must be created by an
 existing admin via `POST /admin/users` or the Administration page, which lets the admin pick the
@@ -308,10 +318,10 @@ new account's role (per [SECURITY.md](SECURITY.md)). Full permission-string-to-r
 | **Basket** | A saved collection of IOCs a user is tracking, added via `POST /basket`, gated by the `basket:manage` permission. | `backend/app/api/routes/basket.py`, `backend/app/schemas/basket.py` |
 | **Case** | A grouped investigation record with associated IOCs, notes, and reports; cascade-deletes its children on removal. | `backend/app/models/case.py` (per [DATA_MODEL.md](DATA_MODEL.md)) |
 | **Pivot** | A one-click suggested next-IOC-to-investigate, derived purely from correlation edges touching the seed IOC — deliberately not AI-generated ("a pure sort over real correlation edges can never hallucinate a pivot target," `backend/app/evidence/pivot.py:1-5`). Returned by `GET /api/v1/lookup/{lookup_id}/pivots`. | `backend/app/evidence/pivot.py`, `backend/app/api/routes/pivot.py` |
-| **Corroborating providers** | The count of distinct provider IDs (parsed from an edge's comma-joined `provenance` string) that independently asserted the same correlation edge; drives both the pivot `relevance` band and the correlation-engine confidence boost. | `backend/app/evidence/pivot.py:35`, `backend/app/correlation/engine.py:94` |
-| **Grounded** (AI mapping) | A boolean on `MitreMapping` indicating whether an ATT&CK technique the AI cited was explicitly present in provider data (`true`) vs. inferred by the model itself (`false`). Checked downstream by `_ground_final_assessment()`, which sets `grounded=False` on any technique ID that doesn't match a real correlation-graph technique. | `backend/app/ai/schemas.py:85-92`, `backend/app/ai/service.py` |
-| **Provider category** | One of `threat_intel`, `sandbox`, `passive_dns`, `certificate_intel`, `whois`, `vulnerability`, `osint` (`ProviderCategory` enum). | `backend/app/providers/base.py:21-28` |
-| **from_cache** | Boolean on `ProviderResult` indicating the result was served from the Redis provider cache (keyed by SHA256 of the IOC value) rather than a live network call. | `backend/app/providers/base.py:41-73`, `backend/app/core/cache.py:24-39` |
+| **Corroborating providers** | The count of distinct provider IDs (parsed from an edge's comma-joined `provenance` string) that independently asserted the same correlation edge; drives both the pivot `relevance` band and the correlation-engine confidence boost. | `backend/app/evidence/pivot.py:35`, `backend/app/correlation/engine.py:105` |
+| **Grounded** (AI mapping) | A boolean on `MitreMapping` indicating whether an ATT&CK technique the AI cited was explicitly present in provider data (`true`) vs. inferred by the model itself (`false`). Checked downstream by `_ground_final_assessment()`, which sets `grounded=False` on any technique ID that doesn't match a real correlation-graph technique. | `backend/app/ai/schemas.py:95-102`, `backend/app/ai/service.py` |
+| **Provider category** | One of `threat_intel`, `sandbox`, `passive_dns`, `certificate_intel`, `whois`, `vulnerability`, `osint`, `security_assessment` (`ProviderCategory` enum). | `backend/app/providers/base.py:54-67` |
+| **from_cache** | Boolean on `ProviderResult` indicating the result was served from the Redis provider cache (keyed by SHA256 of the IOC value) rather than a live network call. | `backend/app/providers/base.py:100`, `backend/app/core/cache.py:66-68` |
 
 ---
 

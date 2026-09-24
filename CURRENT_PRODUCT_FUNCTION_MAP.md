@@ -1,6 +1,6 @@
 # Current Product Function Map
 
-Inventory of every capability in Horizon Grid v0.3.13, taken before the Omega rebuild, so nothing silently disappears. Compiled from a full read-only pass over `frontend/` and `backend/`.
+Inventory of every capability in Horizon Grid v0.3.14, taken before the Omega rebuild, so nothing silently disappears. Compiled from a full read-only pass over `frontend/` and `backend/`.
 
 ## Auth & RBAC
 - **UI:** `/login`, `/register`, `/about` (session/health info)
@@ -23,11 +23,11 @@ Inventory of every capability in Horizon Grid v0.3.13, taken before the Omega re
 - **DB:** `IOCLookup`, `ProviderResultRecord`, `AISummaryRecord`, `CorrelationEdgeRecord`, `FinalAssessmentRecord`, `EvidenceItem`
 - **Dependencies:** 18 provider integrations, 11 AI backends, deterministic scoring engine
 - **Expected behavior:** concurrent provider fan-out (unbounded by count, bounded by shared HTTP connection pool), per-provider result persisted+streamed immediately, AI summary/final-assessment overlaid after, deterministic score never overridden by AI narrative, one provider/AI failure never breaks the investigation, orphaned RUNNING rows recovered on process boot.
-- **Analyst-assist sub-features (all via `POST /lookup/{id}/analysis/*`):** explain-why-malicious, explain-what-is-this, explain-disagreement, false-positive check, challenge-verdict, next-actions, intelligence-gaps, score-explanation, copilot Q&A, hunting-center, pivot suggestions, detection-rule generation (Sigma/SPL/KQL), AI-backend comparison.
-- **Status:** working, mature, well-tested (multiple real bugs found+fixed per CHANGELOG). Visual layer is the weakest part (`ProviderCard.tsx` explicitly generic) -- rebuild target.
+- **Analyst-assist sub-features (mostly via `POST /lookup/{id}/analysis/*`; hunting-center and detection-rule generation via `/lookup/{id}/hunt`+`/detection`, pivot suggestions via `GET /lookup/{id}/pivots`, AI-backend comparison via `POST /lookup/{id}/reanalyze`):** explain-why-malicious, explain-what-is-this, explain-disagreement, false-positive check, challenge-verdict, next-actions, intelligence-gaps, score-explanation, copilot Q&A, hunting-center, pivot suggestions, detection-rule generation (Sigma/SPL/KQL), AI-backend comparison.
+- **Status:** working, mature, well-tested (multiple real bugs found+fixed per CHANGELOG). Visual layer redesign (`ProviderCard.tsx` structured per-provider summaries, tabbed page composition) already delivered as part of the Omega rebuild slice (see `HORIZON_GRID_OMEGA_REBUILD_REPORT.md`).
 
 ## IOC classification
-- **Backend:** `app/ioc/detector.py`, `app/ioc/types.py` (30 IOC types)
+- **Backend:** `app/ioc/detector.py`, `app/ioc/types.py` (33 IOC types)
 - **Status:** working.
 
 ## Threat-Intel Providers
@@ -46,9 +46,9 @@ Inventory of every capability in Horizon Grid v0.3.13, taken before the Omega re
 
 ## Executive Dashboard
 - **UI:** `/dashboard`
-- **API:** `GET /dashboard/kpis`, `GET /dashboard/executive-summary`, `GET /providers/health`
+- **API:** `GET /dashboard/kpis`, `GET /dashboard/activity-timeline`, `GET /dashboard/geo-activity`, `GET /dashboard/executive-summary`, `GET /providers/health`
 - **Backend:** `app/core/dashboard.py` (pure aggregation, real SQL, nothing stubbed), `app/ai/dashboard_summary.py` (AI narrative + deterministic template fallback)
-- **Status:** working, all-real data, but visually thin -- 7 KPI tiles + 2 cards, zero timeseries/activity feed/live ticking data beyond a 60s health poll. Primary rebuild target.
+- **Status:** working, all-real data -- 7 KPI tiles, a 3D threat globe (aggregate + per-investigation geo activity), an hourly activity timeline, plus executive-summary and provider-health cards. Visual/data-density rebuild already delivered as part of the Omega rebuild slice (see `HORIZON_GRID_OMEGA_REBUILD_REPORT.md`).
 
 ## Basket & Cases
 - **UI:** `/basket`, `/cases`, `/cases/[id]`

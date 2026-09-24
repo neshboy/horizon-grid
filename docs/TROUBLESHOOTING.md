@@ -21,7 +21,7 @@ Ollama invocation failed: HTTP 400: ... failed to parse grammar ...
 **Cause**
 
 This is a real, documented gotcha in `backend/app/ai/schemas.py` (comment at
-`schemas.py:62-71`). Ollama's structured-output mode (`format:` on `/api/chat`)
+`schemas.py:72-81`). Ollama's structured-output mode (`format:` on `/api/chat`)
 compiles the *entire* JSON schema into one llama.cpp decoding grammar
 (`json-schema-to-grammar`, observed on server 0.32.6). If **any** field in that
 schema has a regex `pattern=` constraint, the whole grammar fails to compile and
@@ -66,7 +66,7 @@ Could not reach Ollama at http://host.docker.internal:11434 -- is it running?
 ```
 or
 ```
-Ollama did not respond within 120s (model=llama3.2:3b) -- likely too slow for available hardware
+Ollama did not respond within 300s (model=llama3.2:3b) -- likely too slow for available hardware
 ```
 
 **Cause**
@@ -75,9 +75,12 @@ Ollama did not respond within 120s (model=llama3.2:3b) -- likely too slow for av
 to these exact `RuntimeError` messages. `AI_BACKEND` defaults to `ollama`
 (`backend/app/core/config.py`), and `OLLAMA_BASE_URL` defaults to
 `http://host.docker.internal:11434` — Ollama is expected to run **on the host**, not
-inside a container. The 120-second timeout (`_TIMEOUT_SECONDS` in `ollama_client.py`)
-is sized for a model that fits fully in VRAM; a model that spills to CPU/mmap can
-legitimately take minutes and will trip this.
+inside a container. The 300-second timeout (`ollama_timeout_seconds` in
+`backend/app/core/config.py`, overridable via `OLLAMA_TIMEOUT_SECONDS` in `.env`; the
+`_TIMEOUT_SECONDS = 300` constant in `ollama_client.py` is only a fallback for callers
+that construct the client without going through `get_settings()`) already accounts for
+a model that spills to CPU/mmap, which can legitimately take minutes; a slower host can
+still trip it.
 
 **Fix**
 
@@ -85,8 +88,8 @@ legitimately take minutes and will trip this.
   the backend container `curl http://host.docker.internal:11434`.
 - Confirm `OLLAMA_MODEL` in `.env` matches a model you've actually pulled
   (`ollama pull llama3.2:3b`).
-- If your hardware is slow, use a smaller model rather than raising the timeout —
-  `_TIMEOUT_SECONDS` is a hardcoded constant in `ollama_client.py`, not a `.env` setting.
+- If your hardware is slow, raise `OLLAMA_TIMEOUT_SECONDS` in `.env` (default `300`) and
+  restart the backend, or use a smaller model instead.
 - Either way, the lookup does not fail outright: `summarize_provider()` returns a
   degraded `ProviderSummary` and `generate_final_assessment()` returns a degraded
   `FinalAssessment` (verdict `unknown`, all scores `0`) rather than raising to the caller.
@@ -97,18 +100,23 @@ legitimately take minutes and will trip this.
 
 **Symptom**
 
-`GET /api/v1/providers/health` (or a provider card in the UI) shows
-`"configured": false` / status `not_configured` for a specific provider.
+A provider's result in a lookup shows status `not_configured` (or `GET
+/api/v1/runtime/ioc-providers` / the Manage Providers UI shows `"configured": false`
+for it).
 
 **Cause**
 
-`BaseProvider.run()` (`backend/app/providers/base.py:112-123`) short-circuits to
-`ProviderStatus.NOT_CONFIGURED` whenever `requires_key=True` and the connector's
-`configured` flag is falsy. Each connector computes `configured` once, from
-`get_settings()`, at **module import time** (the module-level singletons in
-`backend/app/providers/registry.py` are constructed when the process starts) — so
-adding a key to a running container's `.env` will not retroactively flip this without
-a restart.
+`BaseProvider.run()` (`backend/app/providers/base.py:205-216`) short-circuits to
+`ProviderStatus.NOT_CONFIGURED` whenever `requires_key=True` and the effective,
+override-aware `configured` value is falsy. Each connector's own `configured` flag is
+still computed once, from `get_settings()`, at **module import time** (the module-level
+singletons in `backend/app/providers/registry.py` are constructed when the process
+starts) — but `run()` also checks a per-investigation runtime override, sourced from
+the `ProviderRuntimeConfig` DB table (`backend/app/core/runtime_config.py`) and set via
+the Manage Providers UI / `POST /api/v1/runtime/ioc-providers/{provider_id}` (requires
+`provider:manage`), which takes effect on the next lookup with **no restart needed**. So:
+a key set only in `.env` still needs a restart to take effect, but a key set through the
+Manage Providers UI/API does not.
 
 Common causes per provider (env var -> connector):
 
@@ -120,6 +128,7 @@ Common causes per provider (env var -> connector):
 | URLhaus / ThreatFox / MalwareBazaar | `ABUSECH_AUTH_KEY` | one shared key across all three abuse.ch connectors |
 | Hybrid Analysis | `HYBRID_ANALYSIS_API_KEY` | |
 | Censys | `CENSYS_PERSONAL_ACCESS_TOKEN` **and** `CENSYS_ORGANIZATION_ID` | both must be set — either one alone leaves `configured=False` |
+| Google Safe Browsing | `GOOGLE_SAFE_BROWSING_API_KEY` | |
 
 Providers that never show `not_configured` (no key required, `configured=True`
 unconditionally): crt.sh, NVD (key optional, only raises the rate limit), CISA KEV,
@@ -127,13 +136,16 @@ MITRE ATT&CK, WHOIS/RDAP, Spamhaus, PhishTank, and the internet-intelligence cra
 
 **Fix**
 
-- Set the correct env var(s) in `.env` (see table above and
+- Prefer setting the credential through the Manage Providers UI (or `POST
+  /api/v1/runtime/ioc-providers/{provider_id}`, requires `provider:manage`) — it takes
+  effect on the next lookup, no restart needed. See [CONFIGURATION.md](CONFIGURATION.md).
+- Otherwise, set the correct env var(s) in `.env` (see table above and
   [PROVIDERS.md](PROVIDERS.md) for the full per-provider reference) and **restart the
   backend container** — `docker compose up -d --build backend` (or
   `docker compose restart backend` if only `.env` changed and no image rebuild is
-  needed) — since `configured` is fixed at import time.
-- `not_configured` is a normal, expected state for any provider you haven't set a key
-  for — it does not fail the lookup or block other providers.
+  needed) — since a connector's own `configured` flag is fixed at import time.
+- `not_configured` is a normal, expected state for any provider you haven't configured
+  yet — it does not fail the lookup or block other providers.
 
 ---
 
@@ -150,9 +162,10 @@ MITRE ATT&CK, WHOIS/RDAP, Spamhaus, PhishTank, and the internet-intelligence cra
 `backend/app/api/routes/lookup.py` enforces a Redis-backed fixed-window `RateLimiter`
 (`backend/app/core/cache.py`) keyed `lookup_create:{user.id}`, scoped per authenticated
 user and enforced across all backend workers (not per-process, since it's Redis-backed).
-This is the **only** rate limiter in the codebase — it applies to lookup *creation*
-only, not to individual providers, and not to any other endpoint (login/register have
-no rate limiting at all — see [SECURITY.md](SECURITY.md)).
+This is one of **three** rate limiters in the codebase (the other two guard `POST
+/api/v1/auth/login` and `POST /api/v1/auth/register`, keyed per attempted email address
+instead — see [SECURITY.md](SECURITY.md)) — it applies to lookup *creation* only, not to
+individual providers.
 
 Defaults (`backend/app/core/config.py`):
 
@@ -229,12 +242,11 @@ exposes `__about__`, so this raises `AttributeError` (passlib logs it as "(trapp
 error reading bcrypt version" and falls through to an internal self-test that then hits
 bcrypt 5.x's stricter 72-byte check, raising `ValueError`).
 
-This repo has **two** backend venvs with drifted versions:
-
-| Venv | bcrypt | Fails? |
-|---|---|---|
-| `backend/.venv` | `4.0.1` (matches `requirements.txt`) | No |
-| `backend/.venv_test` | `5.0.0` | Yes, reproduced directly |
+This is now a **historical** gotcha: it was previously reproduced with a stray
+`bcrypt==5.0.0` in `backend/.venv_test`, since fixed by reinstalling the pinned
+`bcrypt==4.0.1`. `backend/.venv` (which had drifted to unpinned, newer package versions)
+has since been deleted; `backend/.venv_test` is the one canonical backend virtualenv for
+this repo.
 
 **Fix**
 
@@ -245,7 +257,7 @@ pip install "bcrypt==4.0.1"
 
 Pin to `bcrypt==4.0.1` to match `backend/requirements.txt`. Confirm which venv your
 shell is actually activated into before debugging further — `python -c "import sys; print(sys.executable)"`.
-See [TESTING.md](TESTING.md) for the full venv/version-drift table.
+See [TESTING.md](TESTING.md) for the full venv history and setup steps.
 
 ---
 
@@ -296,7 +308,7 @@ if required infrastructure isn't up:
 | Test file | Requires | Skip reason string |
 |---|---|---|
 | `test_lookup_flow.py` | Redis at `localhost:6379` | `Redis not reachable at {REDIS_HOST}:{REDIS_PORT} -- run \`docker compose up -d redis\` first.` |
-| `test_lookup_stream_persistence.py` | Postgres at `localhost:5433` + Redis at `localhost:6379` | `Postgres/Redis not reachable -- run \`docker compose up -d postgres redis\` first.` |
+| `test_lookup_stream_persistence.py` | Postgres + Redis, reachable either via the in-network `postgres`/`redis` hostnames or the docker-compose host-published `localhost:5433`/`localhost:6379` ports | `Postgres/Redis not reachable via either the in-network postgres/redis hostnames or the docker-compose host-published localhost:5433/6379 ports -- run \`docker compose up -d postgres redis\` first.` |
 
 `test_api_health.py` and everything under `app/tests/unit/` have no infrastructure
 dependency and run unconditionally.
@@ -391,16 +403,22 @@ run `test_whois_rdap.py`.
 
 **Cause**
 
-**NOT IMPLEMENTED**: `frontend/package.json` wires up `"test": "vitest run"` and lists
-`vitest` as a devDependency, but there are zero `*.test.*`/`*.spec.*` files anywhere
-under `frontend/app`, `frontend/components`, or `frontend/lib`, and no
-`vitest.config.*` exists. This is configured-but-unused test infrastructure, not a
-broken test suite — there is nothing to fix, because there is nothing written yet.
+This is no longer expected: `frontend/package.json` wires up `"test": "vitest run"` and
+lists `vitest` as a devDependency, `frontend/vitest.config.ts` configures a Node test
+environment with the `@/*` path alias, and five `*.test.*` files now exist —
+`frontend/lib/api.test.ts`, `frontend/lib/authedFetch.test.ts`,
+`frontend/lib/dashboardSummary.test.ts`, `frontend/lib/runEffectOnce.test.ts`, and
+`frontend/app/pentest/page.test.ts` (all covering pure functions, not component
+rendering). Running `npm test` from `frontend/` runs all of them. If you genuinely see
+zero test files found, check that you're running from `frontend/` and that
+`vitest.config.ts` hasn't been deleted or moved.
 
 **Fix**
 
-Not applicable. If you're adding frontend tests for the first time, you'll also need to
-add a `vitest.config.*` — none exists to model against.
+Not applicable for the current suite — it runs and passes. If you're adding tests for
+something not yet covered (e.g. component rendering), you'll need to extend
+`vitest.config.ts` (e.g. add a `jsdom` environment), since the current config is
+Node-only.
 
 ---
 

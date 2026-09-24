@@ -16,7 +16,7 @@
 
 ## 1. 🎯 What This Project Is
 
-HORIZON GRID is a self-hosted SOC (Security Operations Center) workbench for investigating **IOCs** (Indicators of Compromise — an IP address, domain, URL, file hash, CVE, or similar artifact). The backend's own FastAPI app description (`backend/app/main.py:83-85`, shown in the Swagger UI at `/docs`) describes the core loop as "Unified threat intelligence workbench: single-search IOC lookup across dozens of providers, correlated and summarized by a local Ollama model (or AWS Bedrock/Gemini/Anthropic/Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter, configurable via AI_BACKEND)."
+HORIZON GRID is a self-hosted SOC (Security Operations Center) workbench for investigating **IOCs** (Indicators of Compromise — an IP address, domain, URL, file hash, CVE, or similar artifact). The backend's own FastAPI app description (`backend/app/main.py:93-95`, shown in the Swagger UI at `/docs`) describes the core loop as "Unified threat intelligence workbench: single-search IOC lookup across dozens of providers, correlated and summarized by a local Ollama model (or AWS Bedrock/Gemini/Anthropic/Groq/OpenAI/Kimi/DeepSeek/xAI/Mistral/OpenRouter, configurable via AI_BACKEND)."
 
 Concretely, one investigation does the following, all reachable from a single API call (`POST /api/v1/lookup/stream`):
 
@@ -52,9 +52,9 @@ This is a real, running codebase — not a prototype: it ships as a Windows-inst
 | Auth / JWT | python-jose (`[cryptography]`) | 3.5.0 | `backend/requirements.txt` |
 | Credential encryption | cryptography | 50.0.0 | `backend/requirements.txt` |
 | Password hashing | passlib, bcrypt | 1.7.4, 4.0.1 | `backend/requirements.txt` |
-| Cloud SDK (Bedrock) | boto3 | 1.35.24 | `backend/requirements.txt` |
+| Cloud SDK (Bedrock) | boto3 | 1.43.88 | `backend/requirements.txt` |
 | Search client (provisioned, unused) | opensearch-py | 2.7.1 | `backend/requirements.txt` |
-| OSINT feed parsing | feedparser, beautifulsoup4, lxml | 6.0.11, 4.12.3, 5.3.0 | `backend/requirements.txt` |
+| OSINT feed parsing | feedparser, beautifulsoup4, lxml | 6.0.11, 4.12.3, 6.1.3 | `backend/requirements.txt` |
 | WHOIS | python-whois | 0.9.6 | `backend/requirements.txt` |
 | Logging | structlog | 24.4.0 | `backend/requirements.txt` |
 | Metrics | prometheus-fastapi-instrumentator | 7.0.0 | `backend/requirements.txt` |
@@ -65,17 +65,17 @@ This is a real, running codebase — not a prototype: it ships as a Windows-inst
 | Layer | Choice | Version (pinned) | Source |
 |---|---|---|---|
 | Runtime (container) | Node.js | 20 (`node:20-alpine` base image) | `frontend/Dockerfile` |
-| Framework | Next.js (App Router) | 14.2.15 | `frontend/package.json` |
+| Framework | Next.js (App Router) | 14.2.35 | `frontend/package.json` |
 | UI library | React / ReactDOM | 18.3.1 | `frontend/package.json` |
 | Language | TypeScript | 5.6.2 | `frontend/package.json` |
 | Styling | Tailwind CSS | 3.4.12 | `frontend/package.json` |
 | Client state | Zustand | 4.5.5 | `frontend/package.json` |
 | Charts | Recharts | 2.12.7 | `frontend/package.json` |
 | Graph visualization | react-force-graph-2d | 1.25.4 | `frontend/package.json` |
-| UI primitives | Radix UI (`react-tabs`, `react-dialog`, `react-progress`, `react-slot`, `react-tooltip`) | 1.0.x–1.1.x | `frontend/package.json` |
+| UI primitives | Radix UI (`react-tabs`, `react-dialog`, `react-progress`, `react-slot`, `react-tooltip`) | 1.1.x | `frontend/package.json` |
 | Class variants / utility CSS | class-variance-authority, clsx, tailwind-merge | 0.7.0, 2.1.1, 2.5.2 | `frontend/package.json` |
 | Icons | lucide-react | 0.446.0 | `frontend/package.json` |
-| Test runner (configured, unused) | vitest | 4.1.10 | `frontend/package.json` — `"test": "vitest run"` is declared, but no `*.test.*`/`*.spec.*` files exist anywhere under `frontend/`; the tooling is present, no frontend automated tests currently exist. |
+| Test runner | vitest | 4.1.10 | `frontend/package.json` — `"test": "vitest run"`; 5 `*.test.ts` files exist under `frontend/` (`lib/api.test.ts`, `lib/authedFetch.test.ts`, `lib/dashboardSummary.test.ts`, `lib/runEffectOnce.test.ts`, `app/pentest/page.test.ts`). |
 
 ### 2.3 Datastores and infrastructure
 
@@ -105,7 +105,7 @@ ioc-intel-platform/
 │   ├── requirements.txt
 │   ├── alembic/                 Schema migrations
 │   │   ├── env.py               Async-engine Alembic runner; imports app.models.Base
-│   │   └── versions/            12 linear migrations (initial_schema → evidence/basket/case → provider_runtime_config/audit → final_assessment_records → user_last_login_at → user_token_version → security_assessment_tables → provenance_category → final_assessment_ai_outcome → cancelled_security_assessment_status → pentest_suite_tables → pentest_exploit_attempts_table, current head)
+│   │   └── versions/            16 linear migrations (initial_schema → evidence/basket/case → provider_runtime_config/audit → final_assessment_records → user_last_login_at → user_token_version → security_assessment_tables → provenance_category → final_assessment_ai_outcome → cancelled_security_assessment_status → pentest_suite_tables → pentest_exploit_attempts_table → from_cache_to_provider_results → pentest_global_kill_switch_table → case_ioc_uniqueness_constraint → created_at_index_to_timestamped_tables, current head)
 │   └── app/
 │       ├── main.py               App assembly: router registration, CORS/request-id/body-size middleware, startup hooks (runtime-config seeding, orphaned-run recovery), /health, /health/detailed, /network-info, /metrics
 │       ├── api/routes/           15 route modules — one per resource area (see §4)
@@ -123,15 +123,15 @@ ioc-intel-platform/
 │       ├── workers/               celery_app.py, tasks.py — the one hourly OSINT re-crawl job
 │       ├── models/                SQLAlchemy ORM: user, lookup, evidence, basket, case, runtime_config, security_assessment, pentest, base
 │       ├── schemas/                Pydantic request/response DTOs (lookup, basket, case, auth, admin, security_assessment, pentest)
-│       └── tests/                 unit/ (33 files) + integration/ (15 files), pytest + pytest-asyncio + respx
+│       └── tests/                 unit/ (65 files) + integration/ (34 files), pytest + pytest-asyncio + respx
 │
 ├── frontend/                     Next.js 14 application (TypeScript)
 │   ├── Dockerfile
 │   ├── package.json
-│   ├── app/                      App Router pages: home, lookup/new, lookup/[id], basket, cases, cases/[id], providers, login, register
+│   ├── app/                      App Router pages: home, lookup/new, lookup/[id], basket, cases, cases/[id], providers, login, register, admin, dashboard, dashboard/provider-health, pentest, pentest/[id], about
 │   ├── components/
-│   │   ├── dashboard/             ~22 investigation-workspace widgets (ProviderCardGrid, RelationshipGraph, EvidencePanel, HuntingCenterPanel, ...)
-│   │   └── ui/                    shadcn-style primitives (button, card)
+│   │   ├── dashboard/             ~37 investigation-workspace widgets (ProviderCardGrid, RelationshipGraph, EvidencePanel, HuntingCenterPanel, ...)
+│   │   └── ui/                    shadcn-style primitives (button, card, dialog, input, tabs, badge)
 │   └── lib/                       api.ts (all backend calls + SSE consumer), types.ts (manual mirror of backend Pydantic schemas), utils.ts, aiPrompt.ts
 │
 ├── docs/                          Hand-written engineering reference docs (ARCHITECTURE.md, API.md, DATA_MODEL.md, PROVIDERS.md, DEPLOYMENT.md, TESTING.md, TROUBLESHOOTING.md, ...)
@@ -152,8 +152,8 @@ ioc-intel-platform/
 
 | Module | Base path | Endpoint count | Covers |
 |---|---|---|---|
-| `auth.py` | `/auth` | 4 | register / login / refresh / me |
-| `lookup.py` | `/lookup` | 6 | the core SSE investigation stream, reanalyze, assessments, get/list, PDF/CSV export |
+| `auth.py` | `/auth` | 5 | register / login / refresh / me / logout |
+| `lookup.py` | `/lookup` | 7 | the core SSE investigation stream, reanalyze, assessments, get/list, geo, PDF/CSV export |
 | `providers.py` | `/providers` | 2 | provider health, live credential test |
 | `ai_config.py` | `/ai` | 2 | AI backend live test, model-list discovery |
 | `analysis.py` | `/lookup/{id}/analysis` | 10 | evidence + 9 AI explanation endpoints (why, what-is-this, disagreement, false-positive, challenge, next-actions, gaps, score-explanation, copilot) |
@@ -166,13 +166,13 @@ ioc-intel-platform/
 | `security_assessment.py` | `/security-assessment` | 6 | Security Assessment Toolkit — profiles, tool health, run, list/get runs |
 | `pentest.py` | `/pentest` | 18 | Pentest Suite — scope/target CRUD, scan pipeline control (start/pause/resume/cancel), findings, AI explanations |
 | `pentest_exploit.py` | `/pentest` | 6 | admin-only Metasploit exploit validation (module lookup, confirm-and-run, attempt history) |
-| `dashboard.py` | `/dashboard` | 2 | executive dashboard KPIs + AI-written executive summary |
+| `dashboard.py` | `/dashboard` | 4 | executive dashboard KPIs, activity timeline, geo activity, AI-written executive summary |
 
-Total: 89 endpoints, all gated by `require_permission(...)` except the three public auth endpoints and `/auth/me` (identity-only). The full request/response contract for every one of these is documented in the API Reference chapter of this package; this chapter is concerned only with orienting a new engineer to where that code lives.
+Total: 93 endpoints, all gated by `require_permission(...)` except the three public auth endpoints and `/auth/me`/`/auth/logout` (identity-only). The full request/response contract for every one of these is documented in the API Reference chapter of this package; this chapter is concerned only with orienting a new engineer to where that code lives.
 
 ## 5. 📖 Files a New Engineer Should Read First
 
-The following ~26 files, read roughly in this order, cover the entire system end to end. This list reflects the actual dependency order of the codebase, not an arbitrary tour.
+The following ~27 files, read roughly in this order, cover the entire system end to end. This list reflects the actual dependency order of the codebase, not an arbitrary tour.
 
 **Entry point and configuration**
 

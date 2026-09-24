@@ -8,18 +8,23 @@ actual shipped UI only. For role/permission details see
 [API.md](API.md); for what each dashboard panel's AI content is grounded in
 see [AI_ENGINE.md](AI_ENGINE.md).
 
-The app has ten routes:
+The app has fifteen routes:
 
 | Route | Purpose |
 |---|---|
 | `/` | Home search box |
 | `/login` | Sign in |
 | `/register` | Create account |
+| `/about` | Version/build/platform status page (pulls from `GET /health/detailed`) for confirming exactly what's running |
 | `/lookup/new?value=...` | Live SSE investigation view |
 | `/lookup/[id]` | Completed-lookup detail view (no live stream) |
 | `/basket` | IOC Basket (per-analyst scratch space) |
 | `/cases` | Case list + create |
 | `/cases/[id]` | Case detail |
+| `/dashboard` | Executive Dashboard — KPI tiles, activity timeline, AI-generated narrative summary, provider-health widget |
+| `/dashboard/provider-health` | Full per-provider health table (1h/24h/7d/30d windows) |
+| `/pentest` | Pentest Suite — assessment list + create. Standalone, scope-enforced authorized-assessment workflow, distinct from the per-lookup Security Assessment Toolkit. Full walkthrough in [PENTEST_SUITE.md](PENTEST_SUITE.md). |
+| `/pentest/[id]` | Pentest assessment detail — scope/targets, live control panel, findings, AI executive summary |
 | `/providers` | Manage Providers — AI/IOC provider configuration, audit log, network access. Linked from `WorkspaceNav` for every logged-in role, but every underlying call is gated server-side by `provider:manage`/`audit:read`, so it's only actually functional for an admin. Full walkthrough in [ADMIN_GUIDE.md](ADMIN_GUIDE.md). |
 | `/admin` | Administration console — user management, the roles &amp; permissions matrix, audit log. Admin-role only, both in the nav (link only renders for `role: admin`) and server-side (`user:manage`). Full walkthrough in [ADMIN_GUIDE.md](ADMIN_GUIDE.md). |
 
@@ -67,8 +72,11 @@ Session handling notes:
 - Access tokens expire (backend `ACCESS_TOKEN_EXPIRE_MINUTES`, default 30
   minutes). The frontend's `authedFetch()` helper transparently retries once
   via `POST /api/v1/auth/refresh` on a 401 before giving up.
-- `isLoggedIn()` / `logout()` are pure `localStorage` checks — no network
-  call is made just to check login state.
+- `isLoggedIn()` is a pure `localStorage` check — no network call is made
+  just to check login state. `logout()` also fires a best-effort
+  `POST /api/v1/auth/logout` (not awaited) that bumps the user's token
+  version to invalidate every outstanding token server-side, before
+  clearing `localStorage`.
 
 ---
 
@@ -338,9 +346,10 @@ authorized to test.
 #### ExportMenu
 Four buttons:
 - **Export PDF** and **Export CSV** — call `POST .../export?format=pdf` /
-  `...?format=csv`. **This backend route does not exist** (see
-  "Not implemented" below). The UI handles the resulting 404 gracefully and
-  shows *"Export format not yet available."*
+  `...?format=csv`, server-rendered by `export_lookup()` in
+  `backend/app/api/routes/lookup.py` and returned as a file download.
+  Gated on the `lookup:export` permission (admin/analyst only — viewers
+  don't hold it). **Works.**
 - **Export Markdown** — fully client-side, builds a Markdown document from
   the already-fetched assessment (executive/technical summary, threat
   assessment, verdict rationale, supporting evidence, MITRE mappings,
@@ -477,15 +486,6 @@ Fetched via `GET /api/v1/cases/{id}` on load.
 The following are explicitly **NOT IMPLEMENTED** in the current build. Do
 not expect them; they are called out here so they aren't mistaken for a bug:
 
-- **Server-side PDF/CSV export.** `ExportMenu`'s "Export PDF" and "Export
-  CSV" buttons call `POST /api/v1/lookup/{id}/export?format=pdf|csv`, but no
-  such backend route exists anywhere in `backend/app/api/routes/`. The
-  button click will always fail with a 404, surfaced in the UI as *"Export
-  format not yet available."* Only client-side **Markdown** and **JSON**
-  export actually work today. A `lookup:export` permission string is even
-  pre-defined for admin/analyst roles, suggesting this was planned but never
-  wired up. See [CHANGELOG.md](CHANGELOG.md) /
-  [DOCUMENTATION_GAPS.md](DOCUMENTATION_GAPS.md).
 - **No dedicated threat-actor, malware-family, or campaign pages.** These
   entities appear only as fields/labels inside lookup results (e.g. the
   basket comparison table's "Threat Actors"/"Malware" columns, or MITRE/

@@ -15,10 +15,10 @@ provider connectors fanned out to by the lookup endpoint.
 
 | Item | Value |
 |---|---|
-| API prefix | `/api/v1` (`backend/app/core/config.py` — `api_v1_prefix`, all routers mounted with this prefix in `backend/app/main.py:37-44`) |
+| API prefix | `/api/v1` (`backend/app/core/config.py` — `api_v1_prefix`, all routers mounted with this prefix in `backend/app/main.py:258-272`) |
 | OpenAPI JSON | `/api/v1/openapi.json` |
 | Interactive docs (Swagger UI) | `/docs` |
-| Health check (unversioned, no auth) | `GET /health` → `{"status": "ok", "service": "<app_name>"}` |
+| Health check (unversioned, no auth) | `GET /health` → `{"status": "ok", "service": "<app_name>", "version": "<app_version>", "uptime_seconds": <float>}` |
 | Metrics (Prometheus, unversioned) | `GET /metrics` |
 
 All request/response bodies below use the app's default base URL of `http://localhost:8000` in
@@ -48,7 +48,7 @@ accepts a JSON body, not OAuth2 form-encoded fields (`backend/app/auth/rbac.py:1
 
 ### Role/permission model
 
-Three roles (`backend/app/models/user.py:11-14`): `admin`, `analyst`, `viewer`.
+Three roles (`backend/app/models/user.py:13-16`): `admin`, `analyst`, `viewer`.
 
 | Permission | admin | analyst | viewer |
 |---|---|---|---|
@@ -64,6 +64,14 @@ Three roles (`backend/app/models/user.py:11-14`): `admin`, `analyst`, `viewer`.
 | `case:read` | Yes | Yes | Yes |
 | `case:write` | Yes | Yes | No |
 | `case:close` | Yes | Yes | No |
+| `security_assessment:create` | Yes | Yes | No |
+| `security_assessment:read` | Yes | Yes | Yes |
+| `dashboard:read` | Yes | Yes | Yes |
+| `pentest:create` | Yes | Yes | No |
+| `pentest:read` | Yes | Yes | Yes |
+| `pentest:validate` | Yes | Yes | No |
+| `pentest:admin` | Yes | No | No |
+| `pentest:exploit` | Yes | No | No |
 | `provider:manage` | Yes | No | No |
 | `user:manage` | Yes | No | No |
 | `audit:read` | Yes | No | No |
@@ -76,7 +84,7 @@ writes (§3.5), not just provider/AI configuration changes — one shared, appen
 (`config_audit_log`), never a credential or password value.
 
 The first user ever registered on a fresh database automatically becomes `admin` (bootstrap logic,
-`backend/app/api/routes/auth.py:26-35`). Every registration attempt after that is rejected outright
+`backend/app/api/routes/auth.py:74-98`). Every registration attempt after that is rejected outright
 with `403 Forbidden` — it no longer falls back to creating an `analyst` account. Once at least one
 administrator exists, they can create additional accounts of any role directly via
 `POST /api/v1/admin/users` (§3.5), and can promote/demote/enable/disable any existing user via
@@ -87,7 +95,8 @@ the public bootstrap-only self-registration route.
 
 | Status | Trigger |
 |---|---|
-| `401 Could not validate credentials` | Missing `Authorization` header, undecodable/expired JWT, wrong token `type` (e.g. a refresh token used where an access token is required), or the user no longer exists / `is_active=False`. Response includes header `WWW-Authenticate: Bearer`. |
+| `401 Could not validate credentials` | Missing `Authorization` header, undecodable/expired JWT, wrong token `type` (e.g. a refresh token used where an access token is required), or the user no longer exists. Response includes header `WWW-Authenticate: Bearer`. |
+| `403 Account disabled` | Token is otherwise valid, but the user's `is_active` column is now `False` (e.g. deactivated after the token was issued) — `get_current_user()` re-checks this from the database on every request. |
 | `403 Role '<role>' lacks permission '<permission>'` | Token is valid but the user's role does not have the specific permission the route requires. |
 
 ---
@@ -104,7 +113,7 @@ Request body:
 { "email": "analyst@example.com", "password": "<your-password>", "full_name": "Jane Analyst" }
 ```
 `full_name` is optional (defaults to `""`). The backend enforces **no minimum password length** —
-the frontend's 8-character minimum (`frontend/app/register/page.tsx:72`) is client-side only.
+the frontend's 8-character minimum (`frontend/app/register/page.tsx:84`) is client-side only.
 
 Response `201` (only on an empty `users` table):
 ```json
@@ -227,7 +236,8 @@ from the last remaining active administrator; `404` if the user doesn't exist.
 
 Body: `{ "is_active": true|false }`. Takes effect immediately — a disabled user's already-issued,
 still-unexpired tokens stop working on their very next request (`get_current_user()` re-checks
-`is_active` from the database every time, never from the JWT). **Errors:** `409` if this would
+`is_active` from the database every time, never from the JWT). **Errors:** `400` if an administrator
+tries to disable their own account (must be done by a different administrator); `409` if this would
 disable the last remaining active administrator; `404` if the user doesn't exist.
 
 ### POST /api/v1/admin/users/{id}/reset-password
@@ -304,7 +314,7 @@ Request body (`LookupCreateRequest`):
 `yara_rule`, `sigma_rule`, `unknown`.
 
 Response: `StreamingResponse`, `media_type: text/event-stream`. Event sequence (per the route's own
-docstring, `backend/app/api/routes/lookup.py:51-53`):
+docstring, `backend/app/api/routes/lookup.py:67-74`):
 
 ```
 detected -> N x provider_result -> N x provider_summary -> correlation -> final_assessment -> done
@@ -359,7 +369,7 @@ Sample `provider_result` event data shape (fields per `ProviderResultResponse`):
 The generator that streams events opens its **own** database session (`new_session()`) rather than
 reusing the request-scoped `Depends(get_db)` session — the latter is torn down as soon as the route
 returns the `StreamingResponse`, before the generator body runs, which would silently drop the final
-`lookup.status` mutation (comment, `lookup.py:87-94`).
+`lookup.status` mutation (comment, `lookup.py:145-152`).
 
 ### GET /api/v1/lookup/{lookup_id}
 
@@ -380,7 +390,7 @@ Response `200` (`LookupDetailResponse` shape): `id`, `ioc_value`, `ioc_type`, `s
 ### GET /api/v1/lookup
 
 Permission: `lookup:read`. Lookups are **shared across the whole SOC team** — any user with
-`lookup:read` sees every lookup, not just their own (comment, `lookup.py:250-252`).
+`lookup:read` sees every lookup, not just their own (comment, `lookup.py:1051-1053`).
 
 Query params: `limit` (int, default `50`, silently clamped to `[1, 200]`).
 
@@ -576,7 +586,8 @@ correlation-graph edges, so it can never hallucinate a pivot target (module docs
 
 ### GET /api/v1/lookup/{lookup_id}/pivots
 
-Query param: `limit` (int, default `10`; internally clamped to `[1, 50]` inside `rank_pivots`).
+Query param: `limit` (int, default `10`; internally clamped to `[0, 50]` inside `rank_pivots` — a
+requested `limit=0`, or a negative value, returns zero pivots rather than being bumped up to 1).
 
 ```bash
 curl -sS "http://localhost:8000/api/v1/lookup/3fa85f64-5717-4562-b3fc-2c963f66afa6/pivots?limit=5" \
@@ -701,9 +712,9 @@ relevant permission, unlike the private basket (module docstring, `backend/app/a
 
 ### GET /api/v1/cases
 
-Permission: `case:read`. Query params: `status_filter` (optional str — compared directly against
-`Case.status` as a raw string, **not validated against the `CaseStatus` enum** before the query
-runs), `limit` (default `50`, clamped to `[1, 200]`).
+Permission: `case:read`. Query params: `status_filter` (optional, typed `CaseStatus | None` — FastAPI
+validates it against the `CaseStatus` enum automatically, returning `422` for an unrecognized value),
+`limit` (default `50`, clamped to `[1, 200]`).
 
 ```bash
 curl -sS "http://localhost:8000/api/v1/cases?status_filter=open&limit=25" \
@@ -773,8 +784,8 @@ curl -sS -X POST http://localhost:8000/api/v1/cases/3fa85f64-5717-4562-b3fc-2c96
 ### POST /api/v1/cases/{case_id}/iocs
 
 Permission: `case:write`. Body (`CaseIOCAddRequest`): `ioc_value`, `ioc_type` (plain str, not
-validated against `IOCType`), `lookup_id` (optional str). `added_by` set to caller. **Errors:**
-`404 Case not found`.
+validated against `IOCType`), `lookup_id` (optional, typed `uuid.UUID` — a non-UUID value gets an
+automatic `422`). `added_by` set to caller. **Errors:** `404 Case not found`.
 
 ```bash
 curl -sS -X POST http://localhost:8000/api/v1/cases/3fa85f64-5717-4562-b3fc-2c963f66afa6/iocs \
@@ -870,4 +881,6 @@ This table predates the admin/provider-management API and is incomplete: `user:m
 every route in `backend/app/api/routes/admin.py` (§3.5, `/api/v1/admin/*`), `provider:manage`
 gates `backend/app/api/routes/runtime.py`, and `audit:read` gates `GET /api/v1/runtime/audit-log`
 — see §2's "Role/permission model" above for the full breakdown. The `/api/v1/security-assessment/*`
-routes (§8) are also missing from this table.
+routes (§3.6) are also missing from this table, as are the routes in
+`backend/app/api/routes/ai_config.py`, `dashboard.py`, `pentest.py`, and `pentest_exploit.py`
+(all mounted in `backend/app/main.py`, none documented elsewhere in this file).

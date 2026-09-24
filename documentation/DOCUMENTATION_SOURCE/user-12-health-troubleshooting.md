@@ -6,7 +6,7 @@
 - [Provider Health](#-provider-health)
   - [A dedicated page for "is every provider actually working right now?"](#a-dedicated-page-for-is-every-provider-actually-working-right-now)
 - [Troubleshooting](#-troubleshooting)
-  - [The AI summary says "Unknown" and every risk score reads 0](#the-ai-summary-says-unknown-and-every-risk-score-reads-0)
+  - [The AI summary says "Unknown" but the risk score isn't zeroed out](#the-ai-summary-says-unknown-but-the-risk-score-isnt-zeroed-out)
   - [The page shows a real error, or an investigation won't load at all](#the-page-shows-a-real-error-or-an-investigation-wont-load-at-all)
   - [A repeat lookup on the same IOC comes back noticeably faster](#a-repeat-lookup-on-the-same-ioc-comes-back-noticeably-faster)
   - [One provider card shows "Not Configured," "Error," or "Rate Limited" while others show real results](#one-provider-card-shows-not-configured-error-or-rate-limited-while-others-show-real-results)
@@ -47,25 +47,25 @@ Between these Start Menu shortcuts and the health-check address described above,
 
 The single-page health check above answers "is the backend up." A separate, more detailed question -- "is every individual threat-intelligence provider actually working right now, or just configured" -- gets its own dedicated page. It's reachable from the new **Dashboard** entry in the global navigation, then **"View full Provider Health status"** on the Executive Dashboard's provider-health widget (or directly via the **Provider Health** link under the Operations group of the same navigation).
 
-[FIGURE: dashboard-provider-health.png | The Provider Health page shows real per-provider status across four time windows, with healthy/degraded/down/unknown always paired with a distinct icon and label, not color alone.]
+[FIGURE: dashboard-provider-health.png | The Provider Health page shows real per-provider status across four time windows, with Operational/Degraded/Offline/Unknown always paired with a distinct icon and label, not color alone.]
 
 Unlike the old provider cards shown mid-investigation (still covered below), this page is not scoped to one lookup -- it is a real, database-backed table of every registered provider's status, built from the actual outcome of every real call that provider has made across the whole platform. Each row reports status, success rate, average latency, and consecutive-failure count, and reports all of that across four separate rolling windows -- 1 hour, 24 hours, 7 days, and 30 days -- so a brand-new problem and a month-long pattern are both visible without cross-referencing anything else; clicking a row expands all four windows side by side.
 
-Status is always one of four values -- Healthy, Degraded, Down, or Unknown -- and each is always paired with its own distinct color, icon, and text label, never color alone, so the information doesn't depend on being able to distinguish colors.
+Status is always one of four values -- Operational, Degraded, Offline, or Unknown -- and each is always paired with its own distinct color, icon, and text label, never color alone, so the information doesn't depend on being able to distinguish colors.
 
 > [!IMPORTANT]
-> A provider that was never actually exercised in a given window shows "Unknown," never "Healthy." Silence is not evidence of health -- a provider nobody has called in the last hour has no success rate to report for that hour, and reporting one anyway (even a reassuring one) would be reporting something the platform doesn't actually know.
+> A provider that was never actually exercised in a given window shows "Unknown," never "Operational." Silence is not evidence of health -- a provider nobody has called in the last hour has no success rate to report for that hour, and reporting one anyway (even a reassuring one) would be reporting something the platform doesn't actually know.
 
 > [!NOTE]
-> A related guarantee, found and fixed as a real bug during this feature's own testing: a provider that correctly reports "nothing found" for a given indicator -- which is what most real-world lookups against most providers actually return, since no single provider's dataset covers every indicator -- counts as a healthy, successful outcome, not a failure. An earlier version of this page's health calculation miscounted that correct "no data" response as a failed attempt, which meant a provider working perfectly could have shown up as "Degraded" or "Down" simply for doing its job honestly. This was caught and fixed before release: a real provider (OTX) that had been reporting "Degraded" at 64% success under the flawed logic correctly reported "Healthy" at 100% once "nothing found" was counted as the successful outcome it actually is.
+> A related guarantee, found and fixed as a real bug during this feature's own testing: a provider that correctly reports "nothing found" for a given indicator -- which is what most real-world lookups against most providers actually return, since no single provider's dataset covers every indicator -- counts as a healthy, successful outcome, not a failure. An earlier version of this page's health calculation miscounted that correct "no data" response as a failed attempt, which meant a provider working perfectly could have shown up as "Degraded" or "Offline" simply for doing its job honestly. This was caught and fixed before release: a real provider (OTX) that had been reporting "Degraded" at 64% success under the flawed logic correctly reported "Operational" at 100% once "nothing found" was counted as the successful outcome it actually is.
 
 # 🔧 Troubleshooting
 
 The list below is not a set of hypothetical problems -- every item was either deliberately induced and observed, or organically encountered, during the platform's own end-to-end quality-assurance pass, then either fixed or documented as an honest, known limitation. It is written for the first time something looks unexpected during an investigation of an IOC (Indicator of Compromise -- a piece of evidence such as an IP address, domain, URL, file hash, or CVE ID -- Common Vulnerabilities and Exposures, a public catalog number for a known software vulnerability -- that a security analyst wants to look up).
 
-## The AI summary says "Unknown" and every risk score reads 0
+## The AI summary says "Unknown" but the risk score isn't zeroed out
 
-**What you'll see:** instead of a verdict like "malicious" or "benign," the final assessment reads "Unknown," the risk and confidence scores are both 0, and a note explains that AI summarization was unavailable.
+**What you'll see:** instead of a verdict like "malicious" or "benign," the final assessment reads "Unknown," the risk and confidence scores fall back to the deterministic (non-AI) scoring engine's own evidence-based numbers rather than the AI's, and a note explains that AI summarization was unavailable.
 
 **What it means:** the AI model the platform uses to summarize and correlate results (by default, a local model) could not be reached. Rather than guess and present a verdict it can't actually support, the platform is designed to report that failure honestly. During testing, this exact scenario was deliberately created by making the AI backend unreachable: every AI-dependent field correctly reported the failure instead of pretending to succeed, and every provider's own raw data (VirusTotal, AbuseIPDB, WHOIS, and so on) remained untouched and just as trustworthy as always -- only the AI-generated synthesis was affected. Restoring the connection to the AI backend and restarting immediately brought full AI functionality back on the next investigation.
 

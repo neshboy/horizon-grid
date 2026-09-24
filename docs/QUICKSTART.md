@@ -44,7 +44,9 @@ This starts: `postgres`, `redis`, `neo4j`, `opensearch`, `backend`, `celery_work
 The backend container's command runs migrations automatically before starting the API — there is no separate migration step:
 
 ```
-sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+sh -c "msfrpcd -f -P \"$MSF_RPC_PASSWORD\" -S -a 127.0.0.1 -p 55553 -U msf &
+       alembic upgrade head &&
+       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 ```
 
 Wait for logs to settle, then confirm the backend is up:
@@ -107,9 +109,10 @@ every account after the first admin must be created by an existing admin from
 the Administration page (or `POST /api/v1/admin/users`), which lets the admin
 pick the new user's role.
 
-Password rule: the frontend enforces an 8-character minimum client-side only
-— the backend itself does not currently validate password length or
-strength. See [SECURITY.md](SECURITY.md).
+Password rule: 8–72 characters. The frontend enforces the 8-character
+minimum client-side, and the backend independently rejects registration
+requests shorter than 8 characters (or longer than 72) with a 422; it does
+not otherwise check strength. See [SECURITY.md](SECURITY.md).
 
 There is no email verification and no password-reset flow in this build —
 choose a password you'll remember.

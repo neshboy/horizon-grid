@@ -18,7 +18,7 @@ Every number below was actually executed or actually observed during this releas
 
 ## Frontend tests
 
-**None exist.** `vitest` is wired into `frontend/package.json`'s `test` script and installed as a dependency, but a repository-wide search (confirmed independently by two separate audit passes during this release) found zero `*.test.ts(x)`/`*.spec.ts(x)` files and no `vitest.config.*` anywhere under `frontend/`. `frontend-build.yml`'s own comment explicitly documents this: running `npm test` today finds no test files. This is a genuine, disclosed gap, not a claim of coverage that doesn't exist.
+**None existed at the time of this review.** `vitest` was wired into `frontend/package.json`'s `test` script and installed as a dependency, but a repository-wide search (confirmed independently by two separate audit passes during this release) found zero `*.test.ts(x)`/`*.spec.ts(x)` files and no `vitest.config.*` anywhere under `frontend/`. This was a genuine, disclosed gap, not a claim of coverage that doesn't exist. **This has since changed**: `frontend/` now has a real `vitest.config.ts` and 5 test files (`frontend/app/pentest/page.test.ts`, `frontend/lib/api.test.ts`, `frontend/lib/authedFetch.test.ts`, `frontend/lib/dashboardSummary.test.ts`, `frontend/lib/runEffectOnce.test.ts`) totaling 30 passing tests (`npx vitest run`: 5 test files passed, 30 tests passed), and `frontend-build.yml`'s own comment now documents this instead of the old "no test files" note.
 
 ## Integration/live verification (not automated tests — real, manual reproduction)
 

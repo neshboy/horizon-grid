@@ -2,16 +2,16 @@
 
 ## Supported Versions
 
-HORIZON GRID is currently a single rolling `0.2.x` release line — there is no
+HORIZON GRID is currently a single rolling `0.3.x` release line — there is no
 older major/minor version still receiving fixes, and no formal LTS or
-maintenance branch. Security fixes, when made, land on the current `0.2.x`
+maintenance branch. Security fixes, when made, land on the current `0.3.x`
 line. As the project matures past its first release, this section will be
 updated to reflect which versions are actively supported.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.2.3   | Yes (current release) |
-| < 0.2.3 | No — upgrade to 0.2.3 |
+| 0.3.14  | Yes (current release) |
+| < 0.3.14 | No — upgrade to 0.3.14 |
 
 ## Reporting a Vulnerability
 
@@ -106,9 +106,11 @@ inspection:
   The remaining 5 findings (`next`, `eslint-config-next`,
   `@next/eslint-plugin-next`, `glob`, `postcss`) all require a `next`
   14→16 major-version bump, which is a real breaking-change risk for a
-  production Next.js app with no existing frontend test suite to catch
-  regressions — deliberately deferred to its own tested upgrade pass rather
-  than done blindly. (`next`'s own advisory severity has since escalated to
+  production Next.js app whose frontend test suite (5 files, 30 tests, under
+  `frontend/lib` and `frontend/app/pentest`) covers pure lib functions and one
+  static source assertion but has no jsdom/React-rendering coverage to catch
+  page-level regressions — deliberately deferred to its own tested upgrade
+  pass rather than done blindly. (`next`'s own advisory severity has since escalated to
   critical in npm's scoring as newer Next.js CVEs were published — the
   deferral reasoning is unchanged, but this is a real, growing risk, not a
   static one; re-audit before treating "deferred" as "fine indefinitely.")
@@ -118,14 +120,14 @@ inspection:
   "closed" dependency finding as time-stamped, not permanent — re-run
   `pip-audit`/`npm audit` regularly, not just once.
 - **Installers are not code-signed.** The Windows installer
-  (`HORIZON-GRID-Setup-0.2.0.exe`) is explicitly unsigned — this is
-  documented plainly in the release notes — so Windows SmartScreen will warn
+  (`HORIZON-GRID-Setup-0.3.14.exe`) is explicitly unsigned — this is
+  documented plainly in the README — so Windows SmartScreen will warn
   on first run and users must click through "Run anyway." The Linux `.deb`
   package is likewise not GPG-signed. Verify the provenance of any installer
   you download through the channel you obtained it from.
 - **CI now runs on every push/PR**: `backend-tests.yml` (unit suite, always
   green; a separate job runs the integration suite against a real
-  docker-compose stack), `frontend-build.yml` (lint + build), and a weekly
+  docker-compose stack), `frontend-build.yml` (lint + test + build), and a weekly
   `dependency-audit.yml` (pip-audit + npm audit, non-blocking). Before this,
   there was no `.github/workflows` directory and audits were manual,
   point-in-time snapshots — that gap is now closed.

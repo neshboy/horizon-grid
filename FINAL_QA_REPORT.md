@@ -38,7 +38,7 @@ Live, already-installed application at `C:\Program Files\IOC Intelligence Platfo
 
 - Docker Compose stack: `postgres`, `redis`, `neo4j`, `opensearch`, `backend`, `celery_worker`, `celery_beat`, `frontend` — all healthy throughout, restarted once mid-pass to verify persistence (see §8).
 - AI backends with real, working credentials at test start: `ollama` (local, `llama3.2:3b`) and `groq` (hosted, `llama-3.3-70b-versatile`). `anthropic`, `bedrock`, `gemini` had no usable credential.
-- IOC providers with real, working credentials confirmed at test start: `otx`, `nvd`, `censys` (destroyed during this pass, see Incidents), `abuseipdb` (already broken — see §6), `virustotal` (destroyed during this pass), `groq`.
+- IOC providers with real, working credentials confirmed at test start: `otx`, `nvd`, `censys` (destroyed during this pass, see Incidents), `abuseipdb` (already broken — see §5), `virustotal` (destroyed during this pass).
 
 ## 3. Feature Inventory (Phase 0)
 

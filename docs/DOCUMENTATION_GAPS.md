@@ -20,9 +20,10 @@ this audit. Anything not confirmed in source is labeled **NOT IMPLEMENTED**,
 
 ## 1. Frontend pages/views that do not exist
 
-The full frontend route tree is: `/`, `/login`, `/register`, `/lookup/new`,
-`/lookup/[id]`, `/basket`, `/cases`, `/cases/[id]`. Nothing else exists under
-`frontend/app/`.
+The full frontend route tree is: `/`, `/about`, `/admin`, `/login`, `/register`,
+`/lookup/new`, `/lookup/[id]`, `/basket`, `/cases`, `/cases/[id]`, `/dashboard`,
+`/dashboard/provider-health`, `/pentest`, `/pentest/[id]`, `/providers`. Nothing
+else exists under `frontend/app/`.
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -42,10 +43,10 @@ The full frontend route tree is: `/`, `/login`, `/register`, `/lookup/new`,
 
 | Feature | Status | Notes |
 |---|---|---|
-| PDF export | **NOT IMPLEMENTED** | `frontend/components/dashboard/ExportMenu.tsx` calls `POST /api/v1/lookup/{lookupId}/export?format=pdf` directly. No `export` route exists anywhere in `backend/app/api/routes/*.py` (confirmed by grep). The call always 404s; the UI catches this and shows "Export format not yet available." |
-| CSV export | **NOT IMPLEMENTED** | Same missing route, `format=csv`. Only client-side **Markdown** and **JSON** export actually work (built entirely in-browser from the already-fetched `FinalAssessment`, no backend call). |
+| PDF export | **IMPLEMENTED** | `frontend/components/dashboard/ExportMenu.tsx`'s "Export PDF" button calls `POST /api/v1/lookup/{lookupId}/export?format=pdf`, handled by `export_lookup()` in `backend/app/api/routes/lookup.py`, which server-renders a real PDF and returns it as a file download. Gated on the `lookup:export` permission (ADMIN/ANALYST only; VIEWER does not hold it). |
+| CSV export | **IMPLEMENTED** | Same route, `format=csv`, server-rendered via `_render_csv()` in `backend/app/api/routes/lookup.py`. Client-side **Markdown** and **JSON** export also still work (built entirely in-browser from the already-fetched `FinalAssessment`, no backend call). |
 | ATT&CK ingestion beyond `mitre_attack.py` | **NOT IMPLEMENTED** | `backend/app/providers/mitre_attack.py` fetches the public STIX bundle and answers single `MITRE_TECHNIQUE` IOC lookups (with a 1-hour in-memory cache). There is no ingestion pipeline that loads the full ATT&CK framework into the database, no technique/tactic browsing API, and no scheduled sync job beyond that per-process cache. |
-| Per-provider rate limiting / circuit breakers | **NOT IMPLEMENTED** | `ProviderStatus.RATE_LIMITED` exists and is reachable (HTTP 429/403/509 mapped in `base.py`), but no connector proactively self-throttles. The only place `core/cache.py`'s `RateLimiter` is actually instantiated is the per-user lookup-creation limiter in `backend/app/api/routes/lookup.py` (`lookup_create:{user.id}`, 10/60s default) — nothing per-provider, and no exponential-backoff/circuit-breaker logic inside individual connector files (all retry/timeout logic lives in `orchestrator.py`). |
+| Per-provider rate limiting / circuit breakers | **NOT IMPLEMENTED** | `ProviderStatus.RATE_LIMITED` exists and is reachable (HTTP 429/403/509 mapped in `base.py`), but no connector proactively self-throttles. `core/cache.py`'s `RateLimiter` is instantiated for the per-user lookup-creation limiter in `backend/app/api/routes/lookup.py` (`lookup_create:{user.id}`, 10/60s default) and for the login/registration attempt limiters in `backend/app/api/routes/auth.py` — nothing per-provider, and no exponential-backoff/circuit-breaker logic inside individual connector files (all retry/timeout logic lives in `orchestrator.py`). |
 | MFA (multi-factor authentication) | **NOT IMPLEMENTED** *(frontend-confirmed; backend not directly inspected for this audit — see §4)* | `frontend/app/login/page.tsx` is a plain email+password form. `frontend/lib/api.ts` exposes only `login`, `register`, and `refreshAccessToken` for auth — no MFA-related function, route, or UI element anywhere in the frontend. |
 | Password reset / "forgot password" | **NOT IMPLEMENTED** *(same caveat as above)* | No forgot-password link, route, or API client function exists anywhere in `frontend/app/login/` or `frontend/lib/api.ts`. |
 
@@ -57,9 +58,9 @@ See [TESTING.md](TESTING.md) for how to actually run what exists. Gaps:
 
 | Gap | Status | Notes |
 |---|---|---|
-| Frontend automated tests | **NOT IMPLEMENTED** | `frontend/package.json` wires up `"test": "vitest run"` and lists `vitest@2.1.1` as a dependency, but there are **zero** `*.test.*` / `*.spec.*` files anywhere under `frontend/app`, `frontend/components`, or `frontend/lib`, and no `vitest.config.*`. Running `npm test` executes vitest with nothing to collect. |
+| Frontend automated tests | **PARTIAL** | `frontend/package.json` wires up `"test": "vitest run"` and lists `vitest@^4.1.10` as a dependency; `frontend/vitest.config.ts` now exists, and 5 test files exist (`frontend/lib/api.test.ts`, `frontend/lib/authedFetch.test.ts`, `frontend/lib/dashboardSummary.test.ts`, `frontend/lib/runEffectOnce.test.ts`, `frontend/app/pentest/page.test.ts`), covering a handful of pure/utility functions. No component/page rendering tests exist yet. |
 | Shared pytest fixtures (`conftest.py`) | **NOT IMPLEMENTED** | No `conftest.py` exists anywhere in the backend. `test_lookup_flow.py` and `test_lookup_stream_persistence.py` each independently reimplement very similar Postgres/Redis-override and connection-pool-disposal fixtures instead of sharing one. |
-| Auth endpoint tests | **NOT IMPLEMENTED** | No test file exercises `POST /api/v1/auth/register` or `/login` as HTTP requests. Auth is only exercised indirectly, by constructing `User` rows and tokens directly inside `test_lookup_stream_persistence.py`'s fixtures. |
+| Auth endpoint tests | **IMPLEMENTED** | `backend/app/tests/integration/test_auth_registration.py`, `test_auth_login_rate_limit.py`, `test_auth_login_disabled_account_rate_limit.py`, `test_auth_login_redis_outage.py`, `test_auth_login_timing_side_channel.py`, and `test_auth_logout.py` all exercise `POST /api/v1/auth/register`, `/login`, `/logout`, and `/refresh` as real HTTP requests via `httpx.AsyncClient`. |
 | Pytest config file | **NOT IMPLEMENTED** | No `pytest.ini`, `pyproject.toml`, `setup.cfg`, or `tox.ini` exists. Tests run with pytest defaults; inferred invocation (from `.pytest_cache` node IDs) is `cd backend && pytest` (or `pytest app/tests`), run from the `backend/` directory. |
 
 ### Known local test-run issues (not code bugs in the app itself)
@@ -74,8 +75,7 @@ See [TESTING.md](TESTING.md) for how to actually run what exists. Gaps:
 
 - **"Ask AI" popup (`AskAiPanel.tsx`) is not the platform's AI engine.** It builds a prompt client-side (`frontend/lib/aiPrompt.ts`) and opens `https://gemini.google.com/app` in a popup for the analyst to paste into manually, because Google blocks iframing Gemini. This is a copy/paste convenience against the analyst's *own* Gemini account — there is no server-side Gemini call. The platform's actual AI features (WHY/Score Explanation/Copilot/etc., documented in [AI_ENGINE.md](AI_ENGINE.md)) are separate and go through `backend/app/ai/analysis_service.py` and `hunting_service.py`.
 - **`PivotPanel`'s "What should I do next?" and "What don't we know?" are manual, not automatic.** They only call `getNextActions()` / `getIntelligenceGaps()` on explicit button click, unlike the rest of the lookup page which streams in automatically over SSE. The Recommended Pivots list itself (`backend/app/evidence/pivot.py`) is a deterministic sort, not AI-generated.
-- **`frontend/app/lookup/new/page.tsx` carries a stale docstring.** The module comment describes itself as a "composition root" with placeholder components "until those land," but every real dashboard component (`ThreatScoreGauge`, `ProviderCardGrid`, `FinalAssessmentPanel`, `RelationshipGraph`, `MitreMatrix`, etc.) is already wired in. The comment predates the current code and should not be read as a to-do list.
-- **`frontend/app/lookup/[id]/page.tsx` never shows a correlation graph on reload.** Its own docstring states `GET /api/v1/lookup/{id}` does not return correlation edges, so `correlation` is hardcoded to `null` on that page. The relationship graph is only populated during the live SSE run at `/lookup/new`, not when revisiting a completed lookup by ID.
+- **`frontend/app/lookup/[id]/page.tsx`'s correlation graph on reload now matches the live SSE shape, not the same object.** `GET /api/v1/lookup/{id}` rebuilds `correlation` from persisted `CorrelationEdgeRecord` rows (see `_correlation_payload()` in `backend/app/api/routes/lookup.py`) rather than replaying the original SSE event, but the `{nodes, edges}` shape matches, so the relationship graph does render on revisiting a completed lookup by ID.
 
 ---
 
@@ -95,7 +95,7 @@ These could not be confirmed or denied from the code alone:
 
 ---
 
-## 6. Why the export gap matters (concrete flow)
+## 6. Export flow (PDF/CSV now server-side; all four formats work)
 
 ```mermaid
 sequenceDiagram
@@ -105,22 +105,23 @@ sequenceDiagram
 
     User->>ExportMenu: Click "Export PDF"
     ExportMenu->>API: POST /lookup/{id}/export?format=pdf
-    API-->>ExportMenu: 404 (no export route exists)
-    ExportMenu-->>User: "Export format not yet available."
+    API-->>ExportMenu: 200, server-rendered PDF (export_lookup() in lookup.py)
+    ExportMenu-->>User: Blob download succeeds
 
     User->>ExportMenu: Click "Export CSV"
     ExportMenu->>API: POST /lookup/{id}/export?format=csv
-    API-->>ExportMenu: 404 (same missing route)
-    ExportMenu-->>User: "Export format not yet available."
+    API-->>ExportMenu: 200, server-rendered CSV
+    ExportMenu-->>User: Blob download succeeds
 
     User->>ExportMenu: Click "Export Markdown" / "Export JSON"
     ExportMenu->>ExportMenu: Build file entirely client-side from FinalAssessment
     ExportMenu-->>User: Blob download succeeds
 ```
 
-**Practical guidance:** until a server-side `/lookup/{id}/export` route is added,
-document PDF/CSV export as unavailable in any user-facing guide, and point
-analysts to the working Markdown/JSON export buttons instead.
+**Practical guidance:** all four export formats (PDF, CSV, Markdown, JSON) are
+available from the lookup page's Export menu. PDF/CSV require the
+`lookup:export` permission (ADMIN/ANALYST only — VIEWER can view a lookup but
+not export it).
 
 ---
 
@@ -134,14 +135,14 @@ analysts to the working Markdown/JSON export buttons instead.
 | Bulk IOC analysis/upload | NOT IMPLEMENTED |
 | IOC diff/compare over time (same IOC, different runs) | NOT IMPLEMENTED (cross-IOC basket compare exists instead) |
 | Dedicated/global ATT&CK navigator | NOT IMPLEMENTED (per-lookup MitreMatrix exists instead) |
-| Admin user-management UI | NOT IMPLEMENTED (backend permission strings exist, no UI) |
-| Server-side PDF export | NOT IMPLEMENTED |
-| Server-side CSV export | NOT IMPLEMENTED |
+| Admin user-management UI | IMPLEMENTED |
+| Server-side PDF export | IMPLEMENTED |
+| Server-side CSV export | IMPLEMENTED |
 | Full ATT&CK framework ingestion | NOT IMPLEMENTED (single-technique-lookup connector only) |
 | Per-provider rate limiting/circuit breakers | NOT IMPLEMENTED |
 | MFA | NOT IMPLEMENTED (frontend-confirmed) |
 | Password reset | NOT IMPLEMENTED (frontend-confirmed) |
-| Frontend automated tests | NOT IMPLEMENTED (vitest configured, unused) |
+| Frontend automated tests | PARTIAL (vitest configured, 5 test files covering utility functions) |
 | Backend `conftest.py` / shared fixtures | NOT IMPLEMENTED |
-| Backend auth endpoint tests | NOT IMPLEMENTED |
+| Backend auth endpoint tests | IMPLEMENTED |
 | Server-side Gemini/AI "second opinion" integration | NOT IMPLEMENTED (client-side popup workflow only) |

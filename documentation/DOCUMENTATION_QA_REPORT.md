@@ -41,11 +41,11 @@ Backend container environment variables were independently verified (`docker exe
 
 ## Screenshots Captured
 
-**27 real screenshots**, all from the actual installed product and actual running application -- zero mockups, zero placeholders, zero fabricated UI. Breakdown:
+**26 real screenshots**, all from the actual installed product and actual running application -- zero mockups, zero placeholders, zero fabricated UI. Breakdown:
 
 - Installer (Inno Setup): 4 (destination, tasks, ready, finished)
 - Setup Wizard (WinForms): 9 (welcome, admin empty/filled, AI config, providers configured with real keys entered and masked, ports, summary x2, installed)
-- Web application: 14, covering:
+- Web application: 13, covering:
   - Dashboard/login (logged out and logged in)
   - Real investigation #1 -- benign-but-flagged IP `8.8.8.8` (compact + full-page views, showing genuine provider disagreement between Spamhaus and AbuseIPDB/VirusTotal)
   - Real investigation #2 -- the EICAR antivirus test file's real MD5 hash (compact view, evidence/relationships detail, export menu showing the honest "Export format not yet available" message for PDF/CSV)

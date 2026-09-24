@@ -14,8 +14,8 @@ good way to express — everything else here is a quick-reference summary; the
 generated docs are authoritative for exact schemas.
 
 All routes are mounted under the `/api/v1` prefix (`settings.api_v1_prefix`).
-All routes except `/auth/register` and `/auth/login` require
-`Authorization: Bearer <access_token>`.
+All routes except `/auth/register`, `/auth/login`, and `/auth/refresh`
+require `Authorization: Bearer <access_token>`.
 
 ## Auth
 
@@ -61,7 +61,7 @@ Response `200`:
 ### `POST /api/v1/auth/refresh`
 
 Exchange a refresh token for a new access/refresh pair. Takes
-`refresh_token` as a query/body string parameter and returns the same
+`refresh_token` as a JSON body string parameter and returns the same
 `TokenResponse` shape as `/login`. `401` if the token is invalid, expired,
 or not of type `refresh`.
 
@@ -146,9 +146,9 @@ Payload is `ProviderResult.to_dict()` (`app/providers/base.py`):
 ```
 
 - `status` is one of: `ok`, `error`, `timeout`, `rate_limited`,
-  `not_configured`, `unsupported_ioc`, `no_data`.
+  `not_configured`, `unsupported_ioc`, `no_data`, `disabled`.
 - `data` shape varies per provider; see
-  `docs/ARCHITECTURE.md#normalized-fields` for the common keys the
+  `docs/ARCHITECTURE.md#correlation-engine` for the common keys the
   correlation engine and AI service rely on (`verdict`, `reputation`,
   `detection_ratio`, `resolved_ips`, `malware_families`, `threat_actors`,
   `mitre_techniques`, `cves`, etc).
@@ -193,7 +193,8 @@ Emitted once, after every provider has reported and every eligible
       "target": "domain:example.com",
       "relationship": "resolves_to",
       "confidence": 0.7,
-      "provenance": "virustotal"
+      "provenance": "virustotal",
+      "provenance_category": "threat_intel"
     }
   ]
 }
@@ -201,9 +202,9 @@ Emitted once, after every provider has reported and every eligible
 
 `provenance` is a comma-joined list of provider IDs if multiple providers
 asserted the identical edge. Note: this event's `nodes`/`edges` are **not**
-persisted verbatim for later retrieval via `GET /api/v1/lookup/{id}` — that
-endpoint returns edges as flat DB rows via a separate mechanism and today
-does not include them in its response at all (see below).
+persisted verbatim — `GET /api/v1/lookup/{id}` rebuilds an equivalent
+`{nodes, edges}` payload from the flat `CorrelationEdgeRecord` DB rows (see
+below), rather than replaying this exact event.
 
 #### `event: final_assessment`
 
@@ -293,14 +294,17 @@ Fetch a previously completed (or in-progress) lookup by ID. Requires
     }
   ],
   "ai_summaries": [ { "...": "one ProviderSummary dict per summarized provider" } ],
-  "created_at": "2026-08-07T12:00:00+00:00"
+  "created_at": "2026-08-07T12:00:00+00:00",
+  "correlation": { "nodes": [ "..." ], "edges": [ "..." ] }
 }
 ```
 
-Notes on differences from the live SSE stream: this response does **not**
-include correlation nodes/edges, and each `provider_results` row omits a few
-fields present on the SSE `provider_result` event (`ioc_value`, `ioc_type`,
-`fetched_at`, `from_cache`). `404` if the lookup doesn't exist.
+Notes on differences from the live SSE stream: `correlation` here is rebuilt
+from persisted `CorrelationEdgeRecord` rows rather than being the exact
+`correlation` event payload (edge rows carry no node `labels`, so rebuilt
+nodes always get an empty `labels` list), and each `provider_results` row
+omits a few fields present on the SSE `provider_result` event (`ioc_value`,
+`ioc_type`, `fetched_at`, `from_cache`). `404` if the lookup doesn't exist.
 
 ### `GET /api/v1/lookup`
 
@@ -329,8 +333,9 @@ Base path: `/api/v1/providers` (`app/api/routes/providers.py`).
 
 ### `GET /api/v1/providers/health`
 
-Requires `lookup:read`. Returns the registration/configuration status of
-every provider plugin (`app/providers/registry.py`, `get_provider_health`):
+Requires `dashboard:read`. Returns real, DB-backed health metrics (1h/24h/7d/30d
+windows, computed from `ProviderResultRecord` rows) for every registered
+provider (`get_provider_health_history()`, `app/core/dashboard.py`):
 
 ```json
 [
@@ -340,10 +345,17 @@ every provider plugin (`app/providers/registry.py`, `get_provider_health`):
     "category": "threat_intel",
     "configured": true,
     "requires_key": true,
-    "supported_types": ["domain", "ipv4", "ipv6", "md5", "sha1", "sha256", "sha512", "url"]
+    "supported_types": ["domain", "ipv4", "ipv6", "md5", "sha1", "sha256", "sha512", "url"],
+    "1h": { "status": "healthy", "success_rate": 100.0, "avg_latency_ms": 842, "consecutive_failures": 0, "rate_limited_count": 0 },
+    "24h": { "...": "..." },
+    "7d": { "...": "..." },
+    "30d": { "...": "..." }
   }
 ]
 ```
+
+`status` per window is one of `healthy`, `degraded`, `down`, `unknown` (a
+window with zero real attempts is always `unknown`).
 
 `configured: false` on a provider that `requires_key` means its API key is
 missing from `.env` — see `docs/INSTALL.md#troubleshooting`.
@@ -351,7 +363,7 @@ missing from `.env` — see `docs/INSTALL.md#troubleshooting`.
 ## Misc
 
 - `GET /health` (unversioned, no auth) — liveness probe:
-  `{"status": "ok", "service": "HORIZON GRID"}`.
+  `{"status": "ok", "service": "HORIZON GRID", "version": "0.3.14", "uptime_seconds": 1234.5}`.
 - `GET /metrics` (unversioned, no auth) — Prometheus metrics
   (`prometheus_fastapi_instrumentator`).
 - `GET /docs` — Swagger UI (auto-generated OpenAPI docs for every route's

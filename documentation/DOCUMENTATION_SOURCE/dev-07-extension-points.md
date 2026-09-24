@@ -91,17 +91,17 @@ This is called from `_get_ai_client()`, the single 3-tier backend-resolution poi
 **Register the backend name and its env-seed mapping.** Add `"my_backend"` to `AI_BACKENDS` in `backend/app/core/runtime_config.py` — `POST /api/v1/runtime/ai-active` validates against this list, so without this entry the backend can never become active and the route returns `400 f"Unknown AI backend {backend!r}"`. Then add an entry to `_AI_ENV_SEED_MAP` in the same file so an existing `.env` value is picked up once, on first startup, by `seed_from_env_if_empty()` (idempotent — only runs when `provider_runtime_configs` has zero rows, from `main.py`'s startup hook; it will not backfill a row added after the table already has data — configure such a backend once via the Manage Providers UI instead):
 
 ```python
-AI_BACKENDS = ["ollama", "anthropic", "bedrock", "gemini", "groq", "my_backend"]
+AI_BACKENDS = ["ollama", "anthropic", "bedrock", "gemini", "groq", "openai", "kimi", "deepseek", "xai", "mistral", "openrouter", "my_backend"]
 _AI_ENV_SEED_MAP = {..., "my_backend": {"credentials": {"api_key": "my_backend_api_key"}, "model": "my_backend_model_id"}}
 ```
 
 The referenced `my_backend_api_key`/`my_backend_model_id` fields must exist on `Settings`.
 
-**Update `_model_id_for_backend()`** in `ai/service.py` — its dict literal maps backend name to default model setting for AI-result traceability; add `"my_backend": settings.my_backend_model_id` alongside the other four.
+**Update `_model_id_for_backend()`** in `ai/service.py` — its dict literal maps backend name to default model setting for AI-result traceability; add `"my_backend": settings.my_backend_model_id` alongside the other eleven.
 
 **Live connection test and model listing (recommended).** Mirror the existing pattern in two files: `backend/app/ai/connection_test.py` (add a `_check_my_backend(credentials, model)` handler, register it in `test_ai_connection()`'s `handlers` dict, reached from `POST /api/v1/ai/test`, testing candidate credentials only) and `backend/app/api/routes/ai_config.py` (add `"my_backend"` to `_STATIC_MODEL_LISTS`, or implement live discovery in `POST /api/v1/ai/{backend}/models` following Groq's live `GET /models` or Ollama's live `GET {base_url}/api/tags`).
 
-**Frontend mirror.** `frontend/lib/types.ts` and `lib/api.ts` do not introspect `AI_BACKENDS` — they are a manually-maintained mirror. Add the new name wherever the existing five are enumerated (e.g. `frontend/app/providers/page.tsx`, `AiQuickSwitch`), or it will be fully functional server-side but unreachable from the UI.
+**Frontend mirror.** `frontend/lib/types.ts` and `lib/api.ts` do not introspect `AI_BACKENDS` — they are a manually-maintained mirror. Add the new name wherever the existing eleven are enumerated (e.g. `frontend/app/providers/page.tsx`, `AiQuickSwitch`), or it will be fully functional server-side but unreachable from the UI.
 
 ---
 
@@ -159,7 +159,7 @@ app.include_router(my_resource.router, prefix=settings.api_v1_prefix)
 
 ## 4. 🐘 Adding a Database Migration
 
-Schema changes are managed with **Alembic** (`backend/alembic/`) against SQLAlchemy 2.0 async models. The migration history is a single linear chain of twelve revisions today: `660d2aa3bc20` (initial schema) → `a6d3ad2bb63c` (evidence, basket, case management) → `0f2dc283823e` (provider runtime config, audit log) → `2652d888a33f` (final assessment records) → `7a1c2f9d4e6b` (user last-login timestamp) → `3b9e7a2c1d4f` (user token version) → `5c8e1f3a9b2d` (security assessment tables) → `6d2f4b8e1a7c` (evidence provenance category) → `6716ed40b9f2` (final assessment AI outcome) → `8f4a1c2d9e6b` (cancelled security-assessment status) → `9273d7b21c79` (Pentest Suite tables) → `9123b075e962` (Pentest Suite exploit-attempts table, current head).
+Schema changes are managed with **Alembic** (`backend/alembic/`) against SQLAlchemy 2.0 async models. The migration history is a single linear chain of sixteen revisions today: `660d2aa3bc20` (initial schema) → `a6d3ad2bb63c` (evidence, basket, case management) → `0f2dc283823e` (provider runtime config, audit log) → `2652d888a33f` (final assessment records) → `7a1c2f9d4e6b` (user last-login timestamp) → `3b9e7a2c1d4f` (user token version) → `5c8e1f3a9b2d` (security assessment tables) → `6d2f4b8e1a7c` (evidence provenance category) → `6716ed40b9f2` (final assessment AI outcome) → `8f4a1c2d9e6b` (cancelled security-assessment status) → `9273d7b21c79` (Pentest Suite tables) → `9123b075e962` (Pentest Suite exploit-attempts table) → `ec6690d5fcbc` (`provider_results.from_cache`) → `157fc4148d76` (pentest global kill-switch table) → `401e725fa85f` (case_iocs uniqueness constraint) → `b3f0587f2493` (created_at index on TimestampMixin tables, current head).
 
 **Change the model.** Edit the relevant file under `backend/app/models/`. If it's a new table in a new module, make sure the module is imported from `backend/app/models/__init__.py` — its sole purpose is importing every model module so `Base.metadata` is fully populated before Alembic looks at it; a model class that exists but is never imported is invisible to autogenerate.
 
@@ -170,7 +170,7 @@ cd backend
 alembic revision --autogenerate -m "describe your change"
 ```
 
-This produces a new file in `backend/alembic/versions/`, whose `down_revision` Alembic sets automatically to the current head (`9123b075e962` as of this writing). **Always open and read the generated file before applying it** — autogenerate diffs model metadata against the database's current shape column-by-column, but does not reliably detect every kind of change (a column rename shows up as a drop-and-add unless hand-edited to `op.alter_column`) and never writes data-migration logic for you.
+This produces a new file in `backend/alembic/versions/`, whose `down_revision` Alembic sets automatically to the current head (`b3f0587f2493` as of this writing). **Always open and read the generated file before applying it** — autogenerate diffs model metadata against the database's current shape column-by-column, but does not reliably detect every kind of change (a column rename shows up as a drop-and-add unless hand-edited to `op.alter_column`) and never writes data-migration logic for you.
 
 **Apply it:**
 
@@ -214,6 +214,10 @@ This is exactly the command every container in this platform already runs on eve
 | 9 | `6716ed40b9f2` | `6d2f4b8e1a7c` | `final_assessment_records`' AI-outcome column |
 | 10 | `8f4a1c2d9e6b` | `6716ed40b9f2` | Cancelled security-assessment status |
 | 11 | `9273d7b21c79` | `8f4a1c2d9e6b` | Pentest Suite tables (scope, targets, findings, assessment runs) |
-| 12 (head) | `9123b075e962` | `9273d7b21c79` | Pentest Suite exploit-attempts table |
+| 12 | `9123b075e962` | `9273d7b21c79` | Pentest Suite exploit-attempts table |
+| 13 | `ec6690d5fcbc` | `9123b075e962` | `provider_results.from_cache` column |
+| 14 | `157fc4148d76` | `ec6690d5fcbc` | Pentest global kill-switch table |
+| 15 | `401e725fa85f` | `157fc4148d76` | `case_iocs` uniqueness constraint |
+| 16 (head) | `b3f0587f2493` | `401e725fa85f` | `created_at` index on TimestampMixin tables |
 
-A new migration's `down_revision` should always be `9123b075e962` unless a teammate has already generated and merged a different migration first, in which case Alembic requires a merge revision (`alembic merge heads`) — not otherwise seen in this project's history, which has maintained a single linear chain to date.
+A new migration's `down_revision` should always be `b3f0587f2493` unless a teammate has already generated and merged a different migration first, in which case Alembic requires a merge revision (`alembic merge heads`) — not otherwise seen in this project's history, which has maintained a single linear chain to date.

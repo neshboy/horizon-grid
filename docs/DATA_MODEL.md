@@ -16,16 +16,17 @@ See also: [ARCHITECTURE.md](ARCHITECTURE.md) for how these tables fit into the o
 
 - **Primary keys**: every table inherits `UUIDPrimaryKeyMixin` (`backend/app/models/base.py:14-17`)
   — a `UUID` column named `id`, `primary_key=True`, Python-side default `uuid.uuid4()`.
-- **Timestamps**: every table inherits `TimestampMixin` (`base.py:20-26`) — `created_at` and
-  `updated_at`, both `DateTime(timezone=True)` with `server_default=func.now()`; `updated_at` also
-  sets `onupdate=func.now()`.
+- **Timestamps**: every table inherits `TimestampMixin` (`base.py:20-31`) — `created_at` (indexed)
+  and `updated_at`, both `DateTime(timezone=True)` with `server_default=func.now()`; `updated_at`
+  also sets `onupdate=func.now()`.
 - **Enums**: persisted as Postgres `ENUM` types via SQLAlchemy's `Enum()`, backed by Python
   `str, enum.Enum` classes.
 - **JSON columns**: use Postgres `JSONB` (`sqlalchemy.dialects.postgresql.JSONB`), not generic JSON.
 - **Deletes**: there is no soft-delete / `is_deleted` column anywhere in the schema. Deletion is
   hard-delete, propagated through SQLAlchemy relationship `cascade="all, delete-orphan"` (e.g.
   deleting an `IOCLookup` cascades to its `provider_results`, `ai_summaries`, `correlation_edges`,
-  and `evidence_items`; deleting a `Case` cascades to its `iocs`, `notes`, and `reports`).
+  `evidence_items`, and `security_assessment_runs`; deleting a `Case` cascades to its `iocs`,
+  `notes`, and `reports`).
 
 ---
 
@@ -185,20 +186,21 @@ Defined in `backend/app/models/user.py`.
 | `role` | `Enum(Role)` | not null, default `analyst` |
 | `is_active` | `Boolean` | not null, default `true` |
 | `last_login_at` | `DateTime(timezone=True)` | nullable — set by `app/core/users.py`'s `record_login_success()` on every successful `/auth/login` |
-| `token_version` | `Integer` | not null, default `0` — bumped by an admin-initiated password reset to immediately invalidate every access/refresh token already issued to this user (see [SECURITY.md](SECURITY.md) §1) |
+| `token_version` | `Integer` | not null, default `0` — bumped by an admin-initiated password reset to immediately invalidate every access/refresh token already issued to this user |
 | `created_at` | `DateTime(timezone=True)` | server default `now()` |
 | `updated_at` | `DateTime(timezone=True)` | server default `now()`, updates `now()` on change |
 
-Migrations: `7a1c2f9d4e6b_add_user_last_login_at.py` and `3b9e7a2c1d4f_add_user_token_version.py`,
-both nullable/defaulted so no backfill was needed and no existing row or session was disrupted.
+Migrations: `7a1c2f9d4e6b_add_user_last_login_at.py` (nullable) and
+`3b9e7a2c1d4f_add_user_token_version.py` (not null with a `server_default`), so no backfill was
+needed and no existing row or session was disrupted.
 
 User-management actions (create, edit, enable/disable, password reset) and every login/failed-login
 attempt are recorded into `config_audit_log` (below) via `app/core/audit.py` — the same
 append-only table provider/AI configuration changes already used, not a separate table.
 
-**`Role` enum** (`user.py:11-14`): `admin`, `analyst`, `viewer`.
+**`Role` enum** (`user.py:13-16`): `admin`, `analyst`, `viewer`.
 
-**Permission matrix** — `ROLE_PERMISSIONS` (`user.py:31-44`), consumed by the `require_role`
+**Permission matrix** — `ROLE_PERMISSIONS` (`user.py:48-76`), consumed by the `require_permission`
 dependency in `app/auth/rbac.py`:
 
 | Permission | admin | analyst | viewer |
@@ -218,6 +220,41 @@ dependency in `app/auth/rbac.py`:
 | `case:read` | yes | yes | yes |
 | `case:write` | yes | yes | |
 | `case:close` | yes | yes | |
+| `security_assessment:create` | yes | yes | |
+| `security_assessment:read` | yes | yes | yes |
+| `dashboard:read` | yes | yes | yes |
+| `pentest:create` | yes | yes | |
+| `pentest:read` | yes | yes | yes |
+| `pentest:validate` | yes | yes | |
+| `pentest:admin` | yes | | |
+| `pentest:exploit` | yes | | |
+
+---
+
+### `provider_runtime_configs`
+
+Defined in `backend/app/models/runtime_config.py`. The DB-backed replacement for "change a value
+in `.env` and restart the process" — one row per `(kind, provider_id)` for every AI backend and
+every IOC provider. Credentials are stored encrypted (`app/core/crypto.py`), never in plaintext.
+
+| Column | Type | Constraints |
+|---|---|---|
+| `id` | `UUID` | PK, default `uuid.uuid4()` |
+| `kind` | `Enum(ProviderKind)` | not null — `ai` or `ioc` |
+| `provider_id` | `String(64)` | not null |
+| `provider_name` | `String(255)` | not null, default `''` |
+| `enabled` | `Boolean` | not null, default `true` |
+| `is_active` | `Boolean` | not null, default `false` — meaningful only for `kind=ai`; exactly one AI row should have `is_active=True` at a time, enforced in the service layer (`app/core/runtime_config.py`), not a DB constraint |
+| `encrypted_credentials` | `Text` | nullable — Fernet ciphertext of a JSON object, e.g. `{"api_key": "..."}` |
+| `model_id` | `String(255)` | nullable |
+| `extra_config` | `JSONB` | nullable — non-secret extras (custom endpoint URL, provider-type tag, etc.) |
+| `last_test_at` | `DateTime(timezone=True)` | nullable |
+| `last_test_ok` | `Boolean` | nullable |
+| `last_test_message` | `String(500)` | nullable |
+| `updated_by` | `UUID` | FK -> `users.id`, nullable |
+| `created_at` / `updated_at` | `DateTime(timezone=True)` | mixin defaults |
+
+Table constraint: `UniqueConstraint("kind", "provider_id", name="uq_provider_runtime_kind_id")`.
 
 ---
 
@@ -246,7 +283,7 @@ Providers page's Audit Log tab and the Administration console's Audit Log tab.
 
 ### `ioc_lookups`
 
-Defined in `backend/app/models/lookup.py:37-66`. The central record of one IOC investigation.
+Defined in `backend/app/models/lookup.py:37-84`. The central record of one IOC investigation.
 
 | Column | Type | Constraints |
 |---|---|---|
@@ -268,13 +305,13 @@ Defined in `backend/app/models/lookup.py:37-66`. The central record of one IOC i
 `dormant_infrastructure`.
 
 Relationships (all `cascade="all, delete-orphan"`, deleting a lookup deletes these children):
-`provider_results`, `ai_summaries`, `correlation_edges`, `evidence_items`.
+`provider_results`, `ai_summaries`, `correlation_edges`, `evidence_items`, `security_assessment_runs`.
 
 ---
 
 ### `provider_results`
 
-Defined in `backend/app/models/lookup.py:69-84`. One row per provider connector call for a lookup.
+Defined in `backend/app/models/lookup.py:87-117`. One row per provider connector call for a lookup.
 
 | Column | Type | Constraints |
 |---|---|---|
@@ -288,6 +325,7 @@ Defined in `backend/app/models/lookup.py:69-84`. One row per provider connector 
 | `source_url` | `String(2048)` | nullable |
 | `error_message` | `Text` | nullable |
 | `latency_ms` | `Integer` | nullable |
+| `from_cache` | `Boolean` | not null, default `false` — true when this row is a replayed Redis cache hit rather than a real provider call; excluded from dashboard health's success-rate/latency/consecutive-failures computations |
 | `created_at` / `updated_at` | `DateTime(timezone=True)` | mixin defaults |
 
 See [PROVIDERS.md](PROVIDERS.md) for the provider connectors that populate this table.
@@ -296,7 +334,7 @@ See [PROVIDERS.md](PROVIDERS.md) for the provider connectors that populate this 
 
 ### `ai_summaries`
 
-Defined in `backend/app/models/lookup.py:87-97`. Holds both per-provider AI summaries and the
+Defined in `backend/app/models/lookup.py:119-129`. Holds both per-provider AI summaries and the
 single consolidated assessment for a lookup.
 
 | Column | Type | Constraints |
@@ -311,9 +349,30 @@ See [AI_ENGINE.md](AI_ENGINE.md) for how these rows are generated.
 
 ---
 
+### `final_assessment_records`
+
+Defined in `backend/app/models/lookup.py:160-190`. Every final assessment ever generated for a
+lookup, not just the most recent one — `IOCLookup.final_assessment`/`final_verdict`/`risk_score`
+remain the primary assessment shown by default, but re-running the assessment against a different
+AI backend for comparison persists each result here so it survives a page refresh.
+
+| Column | Type | Constraints |
+|---|---|---|
+| `id` | `UUID` | PK |
+| `lookup_id` | `UUID` | FK -> `ioc_lookups.id`, not null, indexed |
+| `ai_backend` | `String(64)` | not null |
+| `ai_model` | `String(255)` | nullable |
+| `ai_outcome` | `String(32)` | not null — mirrors `FinalAssessment.ai_outcome` (`success` / `skipped_no_evidence` / `failed`) |
+| `is_primary` | `Boolean` | not null, default `false` |
+| `assessment` | `JSONB` | not null |
+| `requested_by` | `UUID` | FK -> `users.id`, nullable |
+| `created_at` / `updated_at` | `DateTime(timezone=True)` | mixin defaults |
+
+---
+
 ### `correlation_edges`
 
-Defined in `backend/app/models/lookup.py:100-118`. One row per graph edge discovered by the
+Defined in `backend/app/models/lookup.py:132-157`. One row per graph edge discovered by the
 correlation engine for a lookup.
 
 | Column | Type | Constraints |
@@ -330,7 +389,7 @@ correlation engine for a lookup.
 | `provenance_category` | `String(32)` | not null, default `'threat_intel'` — WHAT KIND of source (see `app/core/provenance.py`); `'security_assessment'` for Security Assessment Toolkit-sourced edges |
 | `created_at` / `updated_at` | `DateTime(timezone=True)` | mixin defaults |
 
-> **Note on Neo4j**: the model's docstring (`lookup.py:101-103`) says these edges are "mirrored
+> **Note on Neo4j**: the model's docstring (`lookup.py:133-135`) says these edges are "mirrored
 > into Neo4j for graph traversal but kept here too so a lookup's graph can be rebuilt from
 > Postgres alone if Neo4j is unavailable." In the current codebase there is **no Neo4j driver
 > usage anywhere** — **NOT IMPLEMENTED**. `correlation_edges` in Postgres is, in practice, the
@@ -342,7 +401,7 @@ correlation engine for a lookup.
 
 ### `evidence_items`
 
-Defined in `backend/app/models/evidence.py:31-56`. The evidence ledger: deterministic, reproducible
+Defined in `backend/app/models/evidence.py:31-59`. The evidence ledger: deterministic, reproducible
 facts that AI-generated text can cite by `evidence_id`, per the module docstring — rows are built
 by `app/evidence/builder.py` from provider summaries and correlation edges and are **never written
 directly by an AI call**.
@@ -384,7 +443,7 @@ Assessment Toolkit invocation (see [SECURITY_ASSESSMENT_TOOLKIT.md](SECURITY_ASS
 | `target` | `String(2048)` | not null — the value the caller retyped to confirm scope |
 | `tool_ids` | `JSONB` | not null — list of tool ids run (`nmap`, `dns`, `tls`, `http_headers`, `hash_analysis`) |
 | `profile` | `String(64)` | not null |
-| `status` | `Enum(SecurityAssessmentRunStatus)` | not null, default `pending` (`pending`/`running`/`completed`/`failed`) |
+| `status` | `Enum(SecurityAssessmentRunStatus)` | not null, default `pending` (`pending`/`running`/`completed`/`failed`/`cancelled`) |
 | `authorization_confirmed_at` | `DateTime(timezone=True)` | not null |
 | `started_at` / `completed_at` | `DateTime(timezone=True)` | nullable |
 | `error_message` | `Text` | nullable |
@@ -399,7 +458,7 @@ One row per discrete finding produced by a run.
 | `id` | `UUID` | PK |
 | `run_id` | `UUID` | FK -> `security_assessment_runs.id`, not null, indexed |
 | `tool_id` | `String(64)` | not null, indexed |
-| `finding_type` | `String(64)` | not null — e.g. `open_port`, `dns_record`, `tls_issue`, `http_header_issue`, `hash_info` |
+| `finding_type` | `String(64)` | not null — e.g. `open_port`, `dns_record`, `tls_issue`, `missing_hsts`, `hash_info` |
 | `severity` | `Enum(Severity)` | not null, indexed (`info`/`low`/`medium`/`high`/`critical`) |
 | `title` | `String(500)` | not null |
 | `description` | `Text` | not null |
@@ -407,6 +466,49 @@ One row per discrete finding produced by a run.
 | `cve_ids` | `JSONB` | not null, default `[]` |
 | `evidence` | `JSONB` | not null, default `{}` — the concrete data the severity was derived from |
 | `created_at` / `updated_at` | `DateTime(timezone=True)` | mixin defaults |
+
+---
+
+### Pentest Suite tables
+
+Defined in `backend/app/models/pentest.py`. A standalone authorized-assessment workflow
+(DISCOVER -> ENUMERATE -> ASSESS -> CORRELATE -> PRIORITIZE -> REPORT) operating on its own
+independently-declared targets, distinct from the per-investigation Security Assessment Toolkit
+above. See [PENTEST_SUITE.md](PENTEST_SUITE.md).
+
+**`pentest_assessments`** — one row per assessment: `id`, `name`, `description`, `status`
+(`Enum(PentestAssessmentStatus)`: `draft`/`active`/`paused`/`completed`/`cancelled`/`expired`),
+`profile` (`Enum(PentestProfile)`: `passive`/`low_impact`/`standard`/`comprehensive`/`custom`),
+`scope_definition` (`JSONB`), `max_runtime_minutes` (`Integer`, default `120`), `max_requests`
+(`Integer`, default `5000`), `emergency_stopped` (`Boolean`, default `false` — per-assessment kill
+switch), `started_at`/`expires_at` (nullable), `created_by` (FK -> `users.id`, indexed).
+
+**`pentest_targets`** — one row per in-scope target: `id`, `assessment_id` (FK ->
+`pentest_assessments.id`, indexed), `target_type`, `value`, `port` (nullable), `asset_label`
+(nullable), `environment` (nullable), `target_group` (nullable), `status`
+(`Enum(PentestTargetStatus)`: `pending`/`discovering`/`enumerating`/`assessing`/`completed`/
+`failed`/`out_of_scope`, indexed).
+
+**`pentest_findings`** — one row per finding: `id`, `assessment_id` / `target_id` (FKs, indexed),
+`tool_id` (indexed), `finding_type`, `severity` (`String(16)`, indexed — reuses the Security
+Assessment Toolkit's Severity vocabulary), `confidence` (`Enum(PentestFindingConfidence)`:
+`confirmed`/`likely`/`potential`/`informational`), `cvss_score` (nullable), `cve_ids` (`JSONB`),
+`title`, `description`, `remediation` (nullable), `status` (`Enum(PentestFindingStatus)`:
+`open`/`validated`/`false_positive`/`remediated`/`accepted_risk`, indexed), `evidence` (`JSONB`
+list).
+
+**`pentest_exploit_attempts`** — one row per gated, manually-approved Metasploit module run
+against a finding's own target: `id`, `assessment_id` / `finding_id` / `target_id` (FKs, indexed),
+`module_fullname`, `module_options` (`JSONB`), `mode` (`Enum(PentestExploitMode)`: `check`/
+`exploit`), `status` (`Enum(PentestExploitStatus)`: `pending`/`running`/`succeeded`/
+`session_opened`/`failed`/`error`, indexed), `result_transcript` (`Text`, verbatim msfconsole
+output, never auto-parsed into a verdict), `session_id` (nullable), `requested_by` (FK ->
+`users.id`, indexed). Never created by the autonomous orchestrator pipeline — only by an explicit,
+individually-approved human action; gated by the admin-only `pentest:exploit` permission.
+
+**`pentest_global_kill_switch`** — singleton row (`id` always `1`): `engaged` (`Boolean`, default
+`false`), `changed_by` (FK -> `users.id`, nullable). Persists the platform-wide pentest kill switch
+so it survives a process restart, distinct from each assessment's own `emergency_stopped` column.
 
 ---
 
@@ -460,7 +562,7 @@ Relationships (all `cascade="all, delete-orphan"`): `iocs` -> `CaseIOC`, `notes`
 
 ### `case_iocs`
 
-Defined in `backend/app/models/case.py:47-58`. Join of a Case to an IOC, optionally tied to a
+Defined in `backend/app/models/case.py:47-64`. Join of a Case to an IOC, optionally tied to a
 specific lookup.
 
 | Column | Type | Constraints |
@@ -473,11 +575,14 @@ specific lookup.
 | `added_by` | `UUID` | FK -> `users.id`, not null (not indexed) |
 | `created_at` / `updated_at` | `DateTime(timezone=True)` | mixin defaults |
 
+Table constraint: `UniqueConstraint("case_id", "ioc_value", name="uq_case_ioc_case_value")` — a
+case can only have one `case_iocs` row per IOC value.
+
 ---
 
 ### `case_notes`
 
-Defined in `backend/app/models/case.py:61-75`. Free-text analyst notes, optionally anchored to a
+Defined in `backend/app/models/case.py:67-81`. Free-text analyst notes, optionally anchored to a
 target within the case.
 
 | Column | Type | Constraints |
@@ -499,7 +604,7 @@ target within the case.
 
 ### `case_reports`
 
-Defined in `backend/app/models/case.py:78-88`. AI- or analyst-generated report documents attached
+Defined in `backend/app/models/case.py:84-94`. AI- or analyst-generated report documents attached
 to a case.
 
 | Column | Type | Constraints |
@@ -513,17 +618,34 @@ to a case.
 | `context` | `JSONB` | nullable |
 | `created_at` / `updated_at` | `DateTime(timezone=True)` | mixin defaults |
 
+> **Note**: `GET /api/v1/cases/{case_id}` serializes any existing `reports` rows, but there is
+> currently **no route, service function, or frontend action anywhere in the codebase that creates
+> a `CaseReport` row** — the write path for this table is **NOT IMPLEMENTED** today.
+
 ---
 
 ## Migration history
 
-Migrations live in `backend/alembic/versions/`. There are exactly two revisions in the history
-today:
+Migrations live in `backend/alembic/versions/`. There are 16 revisions in the history today:
 
 | Order | Revision | File | Down-revision | Creates |
 |---|---|---|---|---|
 | 1 | `660d2aa3bc20` | `660d2aa3bc20_initial_schema.py` | `None` | `users`, `ioc_lookups`, `ai_summaries`, `correlation_edges`, `provider_results` (+ their indexes) |
-| 2 (HEAD) | `a6d3ad2bb63c` | `a6d3ad2bb63c_add_evidence_basket_and_case_management_.py` | `660d2aa3bc20` | `cases`, `basket_items`, `case_iocs`, `case_notes`, `case_reports`, `evidence_items` (+ their indexes/constraints) |
+| 2 | `a6d3ad2bb63c` | `a6d3ad2bb63c_add_evidence_basket_and_case_management_.py` | `660d2aa3bc20` | `cases`, `basket_items`, `case_iocs`, `case_notes`, `case_reports`, `evidence_items` (+ their indexes/constraints) |
+| 3 | `0f2dc283823e` | `0f2dc283823e_add_provider_runtime_config_and_audit_.py` | `a6d3ad2bb63c` | `config_audit_log`, `provider_runtime_configs` |
+| 4 | `2652d888a33f` | `2652d888a33f_add_final_assessment_records.py` | `0f2dc283823e` | `final_assessment_records` (+ index) |
+| 5 | `7a1c2f9d4e6b` | `7a1c2f9d4e6b_add_user_last_login_at.py` | `2652d888a33f` | adds `users.last_login_at` |
+| 6 | `3b9e7a2c1d4f` | `3b9e7a2c1d4f_add_user_token_version.py` | `7a1c2f9d4e6b` | adds `users.token_version` |
+| 7 | `5c8e1f3a9b2d` | `5c8e1f3a9b2d_add_security_assessment_tables.py` | `3b9e7a2c1d4f` | `security_assessment_runs`, `security_assessment_findings` |
+| 8 | `6d2f4b8e1a7c` | `6d2f4b8e1a7c_add_provenance_category.py` | `5c8e1f3a9b2d` | adds `provenance_category` to `correlation_edges` and `evidence_items` |
+| 9 | `6716ed40b9f2` | `6716ed40b9f2_add_final_assessment_ai_outcome.py` | `6d2f4b8e1a7c` | adds `ai_outcome` to `final_assessment_records` |
+| 10 | `8f4a1c2d9e6b` | `8f4a1c2d9e6b_add_cancelled_security_assessment_status.py` | `6716ed40b9f2` | adds `cancelled` to the `SecurityAssessmentRunStatus` enum |
+| 11 | `9273d7b21c79` | `9273d7b21c79_add_pentest_suite_tables.py` | `8f4a1c2d9e6b` | `pentest_assessments`, `pentest_targets`, `pentest_findings` |
+| 12 | `9123b075e962` | `9123b075e962_add_pentest_exploit_attempts_table.py` | `9273d7b21c79` | `pentest_exploit_attempts` |
+| 13 | `ec6690d5fcbc` | `ec6690d5fcbc_add_from_cache_to_provider_results.py` | `9123b075e962` | adds `from_cache` to `provider_results` |
+| 14 | `157fc4148d76` | `157fc4148d76_add_pentest_global_kill_switch_table.py` | `ec6690d5fcbc` | `pentest_global_kill_switch` |
+| 15 | `401e725fa85f` | `401e725fa85f_add_case_ioc_uniqueness_constraint.py` | `157fc4148d76` | adds `uq_case_ioc_case_value` unique constraint to `case_iocs` |
+| 16 (HEAD) | `b3f0587f2493` | `b3f0587f2493_add_created_at_index_to_timestamped_.py` | `401e725fa85f` | adds a `created_at` index to the 20 pre-existing `TimestampMixin` tables |
 
 Applying migrations:
 
@@ -533,7 +655,7 @@ alembic upgrade head
 ```
 
 The engine URL is resolved at runtime from `Settings.database_url`
-(`backend/app/core/config.py:29`, default `postgresql+asyncpg://ioc:ioc@postgres:5432/ioc_intel`),
+(`backend/app/core/config.py:39`, default `postgresql+asyncpg://ioc:ioc@postgres:5432/ioc_intel`),
 which Alembic's `env.py` reads via `get_settings().database_url` — so a `.env` file or
 `DATABASE_URL` environment variable overrides it for both the app and migrations. See
 [CONFIGURATION.md](CONFIGURATION.md).
@@ -545,10 +667,10 @@ for `alembic revision --autogenerate`.
 
 ## Session / engine wiring
 
-- `backend/app/core/db.py:8` — `create_async_engine(get_settings().database_url, pool_pre_ping=True, echo=False)`.
-- `backend/app/core/db.py:9` — `async_sessionmaker(bind=_engine, expire_on_commit=False, class_=AsyncSession)`.
-- `get_db()` (`db.py:12-14`) is the FastAPI dependency that yields a request-scoped session.
-- `new_session()` (`db.py:17-22`) returns a session directly for use outside FastAPI request scope
+- `backend/app/core/db.py:16-22` — `create_async_engine(get_settings().database_url, pool_pre_ping=True, echo=False, pool_size=..., max_overflow=...)` (pool size/overflow read from `Settings.db_pool_size`/`db_pool_max_overflow`).
+- `backend/app/core/db.py:23` — `async_sessionmaker(bind=_engine, expire_on_commit=False, class_=AsyncSession)`.
+- `get_db()` (`db.py:26-28`) is the FastAPI dependency that yields a request-scoped session.
+- `new_session()` (`db.py:31-36`) returns a session directly for use outside FastAPI request scope
   (Celery tasks, scripts) — caller owns its lifecycle, used as `async with new_session() as db:`.
 
 ---
@@ -565,4 +687,6 @@ for `alembic revision --autogenerate`.
 - **Not enforced at the database level**: `case_notes.anchor_type` / `anchor_ref` reference targets
   (IOC, evidence, graph node, timeline event, provider result) by convention only; there is no FK
   or check constraint tying them to a real row.
+- **NOT IMPLEMENTED**: writing to `case_reports`. The table, model, and read-side serialization all
+  exist, but no route, service function, or frontend action currently creates a `CaseReport` row.
 

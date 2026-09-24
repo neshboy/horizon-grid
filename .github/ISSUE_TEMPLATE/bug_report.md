@@ -7,7 +7,7 @@ labels: bug
 
 **Environment**
 - OS: (Windows or Linux, and version — e.g. Windows 11 23H2, Ubuntu 22.04)
-- HORIZON GRID version: (see Start Menu "Diagnostics" shortcut, `dpkg -s horizon-grid`, or the version string in Settings)
+- HORIZON GRID version: (see Start Menu "Diagnostics" shortcut, `dpkg -s horizon-grid`, or the version string on the About page)
 
 **Steps to reproduce**
 1.

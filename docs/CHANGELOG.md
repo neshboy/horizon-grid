@@ -7,7 +7,7 @@
 > rather than from commit logs. That's no longer true -- a real git history
 > with tagged releases and a real, incrementally-maintained changelog exists
 > now: see the repository root's own `CHANGELOG.md` for the accurate,
-> version-by-version history (currently through v0.3.9). This file is kept
+> version-by-version history (currently through v0.3.14). This file is kept
 > as a supplementary point-in-time feature inventory, not as the changelog
 > of record.
 
