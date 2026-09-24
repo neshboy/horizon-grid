@@ -372,13 +372,17 @@ bash linux/build-deb.sh`).
 
 All screenshots below are from the real, running application (synthetic/demo indicators, no confidential data) — none are mockups.
 
-**Executive dashboard** — real KPI tiles backed by live SQL aggregations, plus a 24h provider-health breakdown:
+**Executive dashboard** — real KPI tiles backed by live SQL aggregations, a threat globe, activity timeline, and provider-health breakdown (the executive summary honestly shows a "Template fallback" badge when the AI-written version isn't available, rather than silently faking one):
 
-![Executive dashboard: active investigations, critical IOC count, average threat score, provider health, and AI success rate, all from real live queries](docs/assets/screenshots/dashboard.png)
+![Executive dashboard: active investigations, a 3D threat globe, activity timeline, and provider health, all from real live queries](docs/assets/screenshots/dashboard.png)
 
 **Provider health matrix** — per-provider status, success rate, latency, and consecutive-failure streaks, with unconfigured providers shown honestly as `UNKNOWN` rather than hidden:
 
 ![Provider health table listing every registered IOC provider with real status/success-rate/latency columns](docs/assets/screenshots/provider-health.png)
+
+**Admin & RBAC** — user management, roles/permissions, and an audit log, enforced server-side (not just hidden in the UI):
+
+![Administration overview: total/active/disabled user counts, admin count, and recent logins](docs/assets/screenshots/admin-rbac.png)
 
 ## 📚 Documentation
 
