@@ -171,9 +171,11 @@ async def add_case_ioc(
     # must not silently accumulate exact duplicates from a double-click or a
     # network retry. Case-insensitive on purpose, matching add_to_basket()'s
     # own rationale (same IOC re-entered in different casing is still the
-    # same logical entry) -- and matching the uq_case_ioc_case_value unique
-    # constraint's own case-sensitive comparison is handled below by
-    # catching the IntegrityError this pre-check alone can't fully prevent.
+    # same logical entry). The DB's own uq_case_ioc_case_value_ci unique
+    # index (app/models/case.py) is a functional index on lower(ioc_value),
+    # matching this SELECT's own case-insensitivity, so a cross-casing
+    # check-then-insert race this pre-check alone can't fully prevent still
+    # raises IntegrityError for the except-block below to catch.
     existing = (
         await db.execute(
             select(CaseIOC).where(
@@ -199,10 +201,11 @@ async def add_case_ioc(
         await db.commit()
     except IntegrityError:
         # Check-then-insert race, same class of bug as add_to_basket()'s own
-        # uq_basket_owner_ioc handling: two concurrent adds of the same
-        # (case_id, ioc_value) can both pass the 'existing' SELECT above
+        # uq_basket_owner_ioc_ci handling: two concurrent adds of the same
+        # (case_id, ioc_value) -- including two different casings of the
+        # same logical value -- can both pass the 'existing' SELECT above
         # (both see None), then both attempt the INSERT -- the DB's
-        # uq_case_ioc_case_value unique constraint lets exactly one commit
+        # uq_case_ioc_case_value_ci unique index lets exactly one commit
         # through and raises IntegrityError to the loser. Treat that as the
         # idempotent add it really is rather than a 500: roll back this
         # request's now-aborted transaction and return the case as-is, since

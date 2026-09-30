@@ -6,7 +6,7 @@ import enum
 import uuid
 from typing import Optional
 
-from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Enum, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,12 +46,6 @@ class Case(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class CaseIOC(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "case_iocs"
-    # Mirrors BasketItem's uq_basket_owner_ioc (app/models/basket.py):
-    # without this, concurrent identical add-IOC requests for the same case
-    # (double-click, network retry) each land their own row instead of
-    # collapsing into one. See add_case_ioc() in app/api/routes/cases.py for
-    # the matching pre-insert dedup check + IntegrityError race handling.
-    __table_args__ = (UniqueConstraint("case_id", "ioc_value", name="uq_case_ioc_case_value"),)
 
     case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False, index=True)
     ioc_value: Mapped[str] = mapped_column(String(2048), nullable=False)
@@ -62,6 +56,23 @@ class CaseIOC(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     added_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     case: Mapped["Case"] = relationship(back_populates="iocs")
+
+    # Mirrors BasketItem's uq_basket_owner_ioc_ci (app/models/basket.py):
+    # without this, concurrent identical add-IOC requests for the same case
+    # (double-click, network retry) each land their own row instead of
+    # collapsing into one. See add_case_ioc() in app/api/routes/cases.py for
+    # the matching pre-insert dedup check + IntegrityError race handling.
+    # A functional unique index on (case_id, lower(ioc_value)) rather than a
+    # plain UniqueConstraint("case_id", "ioc_value") -- add_case_ioc()'s own
+    # pre-insert dedup SELECT is case-insensitive (func.lower(...) ==
+    # payload.ioc_value.lower()), so the constraint backing it needs to be
+    # case-insensitive too, or a cross-casing race (e.g. "EXAMPLE.COM" vs
+    # "example.com" added concurrently) passes that SELECT on both sides and
+    # both INSERTs succeed as distinct rows instead of one raising
+    # IntegrityError for the existing rollback/re-SELECT recovery to catch.
+    __table_args__ = (
+        Index("uq_case_ioc_case_value_ci", case_id, func.lower(ioc_value), unique=True),
+    )
 
 
 class CaseNote(Base, UUIDPrimaryKeyMixin, TimestampMixin):

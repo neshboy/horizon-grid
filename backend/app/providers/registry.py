@@ -52,17 +52,3 @@ _ALL_PROVIDERS: list[BaseProvider] = [
 
 def get_all_providers() -> list[BaseProvider]:
     return _ALL_PROVIDERS
-
-
-def get_provider_health() -> list[dict]:
-    return [
-        {
-            "provider_id": p.provider_id,
-            "provider_name": p.provider_name,
-            "category": p.category.value,
-            "configured": p.configured,
-            "requires_key": p.requires_key,
-            "supported_types": sorted(t.value for t in p.supported_types),
-        }
-        for p in _ALL_PROVIDERS
-    ]

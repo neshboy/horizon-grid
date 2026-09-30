@@ -11,6 +11,7 @@ here and simply yields an empty result list. This function must never raise.
 from __future__ import annotations
 
 import logging
+import urllib.parse
 
 import httpx
 
@@ -26,7 +27,7 @@ async def search(query: str, client: httpx.AsyncClient, limit: int) -> list[dict
     settings = get_settings()
     try:
         response = await client.get(
-            _SEARCH_URL_TEMPLATE.format(query=query),
+            _SEARCH_URL_TEMPLATE.format(query=urllib.parse.quote(query, safe="")),
             headers={"User-Agent": settings.crawler_user_agent},
             timeout=settings.crawler_request_timeout_seconds,
         )
