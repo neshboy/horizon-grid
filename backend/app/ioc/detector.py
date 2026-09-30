@@ -127,8 +127,6 @@ def detect_ioc_type(raw: str) -> IOCType:
         return IOCType.REGISTRY_KEY
 
     if _WINDOWS_PATH_RE.match(stripped):
-        if re.search(r"\.(exe|dll|sys|scr|bat|ps1)$", stripped, re.IGNORECASE):
-            return IOCType.FILE_PATH
         return IOCType.FILE_PATH
     if _UNIX_PATH_RE.match(stripped) and "." not in stripped.split("/")[-1]:
         return IOCType.FILE_PATH

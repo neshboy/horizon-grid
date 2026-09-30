@@ -148,11 +148,11 @@ async def get_stats() -> dict:
         active = (
             await db.execute(select(func.count()).select_from(User).where(User.is_active.is_(True)))
         ).scalar_one()
-        by_role = {}
-        for r in Role:
-            by_role[r.value] = (
-                await db.execute(select(func.count()).select_from(User).where(User.role == r))
-            ).scalar_one()
+        role_counts = (
+            await db.execute(select(User.role, func.count()).group_by(User.role))
+        ).all()
+        by_role = {r.value: 0 for r in Role}
+        by_role.update({role.value: count for role, count in role_counts})
         recent = (
             (
                 await db.execute(

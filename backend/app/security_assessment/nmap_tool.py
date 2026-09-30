@@ -200,9 +200,17 @@ class NmapTool(SecurityAssessmentTool):
         # IPv6 support and no scan of any kind ever actually ran. Checked
         # against the actual resolved scan_target (not just ioc_type==IPV6)
         # so a DOMAIN/HOSTNAME target that resolve_safe_address pinned to an
-        # IPv6-only address above also gets the flag it needs.
+        # IPv6-only address above also gets the flag it needs. An IPv6 CIDR
+        # target (e.g. "2001:db8::/126") hits this same failure mode:
+        # ipaddress.ip_address() raises ValueError on any "/"-bearing string
+        # (IPv4 or IPv6), so it's parsed with ip_network() instead here --
+        # the same call already used by _timeout_for() above for CIDR
+        # targets.
         try:
-            resolved_is_ipv6 = ipaddress.ip_address(scan_target).version == 6
+            if ioc_type == IOCType.CIDR:
+                resolved_is_ipv6 = ipaddress.ip_network(scan_target, strict=False).version == 6
+            else:
+                resolved_is_ipv6 = ipaddress.ip_address(scan_target).version == 6
         except ValueError:
             resolved_is_ipv6 = False
         ipv6_flag = ["-6"] if resolved_is_ipv6 else []
@@ -245,6 +253,12 @@ class NmapTool(SecurityAssessmentTool):
 
         findings: list[Finding] = []
         open_ports: list[dict] = []
+        # Memoized per (product, version) within this single run() call --
+        # multiple open ports (across one host or a whole CIDR) frequently
+        # share the exact same service/version (e.g. every host running the
+        # same OpenSSH build), and without this cache each one would make
+        # its own redundant, serialized outbound HTTP call to the NVD API.
+        cve_cache: dict[tuple[str, str | None], list[dict]] = {}
         async with httpx.AsyncClient() as client:
             for host in hosts:
                 for port in host["ports"]:
@@ -254,7 +268,12 @@ class NmapTool(SecurityAssessmentTool):
                     product, version = service.get("product"), service.get("version")
                     cves: list[dict] = []
                     if product:
-                        cves = await search_cves_by_service(client, product, version)
+                        cache_key = (product, version)
+                        if cache_key in cve_cache:
+                            cves = cve_cache[cache_key]
+                        else:
+                            cves = await search_cves_by_service(client, product, version)
+                            cve_cache[cache_key] = cves
 
                     target_detail = f"{port['protocol']}/{port['portid']}"
                     banner = " ".join(filter(None, [service.get("name"), product, version]))

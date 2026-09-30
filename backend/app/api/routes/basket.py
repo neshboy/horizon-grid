@@ -74,16 +74,19 @@ async def add_to_basket(
     # Case-insensitive on purpose: ioc_value is only whitespace-stripped
     # above, not case-normalized, and the same logical IOC is routinely
     # re-entered in different casing (e.g. 'EXAMPLE.COM' vs 'example.com').
-    # Without this, that byte-for-byte comparison (and the DB's
-    # uq_basket_owner_ioc unique constraint, which is equally
-    # case-sensitive) let the two casings create two separate basket rows
-    # instead of being recognized as the same entry -- inconsistent with
-    # app/correlation/engine.py's own _node_id(), which lowercases values
-    # specifically so the same IOC in different casing dedupes to one graph
-    # node. Deliberately compares case-insensitively without rewriting the
-    # stored value itself, so whichever casing was entered first is kept
-    # and handed back on a later re-add in different casing, rather than
-    # silently mutating an analyst's existing basket entry.
+    # Without this, that byte-for-byte comparison would let the two casings
+    # create two separate basket rows instead of being recognized as the
+    # same entry -- inconsistent with app/correlation/engine.py's own
+    # _node_id(), which lowercases values specifically so the same IOC in
+    # different casing dedupes to one graph node. The DB's own
+    # uq_basket_owner_ioc_ci unique index (app/models/basket.py) is a
+    # functional index on lower(ioc_value), matching this SELECT's own
+    # case-insensitivity, so a cross-casing check-then-insert race still
+    # raises IntegrityError for the recovery path below to catch. Deliberately
+    # compares case-insensitively without rewriting the stored value itself,
+    # so whichever casing was entered first is kept and handed back on a
+    # later re-add in different casing, rather than silently mutating an
+    # analyst's existing basket entry.
     existing = (
         await db.execute(
             select(BasketItem).where(
@@ -118,9 +121,10 @@ async def add_to_basket(
         await db.commit()
     except IntegrityError:
         # Check-then-insert race: two concurrent adds of the same
-        # (owner_id, ioc_value) can both pass the 'existing' SELECT above
+        # (owner_id, ioc_value) -- including two different casings of the
+        # same logical value -- can both pass the 'existing' SELECT above
         # (both see None), then both attempt the INSERT -- the DB's
-        # uq_basket_owner_ioc unique constraint lets exactly one commit
+        # uq_basket_owner_ioc_ci unique index lets exactly one commit
         # through and raises IntegrityError to the loser. Same class of
         # bug as app/core/users.py's create_user() and
         # app/core/runtime_config.py's upsert_*() docstrings; here the
@@ -189,10 +193,15 @@ async def compare_basket_iocs(
     if len(lookup_ids) > 10:
         raise HTTPException(status_code=422, detail="Cannot compare more than 10 IOCs at once")
 
-    rows = []
+    # Parse first, then batch both the lookup and the edge fetch below into
+    # one query each instead of looping id-by-id -- with up to 10 ids, the
+    # old per-id loop issued up to 20 sequential DB round trips (one
+    # IOCLookup + one CorrelationEdgeRecord query per id) for a single
+    # comparison request.
+    parsed_ids = []
     for raw_id in lookup_ids:
         try:
-            parsed_id = uuid.UUID(raw_id)
+            parsed_ids.append(uuid.UUID(raw_id))
         except (ValueError, AttributeError, TypeError):
             # Real bug found live during overnight QA: this raw uuid.UUID()
             # call had no try/except, so any non-UUID string in
@@ -204,7 +213,20 @@ async def compare_basket_iocs(
             # "if not lookup: continue" behavior for a well-formed but
             # nonexistent id.
             continue
-        lookup = (await db.execute(select(IOCLookup).where(IOCLookup.id == parsed_id))).scalar_one_or_none()
+
+    lookups_by_id = {}
+    if parsed_ids:
+        found_lookups = (
+            await db.execute(select(IOCLookup).where(IOCLookup.id.in_(parsed_ids)))
+        ).scalars().all()
+        lookups_by_id = {lookup.id: lookup for lookup in found_lookups}
+
+    # Preserve the caller's ordering (and tolerate duplicate ids the same
+    # way the old per-id loop did) by walking parsed_ids rather than the
+    # unordered query result.
+    completed_lookups = []
+    for parsed_id in parsed_ids:
+        lookup = lookups_by_id.get(parsed_id)
         if not lookup:
             continue
         if lookup.status != LookupStatus.COMPLETED:
@@ -217,9 +239,23 @@ async def compare_basket_iocs(
             # an unresolvable/nonexistent lookup_id already is above, rather
             # than raising, so one bad id doesn't block comparing the rest.
             continue
-        edges = (
-            await db.execute(select(CorrelationEdgeRecord).where(CorrelationEdgeRecord.lookup_id == lookup.id))
+        completed_lookups.append(lookup)
+
+    edges_by_lookup_id: dict[uuid.UUID, list] = {}
+    if completed_lookups:
+        all_edges = (
+            await db.execute(
+                select(CorrelationEdgeRecord).where(
+                    CorrelationEdgeRecord.lookup_id.in_([lookup.id for lookup in completed_lookups])
+                )
+            )
         ).scalars().all()
+        for edge in all_edges:
+            edges_by_lookup_id.setdefault(edge.lookup_id, []).append(edge)
+
+    rows = []
+    for lookup in completed_lookups:
+        edges = edges_by_lookup_id.get(lookup.id, [])
         asns = sorted({e.target_value for e in edges if e.target_type == "asn"})
         malware = sorted({e.target_value for e in edges if e.target_type == "malware_family"})
         actors = sorted({e.target_value for e in edges if e.target_type == "threat_actor"})
